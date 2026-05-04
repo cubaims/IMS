@@ -1,22 +1,59 @@
-use cuba_shared::{AppState, Settings};
+use axum::{
+    routing::get,
+    Router,
+};
+use std::net::SocketAddr;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use sqlx::postgres::PgPoolOptions;
-use tokio::net::TcpListener;
+use dotenvy::dotenv;
+use cuba_shared::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let settings = Settings::from_env();
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+    dotenv().ok();
+
+    // 初始化日志
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "cuba_api=debug,cuba_auth=debug,sqlx=warn".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
         .init();
 
+    // 读取环境变量
+    let database_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL must be set");
+    let jwt_secret = std::env::var("IMS_JWT_SECRET")
+        .or_else(|_| std::env::var("JWT_SECRET"))
+        .unwrap_or_else(|_| "dev-secret-change-me".to_string());
+
+    // 创建数据库连接池
     let pool = PgPoolOptions::new()
-        .max_connections(16)
-        .connect(&settings.database_url)
+        .max_connections(10)
+        .connect(&database_url)
         .await?;
 
-    let app = cuba_api::build_router(AppState { pool });
-    let listener = TcpListener::bind(&settings.bind_addr).await?;
-    tracing::info!(addr = %settings.bind_addr, "IMS Workspace API listening");
-    axum::serve(listener, app).await?;
+    let state = AppState {
+        db_pool: pool,
+        jwt_secret,
+    };
+
+    // 路由注册
+    let app = Router::new()
+        .route("/health", get(health_check))
+        .nest("/api/auth", cuba_auth::interface::routes::routes())
+        .with_state(state)
+        .layer(tower_http::trace::TraceLayer::new_for_http());
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    tracing::info!("🚀 cuba-api (Phase 2) listening on {}", addr);
+
+    axum::serve(tokio::net::TcpListener::bind(addr).await?, app).await?;
+
     Ok(())
+}
+
+async fn health_check() -> &'static str {
+    "OK"
 }

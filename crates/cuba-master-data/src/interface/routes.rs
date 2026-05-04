@@ -1,4 +1,4 @@
-use axum::{routing::{get, post}, Router};
+use axum::{routing::get, Router};
 use cuba_shared::AppState;
 use super::handlers;
 

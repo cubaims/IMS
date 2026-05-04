@@ -8,6 +8,7 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+argon2.workspace = true
 axum.workspace = true
 cuba-auth = { path = "../cuba-auth" }
 cuba-inventory = { path = "../cuba-inventory" }
@@ -25,3 +26,5 @@ tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+dotenvy = "0.15.7"
+jsonwebtoken = "10.3.0"
