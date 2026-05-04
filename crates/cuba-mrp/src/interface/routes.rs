@@ -1,6 +1,9 @@
-use axum::{routing::{get, post}, Router};
-use cuba_shared::AppState;
 use super::handlers;
+use axum::{
+    Router,
+    routing::{get, post},
+};
+use cuba_shared::AppState;
 
 pub fn routes() -> Router<AppState> {
     Router::new()

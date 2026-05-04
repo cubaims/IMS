@@ -8,8 +8,8 @@ use crate::{
         MapHistoryQuery, PickBatchFefoCommand, PostInventoryCommand,
     },
     domain::{
-        Batch, BatchHistory, BinStock, CurrentStock, InventoryPostingResult,
-        InventoryTransaction, MapHistory,
+        Batch, BatchHistory, BinStock, CurrentStock, InventoryPostingResult, InventoryTransaction,
+        MapHistory,
     },
 };
 
@@ -21,15 +21,9 @@ pub trait InventoryRepository: Send + Sync {
         operator: String,
     ) -> AppResult<InventoryPostingResult>;
 
-    async fn list_current_stock(
-        &self,
-        query: CurrentStockQuery,
-    ) -> AppResult<Vec<CurrentStock>>;
+    async fn list_current_stock(&self, query: CurrentStockQuery) -> AppResult<Vec<CurrentStock>>;
 
-    async fn list_bin_stock(
-        &self,
-        query: CurrentStockQuery,
-    ) -> AppResult<Vec<BinStock>>;
+    async fn list_bin_stock(&self, query: CurrentStockQuery) -> AppResult<Vec<BinStock>>;
 
     async fn list_transactions(
         &self,
@@ -54,18 +48,12 @@ pub trait BatchRepository: Send + Sync {
         query: BatchHistoryQuery,
     ) -> AppResult<Vec<BatchHistory>>;
 
-    async fn pick_batch_fefo(
-        &self,
-        command: PickBatchFefoCommand,
-    ) -> AppResult<serde_json::Value>;
+    async fn pick_batch_fefo(&self, command: PickBatchFefoCommand) -> AppResult<serde_json::Value>;
 }
 
 #[async_trait]
 pub trait MapHistoryRepository: Send + Sync {
-    async fn list_map_history(
-        &self,
-        query: MapHistoryQuery,
-    ) -> AppResult<Vec<MapHistory>>;
+    async fn list_map_history(&self, query: MapHistoryQuery) -> AppResult<Vec<MapHistory>>;
 
     async fn list_material_map_history(
         &self,

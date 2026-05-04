@@ -1,6 +1,6 @@
+use crate::application::AuthRepository;
 use async_trait::async_trait;
 use cuba_shared::{AppResult, AppState};
-use crate::application::AuthRepository;
 
 #[derive(Clone)]
 pub struct PostgresAuthRepository {

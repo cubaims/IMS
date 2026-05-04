@@ -9,12 +9,13 @@ use super::{
     BomRepository, CreateBomComponentCommand, CreateBomHeaderCommand, CreateCustomerCommand,
     CreateDefectCodeCommand, CreateInspectionCharCommand, CreateMaterialCommand,
     CreateMaterialSupplierCommand, CreateProductVariantCommand, CreateStorageBinCommand,
-    CreateSupplierCommand, CreateWorkCenterCommand, CustomerRepository, MaterialRepository,
-    MaterialSupplierRepository, MasterDataQuery, ProductVariantRepository, QualityMasterRepository,
-    StorageBinRepository, SupplierRepository, UpdateBomComponentCommand, UpdateBomHeaderCommand,
-    UpdateCustomerCommand, UpdateDefectCodeCommand, UpdateInspectionCharCommand,
-    UpdateMaterialCommand, UpdateMaterialSupplierCommand, UpdateProductVariantCommand,
-    UpdateStorageBinCommand, UpdateSupplierCommand, UpdateWorkCenterCommand, WorkCenterRepository,
+    CreateSupplierCommand, CreateWorkCenterCommand, CustomerRepository, MasterDataQuery,
+    MaterialRepository, MaterialSupplierRepository, ProductVariantRepository,
+    QualityMasterRepository, StorageBinRepository, SupplierRepository, UpdateBomComponentCommand,
+    UpdateBomHeaderCommand, UpdateCustomerCommand, UpdateDefectCodeCommand,
+    UpdateInspectionCharCommand, UpdateMaterialCommand, UpdateMaterialSupplierCommand,
+    UpdateProductVariantCommand, UpdateStorageBinCommand, UpdateSupplierCommand,
+    UpdateWorkCenterCommand, WorkCenterRepository,
 };
 
 #[derive(Clone)]
@@ -81,7 +82,9 @@ impl MasterDataService {
         command: UpdateMaterialCommand,
     ) -> AppResult<Value> {
         Self::validate(&command)?;
-        self.material_repo.update_material(material_id, command).await
+        self.material_repo
+            .update_material(material_id, command)
+            .await
     }
 
     pub async fn activate_material(&self, material_id: &str) -> AppResult<Value> {
@@ -141,7 +144,9 @@ impl MasterDataService {
         command: UpdateSupplierCommand,
     ) -> AppResult<Value> {
         Self::validate(&command)?;
-        self.supplier_repo.update_supplier(supplier_id, command).await
+        self.supplier_repo
+            .update_supplier(supplier_id, command)
+            .await
     }
 
     pub async fn activate_supplier(&self, supplier_id: &str) -> AppResult<Value> {
@@ -171,7 +176,9 @@ impl MasterDataService {
         command: UpdateCustomerCommand,
     ) -> AppResult<Value> {
         Self::validate(&command)?;
-        self.customer_repo.update_customer(customer_id, command).await
+        self.customer_repo
+            .update_customer(customer_id, command)
+            .await
     }
 
     pub async fn activate_customer(&self, customer_id: &str) -> AppResult<Value> {
@@ -249,7 +256,9 @@ impl MasterDataService {
         command: UpdateProductVariantCommand,
     ) -> AppResult<Value> {
         Self::validate(&command)?;
-        self.variant_repo.update_variant(variant_code, command).await
+        self.variant_repo
+            .update_variant(variant_code, command)
+            .await
     }
 
     pub async fn activate_variant(&self, variant_code: &str) -> AppResult<Value> {
@@ -339,10 +348,7 @@ impl MasterDataService {
         self.work_center_repo.get_work_center(work_center_id).await
     }
 
-    pub async fn create_work_center(
-        &self,
-        command: CreateWorkCenterCommand,
-    ) -> AppResult<Value> {
+    pub async fn create_work_center(&self, command: CreateWorkCenterCommand) -> AppResult<Value> {
         Self::validate(&command)?;
         self.work_center_repo.create_work_center(command).await
     }
@@ -371,9 +377,7 @@ impl MasterDataService {
     }
 
     pub async fn list_inspection_chars(&self, query: MasterDataQuery) -> AppResult<Value> {
-        self.quality_master_repo
-            .list_inspection_chars(query)
-            .await
+        self.quality_master_repo.list_inspection_chars(query).await
     }
 
     pub async fn get_inspection_char(&self, char_id: &str) -> AppResult<Value> {
@@ -409,10 +413,7 @@ impl MasterDataService {
         self.quality_master_repo.get_defect_code(defect_code).await
     }
 
-    pub async fn create_defect_code(
-        &self,
-        command: CreateDefectCodeCommand,
-    ) -> AppResult<Value> {
+    pub async fn create_defect_code(&self, command: CreateDefectCodeCommand) -> AppResult<Value> {
         Self::validate(&command)?;
         self.quality_master_repo.create_defect_code(command).await
     }

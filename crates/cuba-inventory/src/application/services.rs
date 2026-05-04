@@ -10,8 +10,8 @@ use crate::{
         PostInventoryCommand, TransferInventoryCommand,
     },
     domain::{
-        Batch, BatchHistory, BinStock, CurrentStock, InventoryPostingResult,
-        InventoryTransaction, MapHistory,
+        Batch, BatchHistory, BinStock, CurrentStock, InventoryPostingResult, InventoryTransaction,
+        MapHistory,
     },
 };
 
@@ -92,10 +92,7 @@ impl InventoryService {
         self.inventory_repo.list_current_stock(query).await
     }
 
-    pub async fn list_bin_stock(
-        &self,
-        query: CurrentStockQuery,
-    ) -> AppResult<Vec<BinStock>> {
+    pub async fn list_bin_stock(&self, query: CurrentStockQuery) -> AppResult<Vec<BinStock>> {
         self.inventory_repo.list_bin_stock(query).await
     }
 
@@ -106,10 +103,7 @@ impl InventoryService {
         self.inventory_repo.list_transactions(query).await
     }
 
-    pub async fn get_transaction(
-        &self,
-        transaction_id: String,
-    ) -> AppResult<InventoryTransaction> {
+    pub async fn get_transaction(&self, transaction_id: String) -> AppResult<InventoryTransaction> {
         self.inventory_repo
             .get_transaction(transaction_id.clone())
             .await?
@@ -142,10 +136,7 @@ impl InventoryService {
             .await
     }
 
-    pub async fn list_map_history(
-        &self,
-        query: MapHistoryQuery,
-    ) -> AppResult<Vec<MapHistory>> {
+    pub async fn list_map_history(&self, query: MapHistoryQuery) -> AppResult<Vec<MapHistory>> {
         self.map_history_repo.list_map_history(query).await
     }
 

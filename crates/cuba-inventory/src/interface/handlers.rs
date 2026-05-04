@@ -1,17 +1,15 @@
 use std::sync::Arc;
 
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::HeaderMap,
-    Json,
 };
 
 use cuba_shared::{ApiResponse, AppResult, AppState};
 
 use crate::{
-    application::{
-        BatchRepository, InventoryRepository, InventoryService, MapHistoryRepository,
-    },
+    application::{BatchRepository, InventoryRepository, InventoryService, MapHistoryRepository},
     infrastructure::PostgresInventoryRepository,
     interface::dto::{
         BatchHistoryRequest, BatchRequest, CurrentStockRequest, InventoryTransactionRequest,
@@ -47,9 +45,7 @@ pub async fn post_inventory(
     let service = build_service(&state);
     let operator = operator_from_headers(&headers);
 
-    let result = service
-        .post_inventory(request.into(), operator)
-        .await?;
+    let result = service.post_inventory(request.into(), operator).await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
@@ -62,9 +58,7 @@ pub async fn transfer_inventory(
     let service = build_service(&state);
     let operator = operator_from_headers(&headers);
 
-    let result = service
-        .transfer_inventory(request.into(), operator)
-        .await?;
+    let result = service.transfer_inventory(request.into(), operator).await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
@@ -75,9 +69,7 @@ pub async fn pick_batch_fefo(
 ) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
     let service = build_service(&state);
 
-    let result = service
-        .pick_batch_fefo(request.into())
-        .await?;
+    let result = service.pick_batch_fefo(request.into()).await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
@@ -88,9 +80,7 @@ pub async fn list_current_stock(
 ) -> AppResult<Json<ApiResponse<Vec<crate::domain::CurrentStock>>>> {
     let service = build_service(&state);
 
-    let result = service
-        .list_current_stock(query.into())
-        .await?;
+    let result = service.list_current_stock(query.into()).await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
@@ -101,9 +91,7 @@ pub async fn list_bin_stock(
 ) -> AppResult<Json<ApiResponse<Vec<crate::domain::BinStock>>>> {
     let service = build_service(&state);
 
-    let result = service
-        .list_bin_stock(query.into())
-        .await?;
+    let result = service.list_bin_stock(query.into()).await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
@@ -114,9 +102,7 @@ pub async fn list_transactions(
 ) -> AppResult<Json<ApiResponse<Vec<crate::domain::InventoryTransaction>>>> {
     let service = build_service(&state);
 
-    let result = service
-        .list_transactions(query.into())
-        .await?;
+    let result = service.list_transactions(query.into()).await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
@@ -127,9 +113,7 @@ pub async fn get_transaction(
 ) -> AppResult<Json<ApiResponse<crate::domain::InventoryTransaction>>> {
     let service = build_service(&state);
 
-    let result = service
-        .get_transaction(transaction_id)
-        .await?;
+    let result = service.get_transaction(transaction_id).await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
@@ -140,9 +124,7 @@ pub async fn list_batches(
 ) -> AppResult<Json<ApiResponse<Vec<crate::domain::Batch>>>> {
     let service = build_service(&state);
 
-    let result = service
-        .list_batches(query.into())
-        .await?;
+    let result = service.list_batches(query.into()).await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
@@ -153,9 +135,7 @@ pub async fn get_batch(
 ) -> AppResult<Json<ApiResponse<crate::domain::Batch>>> {
     let service = build_service(&state);
 
-    let result = service
-        .get_batch(batch_number)
-        .await?;
+    let result = service.get_batch(batch_number).await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
@@ -180,9 +160,7 @@ pub async fn list_map_history(
 ) -> AppResult<Json<ApiResponse<Vec<crate::domain::MapHistory>>>> {
     let service = build_service(&state);
 
-    let result = service
-        .list_map_history(query.into())
-        .await?;
+    let result = service.list_map_history(query.into()).await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }

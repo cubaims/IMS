@@ -1,9 +1,9 @@
-use sqlx::{Pool, Postgres};
-use uuid::Uuid;
 use crate::domain::User;
-use cuba_shared::AppError;
-use tracing::info;
 use chrono::{DateTime, Utc};
+use cuba_shared::AppError;
+use sqlx::{Pool, Postgres};
+use tracing::info;
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct PostgresAuthRepository {
@@ -34,9 +34,8 @@ impl PostgresAuthRepository {
             "#,
             username
         )
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| AppError::Database(e.to_string()))?;
+        .fetch_optional(&self.pool)
+        .await?;
 
         match row {
             Some(r) => Ok(Some(User {
@@ -47,14 +46,20 @@ impl PostgresAuthRepository {
                 email: r.email,
                 role_id: r.role_id,
                 is_active: r.is_active.unwrap_or(true),
-                created_at: r.created_at.map(|t| {
-                    DateTime::<Utc>::from_timestamp(t.unix_timestamp(), 0)
-                        .unwrap_or_else(|| Utc::now())
-                }).unwrap_or_else(|| Utc::now()),
-                updated_at: r.updated_at.map(|t| {
-                    DateTime::<Utc>::from_timestamp(t.unix_timestamp(), 0)
-                        .unwrap_or_else(|| Utc::now())
-                }).unwrap_or_else(|| Utc::now()),
+                created_at: r
+                    .created_at
+                    .map(|t| {
+                        DateTime::<Utc>::from_timestamp(t.unix_timestamp(), 0)
+                            .unwrap_or_else(|| Utc::now())
+                    })
+                    .unwrap_or_else(|| Utc::now()),
+                updated_at: r
+                    .updated_at
+                    .map(|t| {
+                        DateTime::<Utc>::from_timestamp(t.unix_timestamp(), 0)
+                            .unwrap_or_else(|| Utc::now())
+                    })
+                    .unwrap_or_else(|| Utc::now()),
             })),
             None => Ok(None),
         }
@@ -69,9 +74,8 @@ impl PostgresAuthRepository {
             "SELECT role_id FROM sys.sys_users WHERE user_id = $1",
             user_id
         )
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| AppError::Database(e.to_string()))?
+        .fetch_optional(&self.pool)
+        .await?
         {
             if let Some(role) = primary_role {
                 roles.push(role);
@@ -88,9 +92,8 @@ impl PostgresAuthRepository {
             "#,
             user_id
         )
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| AppError::Database(e.to_string()))?;
+        .fetch_all(&self.pool)
+        .await?;
 
         roles.extend(additional_roles);
         roles.sort();
@@ -112,9 +115,8 @@ impl PostgresAuthRepository {
             "#,
             user_id
         )
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| AppError::Database(e.to_string()))?;
+        .fetch_all(&self.pool)
+        .await?;
 
         Ok(permissions)
     }
@@ -128,15 +130,18 @@ impl PostgresAuthRepository {
     ) -> Result<(), AppError> {
         // 将 IP 地址字符串解析为 IpNetwork，如果解析失败则使用 None
         let ip_network = ip_address.and_then(|ip| {
-            ip.parse::<std::net::IpAddr>()
-                .ok()
-                .and_then(|addr| {
-                    use ipnetwork::IpNetwork;
-                    match addr {
-                        std::net::IpAddr::V4(v4) => IpNetwork::V4(ipnetwork::Ipv4Network::new(v4, 32).ok()?),
-                        std::net::IpAddr::V6(v6) => IpNetwork::V6(ipnetwork::Ipv6Network::new(v6, 128).ok()?),
-                    }.into()
-                })
+            ip.parse::<std::net::IpAddr>().ok().and_then(|addr| {
+                use ipnetwork::IpNetwork;
+                match addr {
+                    std::net::IpAddr::V4(v4) => {
+                        IpNetwork::V4(ipnetwork::Ipv4Network::new(v4, 32).ok()?)
+                    }
+                    std::net::IpAddr::V6(v6) => {
+                        IpNetwork::V6(ipnetwork::Ipv6Network::new(v6, 128).ok()?)
+                    }
+                }
+                .into()
+            })
         });
 
         sqlx::query!(
@@ -148,9 +153,8 @@ impl PostgresAuthRepository {
             action,
             ip_network as Option<ipnetwork::IpNetwork>
         )
-            .execute(&self.pool)
-            .await
-            .map_err(|e| AppError::Database(e.to_string()))?;
+        .execute(&self.pool)
+        .await?;
 
         info!(?user_id, action = %action, "审计日志已记录");
         Ok(())

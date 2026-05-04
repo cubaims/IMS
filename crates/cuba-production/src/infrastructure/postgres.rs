@@ -1,6 +1,6 @@
+use crate::application::ProductionRepository;
 use async_trait::async_trait;
 use cuba_shared::{AppResult, AppState};
-use crate::application::ProductionRepository;
 
 #[derive(Clone)]
 pub struct PostgresProductionRepository {

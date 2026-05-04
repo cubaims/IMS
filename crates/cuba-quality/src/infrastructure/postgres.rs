@@ -1,6 +1,6 @@
+use crate::application::QualityRepository;
 use async_trait::async_trait;
 use cuba_shared::{AppResult, AppState};
-use crate::application::QualityRepository;
 
 #[derive(Clone)]
 pub struct PostgresQualityRepository {

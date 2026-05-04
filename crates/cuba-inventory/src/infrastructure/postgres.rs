@@ -13,8 +13,8 @@ use crate::{
         PostInventoryCommand,
     },
     domain::{
-        Batch, BatchHistory, BinStock, CurrentStock, InventoryPostingResult,
-        InventoryTransaction, MapHistory, MaterialId, MovementType, TransactionId,
+        Batch, BatchHistory, BinStock, CurrentStock, InventoryPostingResult, InventoryTransaction,
+        MapHistory, MaterialId, MovementType, TransactionId,
     },
 };
 
@@ -34,7 +34,7 @@ impl PostgresInventoryRepository {
     }
 
     fn db_error(err: sqlx::Error) -> AppError {
-        AppError::Database(err.to_string())
+        AppError::Database(err)
     }
 
     fn parse_transaction_row(row: sqlx::postgres::PgRow) -> AppResult<InventoryTransaction> {
@@ -113,12 +113,8 @@ impl PostgresInventoryRepository {
             batch_number: row.try_get("batch_number").map_err(Self::db_error)?,
             material_id: row.try_get("material_id").map_err(Self::db_error)?,
             event_type: row.try_get("event_type").map_err(Self::db_error)?,
-            old_quality_status: row
-                .try_get("old_quality_status")
-                .map_err(Self::db_error)?,
-            new_quality_status: row
-                .try_get("new_quality_status")
-                .map_err(Self::db_error)?,
+            old_quality_status: row.try_get("old_quality_status").map_err(Self::db_error)?,
+            new_quality_status: row.try_get("new_quality_status").map_err(Self::db_error)?,
             old_bin: row.try_get("old_bin").map_err(Self::db_error)?,
             new_bin: row.try_get("new_bin").map_err(Self::db_error)?,
             old_stock: row.try_get("old_stock").map_err(Self::db_error)?,
@@ -139,13 +135,9 @@ impl PostgresInventoryRepository {
             old_stock_qty: row.try_get("old_stock_qty").map_err(Self::db_error)?,
             new_stock_qty: row.try_get("new_stock_qty").map_err(Self::db_error)?,
             incoming_qty: row.try_get("incoming_qty").map_err(Self::db_error)?,
-            incoming_unit_price: row
-                .try_get("incoming_unit_price")
-                .map_err(Self::db_error)?,
+            incoming_unit_price: row.try_get("incoming_unit_price").map_err(Self::db_error)?,
             transaction_id: row.try_get("transaction_id").map_err(Self::db_error)?,
-            calculation_formula: row
-                .try_get("calculation_formula")
-                .map_err(Self::db_error)?,
+            calculation_formula: row.try_get("calculation_formula").map_err(Self::db_error)?,
             changed_by: row.try_get("changed_by").map_err(Self::db_error)?,
             changed_at: row.try_get("changed_at").map_err(Self::db_error)?,
         })
@@ -182,7 +174,7 @@ impl PostgresInventoryRepository {
             return AppError::Validation("BATCH_NOT_FOUND".to_string());
         }
 
-        AppError::Database(err.to_string())
+        AppError::Database(err)
     }
 }
 
@@ -221,23 +213,23 @@ impl InventoryRepository for PostgresInventoryRepository {
             )
             "#,
         )
-            .bind(&transaction_id)
-            .bind(&movement_type)
-            .bind(&command.material_id)
-            .bind(command.quantity)
-            .bind(&command.from_bin)
-            .bind(&command.to_bin)
-            .bind(&command.batch_number)
-            .bind(&command.serial_number)
-            .bind(&operator)
-            .bind(&quality_status)
-            .bind(&command.reference_doc)
-            .bind(&command.remark)
-            .bind(posting_date)
-            .bind(command.unit_price)
-            .execute(&self.pool)
-            .await
-            .map_err(Self::map_db_error_to_inventory_error)?;
+        .bind(&transaction_id)
+        .bind(&movement_type)
+        .bind(&command.material_id)
+        .bind(command.quantity)
+        .bind(&command.from_bin)
+        .bind(&command.to_bin)
+        .bind(&command.batch_number)
+        .bind(&command.serial_number)
+        .bind(&operator)
+        .bind(&quality_status)
+        .bind(&command.reference_doc)
+        .bind(&command.remark)
+        .bind(posting_date)
+        .bind(command.unit_price)
+        .execute(&self.pool)
+        .await
+        .map_err(Self::map_db_error_to_inventory_error)?;
 
         Ok(InventoryPostingResult {
             transaction_id,
@@ -252,10 +244,7 @@ impl InventoryRepository for PostgresInventoryRepository {
         })
     }
 
-    async fn list_current_stock(
-        &self,
-        query: CurrentStockQuery,
-    ) -> AppResult<Vec<CurrentStock>> {
+    async fn list_current_stock(&self, query: CurrentStockQuery) -> AppResult<Vec<CurrentStock>> {
         let page = query.page();
 
         let rows = sqlx::query(
@@ -281,25 +270,24 @@ impl InventoryRepository for PostgresInventoryRepository {
             LIMIT $7 OFFSET $8
             "#,
         )
-            .bind(&query.material_id)
-            .bind(&query.bin_code)
-            .bind(&query.batch_number)
-            .bind(&query.zone)
-            .bind(&query.quality_status)
-            .bind(query.only_available)
-            .bind(page.limit())
-            .bind(page.offset())
-            .fetch_all(&self.pool)
-            .await
-            .map_err(Self::db_error)?;
+        .bind(&query.material_id)
+        .bind(&query.bin_code)
+        .bind(&query.batch_number)
+        .bind(&query.zone)
+        .bind(&query.quality_status)
+        .bind(query.only_available)
+        .bind(page.limit())
+        .bind(page.offset())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Self::db_error)?;
 
-        rows.into_iter().map(Self::parse_current_stock_row).collect()
+        rows.into_iter()
+            .map(Self::parse_current_stock_row)
+            .collect()
     }
 
-    async fn list_bin_stock(
-        &self,
-        query: CurrentStockQuery,
-    ) -> AppResult<Vec<BinStock>> {
+    async fn list_bin_stock(&self, query: CurrentStockQuery) -> AppResult<Vec<BinStock>> {
         let page = query.page();
 
         let rows = sqlx::query(
@@ -321,16 +309,16 @@ impl InventoryRepository for PostgresInventoryRepository {
             LIMIT $6 OFFSET $7
             "#,
         )
-            .bind(&query.material_id)
-            .bind(&query.bin_code)
-            .bind(&query.batch_number)
-            .bind(&query.quality_status)
-            .bind(query.only_available)
-            .bind(page.limit())
-            .bind(page.offset())
-            .fetch_all(&self.pool)
-            .await
-            .map_err(Self::db_error)?;
+        .bind(&query.material_id)
+        .bind(&query.bin_code)
+        .bind(&query.batch_number)
+        .bind(&query.quality_status)
+        .bind(query.only_available)
+        .bind(page.limit())
+        .bind(page.offset())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Self::db_error)?;
 
         rows.into_iter().map(Self::parse_bin_stock_row).collect()
     }
@@ -371,25 +359,23 @@ impl InventoryRepository for PostgresInventoryRepository {
             LIMIT $11 OFFSET $12
             "#,
         )
-            .bind(&query.transaction_id)
-            .bind(&query.material_id)
-            .bind(&query.movement_type)
-            .bind(&query.batch_number)
-            .bind(&query.from_bin)
-            .bind(&query.to_bin)
-            .bind(&query.reference_doc)
-            .bind(&query.operator)
-            .bind(query.date_from)
-            .bind(query.date_to)
-            .bind(page.limit())
-            .bind(page.offset())
-            .fetch_all(&self.pool)
-            .await
-            .map_err(Self::db_error)?;
+        .bind(&query.transaction_id)
+        .bind(&query.material_id)
+        .bind(&query.movement_type)
+        .bind(&query.batch_number)
+        .bind(&query.from_bin)
+        .bind(&query.to_bin)
+        .bind(&query.reference_doc)
+        .bind(&query.operator)
+        .bind(query.date_from)
+        .bind(query.date_to)
+        .bind(page.limit())
+        .bind(page.offset())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Self::db_error)?;
 
-        rows.into_iter()
-            .map(Self::parse_transaction_row)
-            .collect()
+        rows.into_iter().map(Self::parse_transaction_row).collect()
     }
 
     async fn get_transaction(
@@ -415,10 +401,10 @@ impl InventoryRepository for PostgresInventoryRepository {
             WHERE transaction_id = $1
             "#,
         )
-            .bind(transaction_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(Self::db_error)?;
+        .bind(transaction_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(Self::db_error)?;
 
         row.map(Self::parse_transaction_row).transpose()
     }
@@ -484,10 +470,10 @@ impl BatchRepository for PostgresInventoryRepository {
             WHERE batch_number = $1
             "#,
         )
-            .bind(batch_number)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(Self::db_error)?;
+        .bind(batch_number)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(Self::db_error)?;
 
         row.map(Self::parse_batch_row).transpose()
     }
@@ -526,29 +512,24 @@ impl BatchRepository for PostgresInventoryRepository {
             LIMIT $6 OFFSET $7
             "#,
         )
-            .bind(batch_number)
-            .bind(&query.event_type)
-            .bind(&query.operator)
-            .bind(query.date_from)
-            .bind(query.date_to)
-            .bind(page.limit())
-            .bind(page.offset())
-            .fetch_all(&self.pool)
-            .await
-            .map_err(Self::db_error)?;
+        .bind(batch_number)
+        .bind(&query.event_type)
+        .bind(&query.operator)
+        .bind(query.date_from)
+        .bind(query.date_to)
+        .bind(page.limit())
+        .bind(page.offset())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Self::db_error)?;
 
         rows.into_iter()
             .map(Self::parse_batch_history_row)
             .collect()
     }
 
-    async fn pick_batch_fefo(
-        &self,
-        command: PickBatchFefoCommand,
-    ) -> AppResult<Value> {
-        let quality_status = command
-            .quality_status
-            .unwrap_or_else(|| "合格".to_string());
+    async fn pick_batch_fefo(&self, command: PickBatchFefoCommand) -> AppResult<Value> {
+        let quality_status = command.quality_status.unwrap_or_else(|| "合格".to_string());
 
         let rows = sqlx::query(
             r#"
@@ -561,13 +542,13 @@ impl BatchRepository for PostgresInventoryRepository {
             ) x
             "#,
         )
-            .bind(command.material_id)
-            .bind(command.quantity)
-            .bind(command.from_zone)
-            .bind(quality_status)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(Self::map_db_error_to_inventory_error)?;
+        .bind(command.material_id)
+        .bind(command.quantity)
+        .bind(command.from_zone)
+        .bind(quality_status)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(Self::map_db_error_to_inventory_error)?;
 
         rows.try_get("data").map_err(Self::db_error)
     }
@@ -575,10 +556,7 @@ impl BatchRepository for PostgresInventoryRepository {
 
 #[async_trait]
 impl MapHistoryRepository for PostgresInventoryRepository {
-    async fn list_map_history(
-        &self,
-        query: MapHistoryQuery,
-    ) -> AppResult<Vec<MapHistory>> {
+    async fn list_map_history(&self, query: MapHistoryQuery) -> AppResult<Vec<MapHistory>> {
         let page = query.page();
 
         let rows = sqlx::query(
@@ -605,15 +583,15 @@ impl MapHistoryRepository for PostgresInventoryRepository {
             LIMIT $5 OFFSET $6
             "#,
         )
-            .bind(&query.material_id)
-            .bind(&query.transaction_id)
-            .bind(query.date_from)
-            .bind(query.date_to)
-            .bind(page.limit())
-            .bind(page.offset())
-            .fetch_all(&self.pool)
-            .await
-            .map_err(Self::db_error)?;
+        .bind(&query.material_id)
+        .bind(&query.transaction_id)
+        .bind(query.date_from)
+        .bind(query.date_to)
+        .bind(page.limit())
+        .bind(page.offset())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Self::db_error)?;
 
         rows.into_iter().map(Self::parse_map_history_row).collect()
     }

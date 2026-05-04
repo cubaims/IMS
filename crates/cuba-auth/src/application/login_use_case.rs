@@ -1,8 +1,8 @@
-use crate::domain::{User, JwtClaims};
-use cuba_shared::{AppError, CurrentUser};
+use crate::domain::{JwtClaims, User};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
-use jsonwebtoken::{encode, EncodingKey, Header};
-use chrono::{Utc, Duration};
+use chrono::{Duration, Utc};
+use cuba_shared::{AppError, CurrentUser};
+use jsonwebtoken::{EncodingKey, Header, encode};
 use tracing::info;
 
 pub struct LoginUseCase {
@@ -30,14 +30,14 @@ impl LoginUseCase {
     ) -> Result<(String, CurrentUser), AppError> {
         // Argon2 密码校验
         let parsed_hash = PasswordHash::new(&user.password_hash)
-            .map_err(|e| AppError::PasswordHash(e.to_string()))?;
+            .map_err(|e| AppError::Internal(e.to_string()))?;
 
         Argon2::default()
             .verify_password(password.as_bytes(), &parsed_hash)
             .map_err(|_| AppError::Unauthorized("用户名或密码错误".to_string()))?;
 
         if !user.is_active {
-            return Err(AppError::Forbidden("用户已被禁用".to_string()));
+            return Err(AppError::PermissionDenied("用户已被禁用".to_string()));
         }
 
         // 生成 JWT
@@ -59,7 +59,7 @@ impl LoginUseCase {
             &claims,
             &EncodingKey::from_secret(self.jwt_secret.as_bytes()),
         )
-            .map_err(|e| AppError::Jwt(e.to_string()))?;
+        .map_err(|e| AppError::Internal(e.to_string()))?;
 
         let current_user = CurrentUser {
             user_id: user.user_id,

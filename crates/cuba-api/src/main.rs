@@ -1,12 +1,9 @@
-use axum::{
-    routing::get,
-    Router,
-};
+use axum::{Router, routing::get};
+use cuba_shared::AppState;
+use dotenvy::dotenv;
+use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use sqlx::postgres::PgPoolOptions;
-use dotenvy::dotenv;
-use cuba_shared::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -22,8 +19,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // 读取环境变量
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set");
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let jwt_secret = std::env::var("IMS_JWT_SECRET")
         .or_else(|_| std::env::var("JWT_SECRET"))
         .unwrap_or_else(|_| "dev-secret-change-me".to_string());
@@ -43,8 +39,19 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health_check))
         .nest("/api/auth", cuba_auth::interface::routes::routes())
-        .nest("/api/master-data", cuba_master_data::interface::routes::routes())
-        .nest("/api/inventory", cuba_inventory::interface::routes::routes())
+        .nest(
+            "/api/master-data",
+            cuba_master_data::interface::routes::routes(),
+        )
+        .nest(
+            "/api/inventory",
+            cuba_inventory::interface::routes::routes(),
+        )
+        .nest(
+            "/api/purchase-orders",
+            cuba_purchase::interface::routes::routes(),
+        )
+        .nest("/api/sales-orders", cuba_sales::interface::routes::routes())
         .with_state(state)
         .layer(tower_http::trace::TraceLayer::new_for_http());
 

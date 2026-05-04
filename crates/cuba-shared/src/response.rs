@@ -1,5 +1,5 @@
+use axum::{Json, http::StatusCode, response::IntoResponse};
 use serde::Serialize;
-use axum::{Json, response::IntoResponse, http::StatusCode};
 
 #[derive(Serialize)]
 pub struct ApiResponse<T> {
@@ -19,7 +19,7 @@ impl<T: Serialize> ApiResponse<T> {
             trace_id: uuid::Uuid::new_v4().to_string(),
         }
     }
-    
+
     pub fn success(data: T, trace_id: impl Into<String>) -> Self {
         Self {
             success: true,
@@ -29,7 +29,11 @@ impl<T: Serialize> ApiResponse<T> {
         }
     }
 
-    pub fn success_with_message(data: T, message: impl Into<String>, trace_id: impl Into<String>) -> Self {
+    pub fn success_with_message(
+        data: T,
+        message: impl Into<String>,
+        trace_id: impl Into<String>,
+    ) -> Self {
         Self {
             success: true,
             data: Some(data),

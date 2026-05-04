@@ -8,12 +8,13 @@ use crate::application::{
     BomRepository, CreateBomComponentCommand, CreateBomHeaderCommand, CreateCustomerCommand,
     CreateDefectCodeCommand, CreateInspectionCharCommand, CreateMaterialCommand,
     CreateMaterialSupplierCommand, CreateProductVariantCommand, CreateStorageBinCommand,
-    CreateSupplierCommand, CreateWorkCenterCommand, CustomerRepository, MaterialRepository,
-    MaterialSupplierRepository, MasterDataQuery, ProductVariantRepository, QualityMasterRepository,
-    StorageBinRepository, SupplierRepository, UpdateBomComponentCommand, UpdateBomHeaderCommand,
-    UpdateCustomerCommand, UpdateDefectCodeCommand, UpdateInspectionCharCommand,
-    UpdateMaterialCommand, UpdateMaterialSupplierCommand, UpdateProductVariantCommand,
-    UpdateStorageBinCommand, UpdateSupplierCommand, UpdateWorkCenterCommand, WorkCenterRepository,
+    CreateSupplierCommand, CreateWorkCenterCommand, CustomerRepository, MasterDataQuery,
+    MaterialRepository, MaterialSupplierRepository, ProductVariantRepository,
+    QualityMasterRepository, StorageBinRepository, SupplierRepository, UpdateBomComponentCommand,
+    UpdateBomHeaderCommand, UpdateCustomerCommand, UpdateDefectCodeCommand,
+    UpdateInspectionCharCommand, UpdateMaterialCommand, UpdateMaterialSupplierCommand,
+    UpdateProductVariantCommand, UpdateStorageBinCommand, UpdateSupplierCommand,
+    UpdateWorkCenterCommand, WorkCenterRepository,
 };
 
 #[derive(Clone)]
@@ -35,10 +36,7 @@ impl PostgresMasterDataRepository {
     }
 
     async fn fetch_json_with_id(&self, sql: &str, id: &str) -> AppResult<Value> {
-        let row = sqlx::query(sql)
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row = sqlx::query(sql).bind(id).fetch_optional(&self.pool).await?;
 
         let Some(row) = row else {
             return Err(AppError::NotFound(format!("record not found: {id}")));
@@ -123,7 +121,7 @@ impl MaterialRepository for PostgresMasterDataRepository {
             "#,
             query,
         )
-            .await
+        .await
     }
 
     async fn get_material(&self, material_id: &str) -> AppResult<Value> {
@@ -151,7 +149,7 @@ impl MaterialRepository for PostgresMasterDataRepository {
             "#,
             material_id,
         )
-            .await
+        .await
     }
 
     async fn create_material(&self, command: CreateMaterialCommand) -> AppResult<Value> {
@@ -186,17 +184,17 @@ impl MaterialRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_materials.*) AS data
             "#,
         )
-            .bind(command.material_id)
-            .bind(command.material_name)
-            .bind(command.material_type)
-            .bind(command.base_unit)
-            .bind(command.default_zone)
-            .bind(command.safety_stock)
-            .bind(command.reorder_point)
-            .bind(command.standard_price)
-            .bind(command.map_price)
-            .fetch_one(&self.pool)
-            .await?;
+        .bind(command.material_id)
+        .bind(command.material_name)
+        .bind(command.material_type)
+        .bind(command.base_unit)
+        .bind(command.default_zone)
+        .bind(command.safety_stock)
+        .bind(command.reorder_point)
+        .bind(command.standard_price)
+        .bind(command.map_price)
+        .fetch_one(&self.pool)
+        .await?;
 
         row.try_get::<Value, _>("data")
             .map_err(|error| AppError::Internal(error.to_string()))
@@ -223,16 +221,16 @@ impl MaterialRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_materials.*) AS data
             "#,
         )
-            .bind(material_id)
-            .bind(command.material_name)
-            .bind(command.base_unit)
-            .bind(command.default_zone)
-            .bind(command.safety_stock)
-            .bind(command.reorder_point)
-            .bind(command.standard_price)
-            .bind(command.status)
-            .fetch_optional(&self.pool)
-            .await?;
+        .bind(material_id)
+        .bind(command.material_name)
+        .bind(command.base_unit)
+        .bind(command.default_zone)
+        .bind(command.safety_stock)
+        .bind(command.reorder_point)
+        .bind(command.standard_price)
+        .bind(command.status)
+        .fetch_optional(&self.pool)
+        .await?;
 
         let Some(row) = row else {
             return Err(AppError::NotFound(format!(
@@ -252,11 +250,12 @@ impl MaterialRepository for PostgresMasterDataRepository {
             WHERE material_id = $1
             "#,
         )
-            .bind(material_id)
-            .execute(&self.pool)
-            .await?;
+        .bind(material_id)
+        .execute(&self.pool)
+        .await?;
 
-        self.affected_to_json(result, "material_id", material_id).await
+        self.affected_to_json(result, "material_id", material_id)
+            .await
     }
 
     async fn deactivate_material(&self, material_id: &str) -> AppResult<Value> {
@@ -267,11 +266,12 @@ impl MaterialRepository for PostgresMasterDataRepository {
             WHERE material_id = $1
             "#,
         )
-            .bind(material_id)
-            .execute(&self.pool)
-            .await?;
+        .bind(material_id)
+        .execute(&self.pool)
+        .await?;
 
-        self.affected_to_json(result, "material_id", material_id).await
+        self.affected_to_json(result, "material_id", material_id)
+            .await
     }
 }
 
@@ -295,7 +295,7 @@ impl StorageBinRepository for PostgresMasterDataRepository {
             "#,
             query,
         )
-            .await
+        .await
     }
 
     async fn get_bin(&self, bin_code: &str) -> AppResult<Value> {
@@ -319,7 +319,7 @@ impl StorageBinRepository for PostgresMasterDataRepository {
             "#,
             bin_code,
         )
-            .await
+        .await
     }
 
     async fn create_bin(&self, command: CreateStorageBinCommand) -> AppResult<Value> {
@@ -346,13 +346,13 @@ impl StorageBinRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_storage_bins.*) AS data
             "#,
         )
-            .bind(command.bin_code)
-            .bind(command.zone)
-            .bind(command.bin_type)
-            .bind(command.capacity)
-            .bind(command.notes)
-            .fetch_one(&self.pool)
-            .await?;
+        .bind(command.bin_code)
+        .bind(command.zone)
+        .bind(command.bin_type)
+        .bind(command.capacity)
+        .bind(command.notes)
+        .fetch_one(&self.pool)
+        .await?;
 
         row.try_get::<Value, _>("data")
             .map_err(|error| AppError::Internal(error.to_string()))
@@ -377,14 +377,14 @@ impl StorageBinRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_storage_bins.*) AS data
             "#,
         )
-            .bind(bin_code)
-            .bind(command.zone)
-            .bind(command.bin_type)
-            .bind(command.capacity)
-            .bind(command.status)
-            .bind(command.notes)
-            .fetch_optional(&self.pool)
-            .await?;
+        .bind(bin_code)
+        .bind(command.zone)
+        .bind(command.bin_type)
+        .bind(command.capacity)
+        .bind(command.status)
+        .bind(command.notes)
+        .fetch_optional(&self.pool)
+        .await?;
 
         let Some(row) = row else {
             return Err(AppError::NotFound(format!("bin not found: {bin_code}")));
@@ -402,9 +402,9 @@ impl StorageBinRepository for PostgresMasterDataRepository {
             WHERE bin_code = $1
             "#,
         )
-            .bind(bin_code)
-            .execute(&self.pool)
-            .await?;
+        .bind(bin_code)
+        .execute(&self.pool)
+        .await?;
 
         self.affected_to_json(result, "bin_code", bin_code).await
     }
@@ -417,9 +417,9 @@ impl StorageBinRepository for PostgresMasterDataRepository {
             WHERE bin_code = $1
             "#,
         )
-            .bind(bin_code)
-            .execute(&self.pool)
-            .await?;
+        .bind(bin_code)
+        .execute(&self.pool)
+        .await?;
 
         self.affected_to_json(result, "bin_code", bin_code).await
     }
@@ -446,7 +446,7 @@ impl SupplierRepository for PostgresMasterDataRepository {
             "#,
             query,
         )
-            .await
+        .await
     }
 
     async fn get_supplier(&self, supplier_id: &str) -> AppResult<Value> {
@@ -471,7 +471,7 @@ impl SupplierRepository for PostgresMasterDataRepository {
             "#,
             supplier_id,
         )
-            .await
+        .await
     }
 
     async fn create_supplier(&self, command: CreateSupplierCommand) -> AppResult<Value> {
@@ -500,15 +500,15 @@ impl SupplierRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_suppliers.*) AS data
             "#,
         )
-            .bind(command.supplier_id)
-            .bind(command.supplier_name)
-            .bind(command.contact_person)
-            .bind(command.phone)
-            .bind(command.email)
-            .bind(command.address)
-            .bind(command.quality_rating)
-            .fetch_one(&self.pool)
-            .await?;
+        .bind(command.supplier_id)
+        .bind(command.supplier_name)
+        .bind(command.contact_person)
+        .bind(command.phone)
+        .bind(command.email)
+        .bind(command.address)
+        .bind(command.quality_rating)
+        .fetch_one(&self.pool)
+        .await?;
 
         row.try_get::<Value, _>("data")
             .map_err(|error| AppError::Internal(error.to_string()))
@@ -535,16 +535,16 @@ impl SupplierRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_suppliers.*) AS data
             "#,
         )
-            .bind(supplier_id)
-            .bind(command.supplier_name)
-            .bind(command.contact_person)
-            .bind(command.phone)
-            .bind(command.email)
-            .bind(command.address)
-            .bind(command.quality_rating)
-            .bind(command.is_active)
-            .fetch_optional(&self.pool)
-            .await?;
+        .bind(supplier_id)
+        .bind(command.supplier_name)
+        .bind(command.contact_person)
+        .bind(command.phone)
+        .bind(command.email)
+        .bind(command.address)
+        .bind(command.quality_rating)
+        .bind(command.is_active)
+        .fetch_optional(&self.pool)
+        .await?;
 
         let Some(row) = row else {
             return Err(AppError::NotFound(format!(
@@ -564,9 +564,9 @@ impl SupplierRepository for PostgresMasterDataRepository {
             WHERE supplier_id = $1
             "#,
         )
-            .bind(supplier_id)
-            .execute(&self.pool)
-            .await?;
+        .bind(supplier_id)
+        .execute(&self.pool)
+        .await?;
 
         self.affected_to_json(result, "supplier_id", supplier_id)
             .await
@@ -580,9 +580,9 @@ impl SupplierRepository for PostgresMasterDataRepository {
             WHERE supplier_id = $1
             "#,
         )
-            .bind(supplier_id)
-            .execute(&self.pool)
-            .await?;
+        .bind(supplier_id)
+        .execute(&self.pool)
+        .await?;
 
         self.affected_to_json(result, "supplier_id", supplier_id)
             .await
@@ -610,7 +610,7 @@ impl CustomerRepository for PostgresMasterDataRepository {
             "#,
             query,
         )
-            .await
+        .await
     }
 
     async fn get_customer(&self, customer_id: &str) -> AppResult<Value> {
@@ -635,7 +635,7 @@ impl CustomerRepository for PostgresMasterDataRepository {
             "#,
             customer_id,
         )
-            .await
+        .await
     }
 
     async fn create_customer(&self, command: CreateCustomerCommand) -> AppResult<Value> {
@@ -664,15 +664,15 @@ impl CustomerRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_customers.*) AS data
             "#,
         )
-            .bind(command.customer_id)
-            .bind(command.customer_name)
-            .bind(command.contact_person)
-            .bind(command.phone)
-            .bind(command.email)
-            .bind(command.address)
-            .bind(command.credit_limit)
-            .fetch_one(&self.pool)
-            .await?;
+        .bind(command.customer_id)
+        .bind(command.customer_name)
+        .bind(command.contact_person)
+        .bind(command.phone)
+        .bind(command.email)
+        .bind(command.address)
+        .bind(command.credit_limit)
+        .fetch_one(&self.pool)
+        .await?;
 
         row.try_get::<Value, _>("data")
             .map_err(|error| AppError::Internal(error.to_string()))
@@ -699,16 +699,16 @@ impl CustomerRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_customers.*) AS data
             "#,
         )
-            .bind(customer_id)
-            .bind(command.customer_name)
-            .bind(command.contact_person)
-            .bind(command.phone)
-            .bind(command.email)
-            .bind(command.address)
-            .bind(command.credit_limit)
-            .bind(command.is_active)
-            .fetch_optional(&self.pool)
-            .await?;
+        .bind(customer_id)
+        .bind(command.customer_name)
+        .bind(command.contact_person)
+        .bind(command.phone)
+        .bind(command.email)
+        .bind(command.address)
+        .bind(command.credit_limit)
+        .bind(command.is_active)
+        .fetch_optional(&self.pool)
+        .await?;
 
         let Some(row) = row else {
             return Err(AppError::NotFound(format!(
@@ -728,9 +728,9 @@ impl CustomerRepository for PostgresMasterDataRepository {
             WHERE customer_id = $1
             "#,
         )
-            .bind(customer_id)
-            .execute(&self.pool)
-            .await?;
+        .bind(customer_id)
+        .execute(&self.pool)
+        .await?;
 
         self.affected_to_json(result, "customer_id", customer_id)
             .await
@@ -744,9 +744,9 @@ impl CustomerRepository for PostgresMasterDataRepository {
             WHERE customer_id = $1
             "#,
         )
-            .bind(customer_id)
-            .execute(&self.pool)
-            .await?;
+        .bind(customer_id)
+        .execute(&self.pool)
+        .await?;
 
         self.affected_to_json(result, "customer_id", customer_id)
             .await
@@ -822,17 +822,17 @@ impl MaterialSupplierRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_material_suppliers.*) AS data
             "#,
         )
-            .bind(command.material_id)
-            .bind(command.supplier_id)
-            .bind(command.is_primary)
-            .bind(command.supplier_material_code)
-            .bind(command.purchase_price)
-            .bind(command.currency)
-            .bind(command.lead_time_days)
-            .bind(command.moq)
-            .bind(command.quality_rating)
-            .fetch_one(&self.pool)
-            .await?;
+        .bind(command.material_id)
+        .bind(command.supplier_id)
+        .bind(command.is_primary)
+        .bind(command.supplier_material_code)
+        .bind(command.purchase_price)
+        .bind(command.currency)
+        .bind(command.lead_time_days)
+        .bind(command.moq)
+        .bind(command.quality_rating)
+        .fetch_one(&self.pool)
+        .await?;
 
         row.try_get::<Value, _>("data")
             .map_err(|error| AppError::Internal(error.to_string()))
@@ -862,18 +862,18 @@ impl MaterialSupplierRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_material_suppliers.*) AS data
             "#,
         )
-            .bind(material_id)
-            .bind(supplier_id)
-            .bind(command.is_primary)
-            .bind(command.supplier_material_code)
-            .bind(command.purchase_price)
-            .bind(command.currency)
-            .bind(command.lead_time_days)
-            .bind(command.moq)
-            .bind(command.quality_rating)
-            .bind(command.is_active)
-            .fetch_optional(&self.pool)
-            .await?;
+        .bind(material_id)
+        .bind(supplier_id)
+        .bind(command.is_primary)
+        .bind(command.supplier_material_code)
+        .bind(command.purchase_price)
+        .bind(command.currency)
+        .bind(command.lead_time_days)
+        .bind(command.moq)
+        .bind(command.quality_rating)
+        .bind(command.is_active)
+        .fetch_optional(&self.pool)
+        .await?;
 
         let Some(row) = row else {
             return Err(AppError::NotFound(format!(
@@ -885,11 +885,7 @@ impl MaterialSupplierRepository for PostgresMasterDataRepository {
             .map_err(|error| AppError::Internal(error.to_string()))
     }
 
-    async fn set_primary_supplier(
-        &self,
-        material_id: &str,
-        supplier_id: &str,
-    ) -> AppResult<Value> {
+    async fn set_primary_supplier(&self, material_id: &str, supplier_id: &str) -> AppResult<Value> {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
@@ -899,9 +895,9 @@ impl MaterialSupplierRepository for PostgresMasterDataRepository {
             WHERE material_id = $1
             "#,
         )
-            .bind(material_id)
-            .execute(&mut *tx)
-            .await?;
+        .bind(material_id)
+        .execute(&mut *tx)
+        .await?;
 
         let row = sqlx::query(
             r#"
@@ -912,10 +908,10 @@ impl MaterialSupplierRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_material_suppliers.*) AS data
             "#,
         )
-            .bind(material_id)
-            .bind(supplier_id)
-            .fetch_optional(&mut *tx)
-            .await?;
+        .bind(material_id)
+        .bind(supplier_id)
+        .fetch_optional(&mut *tx)
+        .await?;
 
         let Some(row) = row else {
             return Err(AppError::NotFound(format!(
@@ -941,10 +937,10 @@ impl MaterialSupplierRepository for PostgresMasterDataRepository {
               AND supplier_id = $2
             "#,
         )
-            .bind(material_id)
-            .bind(supplier_id)
-            .execute(&self.pool)
-            .await?;
+        .bind(material_id)
+        .bind(supplier_id)
+        .execute(&self.pool)
+        .await?;
 
         if result.rows_affected() == 0 {
             return Err(AppError::NotFound(format!(
@@ -979,7 +975,7 @@ impl ProductVariantRepository for PostgresMasterDataRepository {
             "#,
             query,
         )
-            .await
+        .await
     }
 
     async fn get_variant(&self, variant_code: &str) -> AppResult<Value> {
@@ -1002,7 +998,7 @@ impl ProductVariantRepository for PostgresMasterDataRepository {
             "#,
             variant_code,
         )
-            .await
+        .await
     }
 
     async fn create_variant(&self, command: CreateProductVariantCommand) -> AppResult<Value> {
@@ -1027,13 +1023,13 @@ impl ProductVariantRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_product_variants.*) AS data
             "#,
         )
-            .bind(command.variant_code)
-            .bind(command.variant_name)
-            .bind(command.base_material_id)
-            .bind(command.bom_id)
-            .bind(command.standard_cost)
-            .fetch_one(&self.pool)
-            .await?;
+        .bind(command.variant_code)
+        .bind(command.variant_name)
+        .bind(command.base_material_id)
+        .bind(command.bom_id)
+        .bind(command.standard_cost)
+        .fetch_one(&self.pool)
+        .await?;
 
         row.try_get::<Value, _>("data")
             .map_err(|error| AppError::Internal(error.to_string()))
@@ -1057,13 +1053,13 @@ impl ProductVariantRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_product_variants.*) AS data
             "#,
         )
-            .bind(variant_code)
-            .bind(command.variant_name)
-            .bind(command.bom_id)
-            .bind(command.standard_cost)
-            .bind(command.is_active)
-            .fetch_optional(&self.pool)
-            .await?;
+        .bind(variant_code)
+        .bind(command.variant_name)
+        .bind(command.bom_id)
+        .bind(command.standard_cost)
+        .bind(command.is_active)
+        .fetch_optional(&self.pool)
+        .await?;
 
         let Some(row) = row else {
             return Err(AppError::NotFound(format!(
@@ -1083,9 +1079,9 @@ impl ProductVariantRepository for PostgresMasterDataRepository {
             WHERE variant_code = $1
             "#,
         )
-            .bind(variant_code)
-            .execute(&self.pool)
-            .await?;
+        .bind(variant_code)
+        .execute(&self.pool)
+        .await?;
 
         self.affected_to_json(result, "variant_code", variant_code)
             .await
@@ -1099,9 +1095,9 @@ impl ProductVariantRepository for PostgresMasterDataRepository {
             WHERE variant_code = $1
             "#,
         )
-            .bind(variant_code)
-            .execute(&self.pool)
-            .await?;
+        .bind(variant_code)
+        .execute(&self.pool)
+        .await?;
 
         self.affected_to_json(result, "variant_code", variant_code)
             .await
@@ -1142,7 +1138,7 @@ impl BomRepository for PostgresMasterDataRepository {
             "#,
             query,
         )
-            .await
+        .await
     }
 
     async fn get_bom(&self, bom_id: &str) -> AppResult<Value> {
@@ -1165,7 +1161,7 @@ impl BomRepository for PostgresMasterDataRepository {
             "#,
             bom_id,
         )
-            .await
+        .await
     }
 
     async fn create_bom(&self, command: CreateBomHeaderCommand) -> AppResult<Value> {
@@ -1198,28 +1194,24 @@ impl BomRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_bom_headers.*) AS data
             "#,
         )
-            .bind(command.bom_id)
-            .bind(command.bom_name)
-            .bind(command.parent_material_id)
-            .bind(command.variant_code)
-            .bind(command.version)
-            .bind(command.base_quantity)
-            .bind(command.valid_from)
-            .bind(command.valid_to)
-            .bind(command.status)
-            .bind(command.notes)
-            .fetch_one(&self.pool)
-            .await?;
+        .bind(command.bom_id)
+        .bind(command.bom_name)
+        .bind(command.parent_material_id)
+        .bind(command.variant_code)
+        .bind(command.version)
+        .bind(command.base_quantity)
+        .bind(command.valid_from)
+        .bind(command.valid_to)
+        .bind(command.status)
+        .bind(command.notes)
+        .fetch_one(&self.pool)
+        .await?;
 
         row.try_get::<Value, _>("data")
             .map_err(|error| AppError::Internal(error.to_string()))
     }
 
-    async fn update_bom(
-        &self,
-        bom_id: &str,
-        command: UpdateBomHeaderCommand,
-    ) -> AppResult<Value> {
+    async fn update_bom(&self, bom_id: &str, command: UpdateBomHeaderCommand) -> AppResult<Value> {
         let row = sqlx::query(
             r#"
             UPDATE mdm.mdm_bom_headers
@@ -1238,18 +1230,18 @@ impl BomRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_bom_headers.*) AS data
             "#,
         )
-            .bind(bom_id)
-            .bind(command.bom_name)
-            .bind(command.variant_code)
-            .bind(command.version)
-            .bind(command.base_quantity)
-            .bind(command.valid_from)
-            .bind(command.valid_to)
-            .bind(command.status)
-            .bind(command.is_active)
-            .bind(command.notes)
-            .fetch_optional(&self.pool)
-            .await?;
+        .bind(bom_id)
+        .bind(command.bom_name)
+        .bind(command.variant_code)
+        .bind(command.version)
+        .bind(command.base_quantity)
+        .bind(command.valid_from)
+        .bind(command.valid_to)
+        .bind(command.status)
+        .bind(command.is_active)
+        .bind(command.notes)
+        .fetch_optional(&self.pool)
+        .await?;
 
         let Some(row) = row else {
             return Err(AppError::NotFound(format!("bom not found: {bom_id}")));
@@ -1267,9 +1259,9 @@ impl BomRepository for PostgresMasterDataRepository {
             WHERE bom_id = $1
             "#,
         )
-            .bind(bom_id)
-            .fetch_one(&self.pool)
-            .await?;
+        .bind(bom_id)
+        .fetch_one(&self.pool)
+        .await?;
 
         if component_count == 0 {
             return Err(AppError::Validation(format!(
@@ -1284,9 +1276,9 @@ impl BomRepository for PostgresMasterDataRepository {
             WHERE bom_id = $1
             "#,
         )
-            .bind(bom_id)
-            .execute(&self.pool)
-            .await?;
+        .bind(bom_id)
+        .execute(&self.pool)
+        .await?;
 
         self.affected_to_json(result, "bom_id", bom_id).await
     }
@@ -1299,9 +1291,9 @@ impl BomRepository for PostgresMasterDataRepository {
             WHERE bom_id = $1
             "#,
         )
-            .bind(bom_id)
-            .execute(&self.pool)
-            .await?;
+        .bind(bom_id)
+        .execute(&self.pool)
+        .await?;
 
         self.affected_to_json(result, "bom_id", bom_id).await
     }
@@ -1333,9 +1325,9 @@ impl BomRepository for PostgresMasterDataRepository {
             ) t
             "#,
         )
-            .bind(bom_id)
-            .fetch_one(&self.pool)
-            .await?;
+        .bind(bom_id)
+        .fetch_one(&self.pool)
+        .await?;
 
         row.try_get::<Value, _>("data")
             .map_err(|error| AppError::Internal(error.to_string()))
@@ -1373,16 +1365,16 @@ impl BomRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_bom_components.*) AS data
             "#,
         )
-            .bind(command.bom_id)
-            .bind(command.parent_material_id)
-            .bind(command.component_material_id)
-            .bind(command.quantity)
-            .bind(command.unit)
-            .bind(command.bom_level)
-            .bind(command.scrap_rate)
-            .bind(command.is_critical)
-            .fetch_one(&self.pool)
-            .await?;
+        .bind(command.bom_id)
+        .bind(command.parent_material_id)
+        .bind(command.component_material_id)
+        .bind(command.quantity)
+        .bind(command.unit)
+        .bind(command.bom_level)
+        .bind(command.scrap_rate)
+        .bind(command.is_critical)
+        .fetch_one(&self.pool)
+        .await?;
 
         row.try_get::<Value, _>("data")
             .map_err(|error| AppError::Internal(error.to_string()))
@@ -1406,14 +1398,14 @@ impl BomRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_bom_components.*) AS data
             "#,
         )
-            .bind(component_id)
-            .bind(command.quantity)
-            .bind(command.unit)
-            .bind(command.bom_level)
-            .bind(command.scrap_rate)
-            .bind(command.is_critical)
-            .fetch_optional(&self.pool)
-            .await?;
+        .bind(component_id)
+        .bind(command.quantity)
+        .bind(command.unit)
+        .bind(command.bom_level)
+        .bind(command.scrap_rate)
+        .bind(command.is_critical)
+        .fetch_optional(&self.pool)
+        .await?;
 
         let Some(row) = row else {
             return Err(AppError::NotFound(format!(
@@ -1432,9 +1424,9 @@ impl BomRepository for PostgresMasterDataRepository {
             WHERE id = $1
             "#,
         )
-            .bind(component_id)
-            .execute(&self.pool)
-            .await?;
+        .bind(component_id)
+        .execute(&self.pool)
+        .await?;
 
         if result.rows_affected() == 0 {
             return Err(AppError::NotFound(format!(
@@ -1486,7 +1478,7 @@ impl BomRepository for PostgresMasterDataRepository {
             "#,
             bom_id,
         )
-            .await
+        .await
     }
 
     async fn validate_bom(&self, bom_id: &str) -> AppResult<Value> {
@@ -1523,9 +1515,9 @@ impl BomRepository for PostgresMasterDataRepository {
             ) AS data
             "#,
         )
-            .bind(bom_id)
-            .fetch_one(&self.pool)
-            .await?;
+        .bind(bom_id)
+        .fetch_one(&self.pool)
+        .await?;
 
         row.try_get::<Value, _>("data")
             .map_err(|error| AppError::Internal(error.to_string()))
@@ -1572,7 +1564,7 @@ impl WorkCenterRepository for PostgresMasterDataRepository {
             "#,
             query,
         )
-            .await
+        .await
     }
 
     async fn get_work_center(&self, work_center_id: &str) -> AppResult<Value> {
@@ -1594,13 +1586,10 @@ impl WorkCenterRepository for PostgresMasterDataRepository {
             "#,
             work_center_id,
         )
-            .await
+        .await
     }
 
-    async fn create_work_center(
-        &self,
-        command: CreateWorkCenterCommand,
-    ) -> AppResult<Value> {
+    async fn create_work_center(&self, command: CreateWorkCenterCommand) -> AppResult<Value> {
         let row = sqlx::query(
             r#"
             INSERT INTO mdm.mdm_work_centers (
@@ -1622,13 +1611,13 @@ impl WorkCenterRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_work_centers.*) AS data
             "#,
         )
-            .bind(command.work_center_id)
-            .bind(command.work_center_name)
-            .bind(command.location)
-            .bind(command.capacity_per_day)
-            .bind(command.efficiency)
-            .fetch_one(&self.pool)
-            .await?;
+        .bind(command.work_center_id)
+        .bind(command.work_center_name)
+        .bind(command.location)
+        .bind(command.capacity_per_day)
+        .bind(command.efficiency)
+        .fetch_one(&self.pool)
+        .await?;
 
         row.try_get::<Value, _>("data")
             .map_err(|error| AppError::Internal(error.to_string()))
@@ -1652,14 +1641,14 @@ impl WorkCenterRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_work_centers.*) AS data
             "#,
         )
-            .bind(work_center_id)
-            .bind(command.work_center_name)
-            .bind(command.location)
-            .bind(command.capacity_per_day)
-            .bind(command.efficiency)
-            .bind(command.is_active)
-            .fetch_optional(&self.pool)
-            .await?;
+        .bind(work_center_id)
+        .bind(command.work_center_name)
+        .bind(command.location)
+        .bind(command.capacity_per_day)
+        .bind(command.efficiency)
+        .bind(command.is_active)
+        .fetch_optional(&self.pool)
+        .await?;
 
         let Some(row) = row else {
             return Err(AppError::NotFound(format!(
@@ -1679,9 +1668,9 @@ impl WorkCenterRepository for PostgresMasterDataRepository {
             WHERE work_center_id = $1
             "#,
         )
-            .bind(work_center_id)
-            .execute(&self.pool)
-            .await?;
+        .bind(work_center_id)
+        .execute(&self.pool)
+        .await?;
 
         self.affected_to_json(result, "work_center_id", work_center_id)
             .await
@@ -1695,9 +1684,9 @@ impl WorkCenterRepository for PostgresMasterDataRepository {
             WHERE work_center_id = $1
             "#,
         )
-            .bind(work_center_id)
-            .execute(&self.pool)
-            .await?;
+        .bind(work_center_id)
+        .execute(&self.pool)
+        .await?;
 
         self.affected_to_json(result, "work_center_id", work_center_id)
             .await
@@ -1726,7 +1715,7 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
             "#,
             query,
         )
-            .await
+        .await
     }
 
     async fn get_inspection_char(&self, char_id: &str) -> AppResult<Value> {
@@ -1752,7 +1741,7 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
             "#,
             char_id,
         )
-            .await
+        .await
     }
 
     async fn create_inspection_char(
@@ -1788,18 +1777,18 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_inspection_chars.*) AS data
             "#,
         )
-            .bind(command.char_id)
-            .bind(command.char_name)
-            .bind(command.material_type)
-            .bind(command.inspection_type)
-            .bind(command.method)
-            .bind(command.standard)
-            .bind(command.unit)
-            .bind(command.lower_limit)
-            .bind(command.upper_limit)
-            .bind(command.is_critical)
-            .fetch_one(&self.pool)
-            .await?;
+        .bind(command.char_id)
+        .bind(command.char_name)
+        .bind(command.material_type)
+        .bind(command.inspection_type)
+        .bind(command.method)
+        .bind(command.standard)
+        .bind(command.unit)
+        .bind(command.lower_limit)
+        .bind(command.upper_limit)
+        .bind(command.is_critical)
+        .fetch_one(&self.pool)
+        .await?;
 
         row.try_get::<Value, _>("data")
             .map_err(|error| AppError::Internal(error.to_string()))
@@ -1827,18 +1816,18 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_inspection_chars.*) AS data
             "#,
         )
-            .bind(char_id)
-            .bind(command.char_name)
-            .bind(command.material_type)
-            .bind(command.inspection_type)
-            .bind(command.method)
-            .bind(command.standard)
-            .bind(command.unit)
-            .bind(command.lower_limit)
-            .bind(command.upper_limit)
-            .bind(command.is_critical)
-            .fetch_optional(&self.pool)
-            .await?;
+        .bind(char_id)
+        .bind(command.char_name)
+        .bind(command.material_type)
+        .bind(command.inspection_type)
+        .bind(command.method)
+        .bind(command.standard)
+        .bind(command.unit)
+        .bind(command.lower_limit)
+        .bind(command.upper_limit)
+        .bind(command.is_critical)
+        .fetch_optional(&self.pool)
+        .await?;
 
         let Some(row) = row else {
             return Err(AppError::NotFound(format!(
@@ -1866,7 +1855,7 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
             "#,
             query,
         )
-            .await
+        .await
     }
 
     async fn get_defect_code(&self, defect_code: &str) -> AppResult<Value> {
@@ -1888,7 +1877,7 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
             "#,
             defect_code,
         )
-            .await
+        .await
     }
 
     async fn create_defect_code(&self, command: CreateDefectCodeCommand) -> AppResult<Value> {
@@ -1913,13 +1902,13 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_defect_codes.*) AS data
             "#,
         )
-            .bind(command.defect_code)
-            .bind(command.defect_name)
-            .bind(command.category)
-            .bind(command.severity)
-            .bind(command.description)
-            .fetch_one(&self.pool)
-            .await?;
+        .bind(command.defect_code)
+        .bind(command.defect_name)
+        .bind(command.category)
+        .bind(command.severity)
+        .bind(command.description)
+        .fetch_one(&self.pool)
+        .await?;
 
         row.try_get::<Value, _>("data")
             .map_err(|error| AppError::Internal(error.to_string()))
@@ -1943,14 +1932,14 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
             RETURNING row_to_json(mdm.mdm_defect_codes.*) AS data
             "#,
         )
-            .bind(defect_code)
-            .bind(command.defect_name)
-            .bind(command.category)
-            .bind(command.severity)
-            .bind(command.description)
-            .bind(command.is_active)
-            .fetch_optional(&self.pool)
-            .await?;
+        .bind(defect_code)
+        .bind(command.defect_name)
+        .bind(command.category)
+        .bind(command.severity)
+        .bind(command.description)
+        .bind(command.is_active)
+        .fetch_optional(&self.pool)
+        .await?;
 
         let Some(row) = row else {
             return Err(AppError::NotFound(format!(
@@ -1970,9 +1959,9 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
             WHERE defect_code = $1
             "#,
         )
-            .bind(defect_code)
-            .execute(&self.pool)
-            .await?;
+        .bind(defect_code)
+        .execute(&self.pool)
+        .await?;
 
         self.affected_to_json(result, "defect_code", defect_code)
             .await
@@ -1986,9 +1975,9 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
             WHERE defect_code = $1
             "#,
         )
-            .bind(defect_code)
-            .execute(&self.pool)
-            .await?;
+        .bind(defect_code)
+        .execute(&self.pool)
+        .await?;
 
         self.affected_to_json(result, "defect_code", defect_code)
             .await

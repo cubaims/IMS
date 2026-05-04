@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, Query, State},
     Json,
+    extract::{Path, Query, State},
 };
 use serde_json::Value;
 
@@ -15,11 +15,11 @@ use crate::{
         BomExplosionPreviewQuery, CreateBomComponentCommand, CreateBomHeaderCommand,
         CreateCustomerCommand, CreateDefectCodeCommand, CreateInspectionCharCommand,
         CreateMaterialCommand, CreateMaterialSupplierCommand, CreateProductVariantCommand,
-        CreateStorageBinCommand, CreateSupplierCommand, CreateWorkCenterCommand,
-        MasterDataQuery, UpdateBomComponentCommand, UpdateBomHeaderCommand,
-        UpdateCustomerCommand, UpdateDefectCodeCommand, UpdateInspectionCharCommand,
-        UpdateMaterialCommand, UpdateMaterialSupplierCommand, UpdateProductVariantCommand,
-        UpdateStorageBinCommand, UpdateSupplierCommand, UpdateWorkCenterCommand,
+        CreateStorageBinCommand, CreateSupplierCommand, CreateWorkCenterCommand, MasterDataQuery,
+        UpdateBomComponentCommand, UpdateBomHeaderCommand, UpdateCustomerCommand,
+        UpdateDefectCodeCommand, UpdateInspectionCharCommand, UpdateMaterialCommand,
+        UpdateMaterialSupplierCommand, UpdateProductVariantCommand, UpdateStorageBinCommand,
+        UpdateSupplierCommand, UpdateWorkCenterCommand,
     },
 };
 
@@ -258,9 +258,7 @@ pub async fn create_material_supplier(
 ) -> AppResult<Json<ApiResponse<Value>>> {
     command.material_id = material_id;
 
-    let data = service(&state)
-        .create_material_supplier(command)
-        .await?;
+    let data = service(&state).create_material_supplier(command).await?;
 
     Ok(Json(ApiResponse::ok(data)))
 }
@@ -459,11 +457,7 @@ pub async fn preview_bom_explosion(
     Query(query): Query<BomExplosionPreviewQuery>,
 ) -> AppResult<Json<ApiResponse<Value>>> {
     let data = service(&state)
-        .preview_bom_explosion(
-            &query.material_id,
-            query.quantity,
-            query.variant_code,
-        )
+        .preview_bom_explosion(&query.material_id, query.quantity, query.variant_code)
         .await?;
 
     Ok(Json(ApiResponse::ok(data)))
@@ -481,9 +475,7 @@ pub async fn get_work_center(
     State(state): State<AppState>,
     Path(work_center_id): Path<String>,
 ) -> AppResult<Json<ApiResponse<Value>>> {
-    let data = service(&state)
-        .get_work_center(&work_center_id)
-        .await?;
+    let data = service(&state).get_work_center(&work_center_id).await?;
 
     Ok(Json(ApiResponse::ok(data)))
 }
@@ -606,9 +598,7 @@ pub async fn activate_defect_code(
     State(state): State<AppState>,
     Path(defect_code): Path<String>,
 ) -> AppResult<Json<ApiResponse<Value>>> {
-    let data = service(&state)
-        .activate_defect_code(&defect_code)
-        .await?;
+    let data = service(&state).activate_defect_code(&defect_code).await?;
 
     Ok(Json(ApiResponse::ok(data)))
 }
@@ -617,9 +607,7 @@ pub async fn deactivate_defect_code(
     State(state): State<AppState>,
     Path(defect_code): Path<String>,
 ) -> AppResult<Json<ApiResponse<Value>>> {
-    let data = service(&state)
-        .deactivate_defect_code(&defect_code)
-        .await?;
+    let data = service(&state).deactivate_defect_code(&defect_code).await?;
 
     Ok(Json(ApiResponse::ok(data)))
 }

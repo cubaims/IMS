@@ -83,11 +83,7 @@ pub trait MaterialSupplierRepository: Send + Sync {
         supplier_id: &str,
         command: UpdateMaterialSupplierCommand,
     ) -> AppResult<Value>;
-    async fn set_primary_supplier(
-        &self,
-        material_id: &str,
-        supplier_id: &str,
-    ) -> AppResult<Value>;
+    async fn set_primary_supplier(&self, material_id: &str, supplier_id: &str) -> AppResult<Value>;
     async fn remove_material_supplier(
         &self,
         material_id: &str,
@@ -114,11 +110,7 @@ pub trait BomRepository: Send + Sync {
     async fn list_boms(&self, query: MasterDataQuery) -> AppResult<Value>;
     async fn get_bom(&self, bom_id: &str) -> AppResult<Value>;
     async fn create_bom(&self, command: CreateBomHeaderCommand) -> AppResult<Value>;
-    async fn update_bom(
-        &self,
-        bom_id: &str,
-        command: UpdateBomHeaderCommand,
-    ) -> AppResult<Value>;
+    async fn update_bom(&self, bom_id: &str, command: UpdateBomHeaderCommand) -> AppResult<Value>;
     async fn activate_bom(&self, bom_id: &str) -> AppResult<Value>;
     async fn deactivate_bom(&self, bom_id: &str) -> AppResult<Value>;
 

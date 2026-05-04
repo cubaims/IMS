@@ -1,10 +1,18 @@
-use axum::{routing::{get, post}, Router};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use cuba_shared::AppState;
-use super::handlers;
+
+use crate::interface::handlers;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/health", get(handlers::health))
-        .route("/purchase-orders", get(handlers::purchase_orders))
-        .route("/receipts", post(handlers::receipts))
+        .route(
+            "/",
+            get(handlers::list_purchase_orders).post(handlers::create_purchase_order),
+        )
+        .route("/{po_id}", get(handlers::get_purchase_order))
+        .route("/{po_id}/receipt", post(handlers::post_purchase_receipt))
+        .route("/{po_id}/close", post(handlers::close_purchase_order))
 }

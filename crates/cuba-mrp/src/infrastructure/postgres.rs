@@ -1,6 +1,6 @@
+use crate::application::MrpRepository;
 use async_trait::async_trait;
 use cuba_shared::{AppResult, AppState};
-use crate::application::MrpRepository;
 
 #[derive(Clone)]
 pub struct PostgresMrpRepository {

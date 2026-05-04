@@ -1,11 +1,14 @@
-use axum::{extract::State, Json};
-use cuba_shared::{ApiResponse, AppResult, AppState};
 use super::dto::{AuthResponse, LoginRequest, LoginResponse, UserInfoDto};
-use crate::infrastructure::PostgresAuthRepository;
 use crate::application::LoginUseCase;
+use crate::infrastructure::PostgresAuthRepository;
+use axum::{Json, extract::State};
+use cuba_shared::{ApiResponse, AppResult, AppState};
 
 pub async fn health(State(_state): State<AppState>) -> AppResult<Json<ApiResponse<AuthResponse>>> {
-    Ok(Json(ApiResponse::ok(AuthResponse { module: "auth", status: "ready" })))
+    Ok(Json(ApiResponse::ok(AuthResponse {
+        module: "auth",
+        status: "ready",
+    })))
 }
 
 pub async fn login(
@@ -14,29 +17,32 @@ pub async fn login(
 ) -> AppResult<Json<ApiResponse<LoginResponse>>> {
     // 从状态中获取必要的组件
     let auth_repo = PostgresAuthRepository::new(state.db_pool.clone());
-    
+
     // 查找用户
     let user = auth_repo
         .find_user_by_username(&req.username)
         .await?
         .ok_or_else(|| cuba_shared::AppError::Unauthorized("用户名或密码错误".to_string()))?;
-    
+
     // 获取用户角色和权限
     let roles = auth_repo.get_user_roles(user.user_id).await?;
     let permissions = auth_repo.get_user_permissions(user.user_id).await?;
-    
+
     // 创建登录用例并执行
     let login_use_case = LoginUseCase::new(
         state.jwt_secret.clone(),
         "cuba-ims".to_string(),
         86400, // 24小时
     );
-    
-    let (token, current_user) = login_use_case.execute(&user, &req.password, roles.clone(), permissions.clone())?;
-    
+
+    let (token, current_user) =
+        login_use_case.execute(&user, &req.password, roles.clone(), permissions.clone())?;
+
     // 记录审计日志
-    auth_repo.write_audit_log(Some(user.user_id), "LOGIN", None).await?;
-    
+    auth_repo
+        .write_audit_log(Some(user.user_id), "LOGIN", None)
+        .await?;
+
     // 构造响应
     let response = LoginResponse {
         access_token: token,
@@ -51,26 +57,29 @@ pub async fn login(
             permissions,
         },
     };
-    
+
     Ok(Json(ApiResponse::ok(response)))
 }
-
 
 pub async fn me(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> AppResult<Json<ApiResponse<UserInfoDto>>> {
-    use jsonwebtoken::{decode, DecodingKey, Validation};
     use crate::domain::JwtClaims;
-    
+    use jsonwebtoken::{DecodingKey, Validation, decode};
+
     // 提取 Token
     let auth_header = headers
         .get("authorization")
         .and_then(|h| h.to_str().ok())
-        .ok_or_else(|| cuba_shared::AppError::Unauthorized("缺少 Authorization header".to_string()))?;
+        .ok_or_else(|| {
+            cuba_shared::AppError::Unauthorized("缺少 Authorization header".to_string())
+        })?;
 
     if !auth_header.starts_with("Bearer ") {
-        return Err(cuba_shared::AppError::Unauthorized("Authorization 格式错误".to_string()));
+        return Err(cuba_shared::AppError::Unauthorized(
+            "Authorization 格式错误".to_string(),
+        ));
     }
     let token = &auth_header[7..];
 
@@ -80,8 +89,8 @@ pub async fn me(
         &DecodingKey::from_secret(state.jwt_secret.as_bytes()),
         &Validation::default(),
     )
-        .map_err(|e| cuba_shared::AppError::Jwt(e.to_string()))?
-        .claims;
+    .map_err(|e| cuba_shared::AppError::Internal(e.to_string()))?
+    .claims;
 
     // 查询用户最新状态
     let auth_repo = PostgresAuthRepository::new(state.db_pool.clone());
@@ -105,14 +114,18 @@ pub async fn me(
     Ok(Json(ApiResponse::ok(response)))
 }
 
-
 pub async fn roles(State(_state): State<AppState>) -> AppResult<Json<ApiResponse<AuthResponse>>> {
-    Ok(Json(ApiResponse::ok(AuthResponse { module: "auth", status: "roles" })))
+    Ok(Json(ApiResponse::ok(AuthResponse {
+        module: "auth",
+        status: "roles",
+    })))
 }
 
-
-pub async fn permissions(State(_state): State<AppState>) -> AppResult<Json<ApiResponse<AuthResponse>>> {
-    Ok(Json(ApiResponse::ok(AuthResponse { module: "auth", status: "permissions" })))
+pub async fn permissions(
+    State(_state): State<AppState>,
+) -> AppResult<Json<ApiResponse<AuthResponse>>> {
+    Ok(Json(ApiResponse::ok(AuthResponse {
+        module: "auth",
+        status: "permissions",
+    })))
 }
-
-

@@ -7,15 +7,24 @@ impl AuthorizeUseCase {
         if user.has_permission(permission) {
             Ok(())
         } else {
-            Err(AppError::Forbidden(format!("缺少必要权限: {}", permission)))
+            Err(AppError::PermissionDenied(format!(
+                "缺少必要权限: {}",
+                permission
+            )))
         }
     }
 
-    pub fn require_any_permission(user: &CurrentUser, permissions: &[&str]) -> Result<(), AppError> {
+    pub fn require_any_permission(
+        user: &CurrentUser,
+        permissions: &[&str],
+    ) -> Result<(), AppError> {
         if permissions.iter().any(|p| user.has_permission(p)) {
             Ok(())
         } else {
-            Err(AppError::Forbidden(format!("缺少以下任意权限之一: {:?}", permissions)))
+            Err(AppError::PermissionDenied(format!(
+                "缺少以下任意权限之一: {:?}",
+                permissions
+            )))
         }
     }
 
@@ -23,7 +32,10 @@ impl AuthorizeUseCase {
         if user.has_role(role) {
             Ok(())
         } else {
-            Err(AppError::Forbidden(format!("缺少必要角色: {}", role)))
+            Err(AppError::PermissionDenied(format!(
+                "缺少必要角色: {}",
+                role
+            )))
         }
     }
 }

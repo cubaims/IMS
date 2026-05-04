@@ -1,12 +1,12 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub user_id: Uuid,
     pub username: String,
-    pub password_hash: String,      // 绝不暴露给前端
+    pub password_hash: String, // 绝不暴露给前端
     pub full_name: Option<String>,
     pub email: Option<String>,
     pub role_id: Option<String>,

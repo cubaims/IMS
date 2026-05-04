@@ -4,9 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use super::InventoryDomainError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum QualityStatus {
     Pending,
+    #[default]
     Qualified,
     Frozen,
     Scrapped,
@@ -27,11 +28,6 @@ impl QualityStatus {
     }
 }
 
-impl Default for QualityStatus {
-    fn default() -> Self {
-        Self::Qualified
-    }
-}
 
 impl fmt::Display for QualityStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

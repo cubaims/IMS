@@ -1,6 +1,6 @@
 use axum::{
-    routing::{delete, get, patch, post},
     Router,
+    routing::{delete, get, patch, post},
 };
 
 use cuba_shared::AppState;
@@ -100,14 +100,14 @@ pub fn routes() -> Router<AppState> {
         // boms
         .route("/boms", get(handlers::list_boms))
         .route("/boms", post(handlers::create_bom))
-        .route("/boms/explode-preview", get(handlers::preview_bom_explosion))
+        .route(
+            "/boms/explode-preview",
+            get(handlers::preview_bom_explosion),
+        )
         .route("/boms/{bom_id}", get(handlers::get_bom))
         .route("/boms/{bom_id}", patch(handlers::update_bom))
         .route("/boms/{bom_id}/activate", post(handlers::activate_bom))
-        .route(
-            "/boms/{bom_id}/deactivate",
-            post(handlers::deactivate_bom),
-        )
+        .route("/boms/{bom_id}/deactivate", post(handlers::deactivate_bom))
         .route(
             "/boms/{bom_id}/components",
             get(handlers::list_bom_components),
@@ -146,14 +146,8 @@ pub fn routes() -> Router<AppState> {
             post(handlers::deactivate_work_center),
         )
         // inspection characteristics
-        .route(
-            "/inspection-chars",
-            get(handlers::list_inspection_chars),
-        )
-        .route(
-            "/inspection-chars",
-            post(handlers::create_inspection_char),
-        )
+        .route("/inspection-chars", get(handlers::list_inspection_chars))
+        .route("/inspection-chars", post(handlers::create_inspection_char))
         .route(
             "/inspection-chars/{char_id}",
             get(handlers::get_inspection_char),

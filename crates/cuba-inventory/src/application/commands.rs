@@ -42,7 +42,8 @@ impl PostInventoryCommand {
         };
 
         let posting = InventoryPosting {
-            material_id: MaterialId::new(self.material_id.clone()).map_err(|err| err.to_string())?,
+            material_id: MaterialId::new(self.material_id.clone())
+                .map_err(|err| err.to_string())?,
             movement_type,
             quantity: Quantity::new(self.quantity).map_err(|err| err.to_string())?,
             from_bin: self

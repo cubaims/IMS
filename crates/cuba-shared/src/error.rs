@@ -1,63 +1,110 @@
-use thiserror::Error;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use serde_json::json;
+use axum::{
+    Json,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use serde::Serialize;
 
 pub type AppResult<T> = Result<T, AppError>;
 
-#[derive(Error, Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum AppError {
-    #[error("Validation error: {0}")]
+    #[error("validation error: {0}")]
     Validation(String),
 
-    #[error("Unauthorized: {0}")]
-    Unauthorized(String),
-
-    #[error("Forbidden: {0}")]
-    Forbidden(String),
-
-    #[error("Not found: {0}")]
+    #[error("not found: {0}")]
     NotFound(String),
 
-    #[error("Database error: {0}")]
-    Database(String),
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
 
-    #[error("JWT error: {0}")]
-    Jwt(String),
+    #[error("permission denied: {0}")]
+    PermissionDenied(String),
 
-    #[error("Password hash error: {0}")]
-    PasswordHash(String),
+    #[error("business conflict: {code} - {message}")]
+    Business { code: &'static str, message: String },
 
-    #[error("Internal error: {0}")]
+    #[error("database error: {0}")]
+    Database(#[from] sqlx::Error),
+
+    #[error("internal error: {0}")]
     Internal(String),
 }
 
-impl From<sqlx::Error> for AppError {
-    fn from(error: sqlx::Error) -> Self {
-        AppError::Database(error.to_string())
+#[derive(Debug, Serialize)]
+struct ErrorBody {
+    success: bool,
+    error_code: &'static str,
+    message: String,
+}
+
+impl AppError {
+    pub fn business(code: &'static str, message: impl Into<String>) -> Self {
+        Self::Business {
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            Self::Validation(_) => "VALIDATION_ERROR",
+            Self::NotFound(_) => "NOT_FOUND",
+            Self::Unauthorized(_) => "UNAUTHORIZED",
+            Self::PermissionDenied(_) => "PERMISSION_DENIED",
+            Self::Business { code, .. } => code,
+            Self::Database(_) => "DB_CONSTRAINT_ERROR",
+            Self::Internal(_) => "INTERNAL_ERROR",
+        }
+    }
+
+    pub fn http_status(&self) -> StatusCode {
+        match self {
+            Self::Validation(_) => StatusCode::BAD_REQUEST,
+            Self::NotFound(_) => StatusCode::NOT_FOUND,
+            Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            Self::PermissionDenied(_) => StatusCode::FORBIDDEN,
+            Self::Business { code, .. } => match *code {
+                "INSUFFICIENT_STOCK"
+                | "INSUFFICIENT_BATCH_STOCK"
+                | "INSUFFICIENT_BIN_STOCK"
+                | "NO_AVAILABLE_BATCH"
+                | "BIN_CAPACITY_EXCEEDED"
+                | "PO_STATUS_INVALID"
+                | "SO_STATUS_INVALID" => StatusCode::CONFLICT,
+
+                "PO_RECEIPT_QTY_EXCEEDED"
+                | "SO_SHIPMENT_QTY_EXCEEDED"
+                | "INVALID_MOVEMENT_TYPE" => StatusCode::BAD_REQUEST,
+
+                _ => StatusCode::CONFLICT,
+            },
+            Self::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    pub fn public_message(&self) -> String {
+        match self {
+            Self::Validation(message) => message.clone(),
+            Self::NotFound(message) => message.clone(),
+            Self::Unauthorized(message) => message.clone(),
+            Self::PermissionDenied(message) => message.clone(),
+            Self::Business { message, .. } => message.clone(),
+            Self::Database(err) => err.to_string(),
+            Self::Internal(message) => message.clone(),
+        }
     }
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, error_code, message) = match self {
-            AppError::Validation(msg) => (StatusCode::BAD_REQUEST, "VALIDATION_ERROR", msg),
-            AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED", msg),
-            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, "PERMISSION_DENIED", msg),
-            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, "NOT_FOUND", msg),
-            AppError::Database(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", msg),
-            AppError::Jwt(msg) => (StatusCode::UNAUTHORIZED, "TOKEN_INVALID", msg),
-            AppError::PasswordHash(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "PASSWORD_HASH_FAILED", msg),
-            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", msg),
+        let body = ErrorBody {
+            success: false,
+            error_code: self.error_code(),
+            message: self.public_message(),
         };
 
-        let body = json!({
-            "success": false,
-            "error_code": error_code,
-            "message": message,
-            "trace_id": "trace-001"
-        });
-
-        (status, axum::Json(body)).into_response()
+        (self.http_status(), Json(body)).into_response()
     }
 }
