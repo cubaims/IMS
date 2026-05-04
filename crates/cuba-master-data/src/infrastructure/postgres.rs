@@ -26,6 +26,7 @@ impl PostgresMasterDataRepository {
         Self { pool }
     }
 
+    #[allow(dead_code)]
     async fn fetch_json(&self, sql: &str) -> AppResult<Value> {
         let row = sqlx::query(sql).fetch_one(&self.pool).await?;
 

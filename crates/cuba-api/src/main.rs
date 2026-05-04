@@ -44,6 +44,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health_check))
         .nest("/api/auth", cuba_auth::interface::routes::routes())
         .nest("/api/master-data", cuba_master_data::interface::routes::routes())
+        .nest("/api/inventory", cuba_inventory::interface::routes::routes())
         .with_state(state)
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
