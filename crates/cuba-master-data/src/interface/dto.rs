@@ -1,12 +1,19 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MasterDataRequest {
-    pub request_id: Option<String>,
-}
+pub use crate::application::{
+    CreateBomComponentCommand, CreateBomHeaderCommand, CreateCustomerCommand,
+    CreateDefectCodeCommand, CreateInspectionCharCommand, CreateMaterialCommand,
+    CreateMaterialSupplierCommand, CreateProductVariantCommand, CreateStorageBinCommand,
+    CreateSupplierCommand, CreateWorkCenterCommand, MasterDataQuery, UpdateBomComponentCommand,
+    UpdateBomHeaderCommand, UpdateCustomerCommand, UpdateDefectCodeCommand,
+    UpdateInspectionCharCommand, UpdateMaterialCommand, UpdateMaterialSupplierCommand,
+    UpdateProductVariantCommand, UpdateStorageBinCommand, UpdateSupplierCommand,
+    UpdateWorkCenterCommand,
+};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MasterDataResponse {
-    pub module: &'static str,
-    pub status: &'static str,
+#[derive(Debug, Clone, Deserialize)]
+pub struct BomExplosionPreviewQuery {
+    pub material_id: String,
+    pub quantity: i32,
+    pub variant_code: Option<String>,
 }
