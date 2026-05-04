@@ -1,0 +1,9 @@
+- `/api/auth`: Auth
+- `/api/master-data`: MasterData
+- `/api/inventory`: Inventory
+- `/api/purchase`: Purchase
+- `/api/sales`: Sales
+- `/api/production`: Production
+- `/api/quality`: Quality
+- `/api/mrp`: Mrp
+- `/api/reports`: Reporting
