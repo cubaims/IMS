@@ -38,10 +38,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .nest("/api/purchase", cuba_purchase::interface::routes::routes())
         .nest("/api/sales", cuba_sales::interface::routes::routes())
-        .nest(
-            "/api/production",
-            cuba_production::interface::routes::routes(),
-        )
+        .nest("/api/production", cuba_production::interface::routes::production_routes())
+        .nest("/api/production-orders", cuba_production::interface::routes::production_order_routes())
         .nest("/api/quality", cuba_quality::interface::routes::routes())
         .nest("/api/mrp", cuba_mrp::interface::routes::routes())
         .nest("/api/reports", cuba_reporting::interface::routes::routes())
