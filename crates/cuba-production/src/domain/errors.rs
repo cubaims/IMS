@@ -1,57 +1,49 @@
-use thiserror::Error;
-
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum ProductionDomainError {
     #[error("production order not found")]
     ProductionOrderNotFound,
 
-    #[error("production order status invalid: {0}")]
-    ProductionOrderStatusInvalid(String),
+    #[error("production order status invalid")]
+    ProductionOrderStatusInvalid,
 
-    #[error("production order already completed")]
-    ProductionOrderAlreadyCompleted,
+    #[error("production quantity must be greater than zero")]
+    ProductionQuantityInvalid,
 
-    #[error("production order already cancelled")]
-    ProductionOrderAlreadyCancelled,
+    #[error("production quantity exceeds remaining planned quantity")]
+    ProductionQuantityExceeded,
 
-    #[error("planned quantity must be greater than zero")]
-    InvalidPlannedQuantity,
+    #[error("product variant not found")]
+    ProductVariantNotFound,
 
-    #[error("completed quantity must be greater than zero")]
-    InvalidCompletedQuantity,
+    #[error("product variant inactive")]
+    ProductVariantInactive,
 
-    #[error("completed quantity exceeds remaining planned quantity")]
-    CompletedQuantityExceeded,
+    #[error("BOM not found")]
+    BomNotFound,
 
-    #[error("product variant not found: {0}")]
-    ProductVariantNotFound(String),
+    #[error("BOM inactive")]
+    BomInactive,
 
-    #[error("product variant inactive: {0}")]
-    ProductVariantInactive(String),
+    #[error("BOM has no components")]
+    BomNoComponents,
 
-    #[error("BOM not found: {0}")]
-    BomNotFound(String),
+    #[error("work center not found")]
+    WorkCenterNotFound,
 
-    #[error("BOM inactive: {0}")]
-    BomInactive(String),
+    #[error("work center inactive")]
+    WorkCenterInactive,
 
-    #[error("BOM has no components: {0}")]
-    BomNoComponents(String),
+    #[error("component stock shortage")]
+    ComponentStockShortage,
 
-    #[error("work center not found: {0}")]
-    WorkCenterNotFound(String),
+    #[error("finished batch already exists")]
+    FinishedBatchAlreadyExists,
 
-    #[error("work center inactive: {0}")]
-    WorkCenterInactive(String),
+    #[error("finished bin invalid")]
+    FinishedBinInvalid,
 
-    #[error("component stock shortage: {0}")]
-    ComponentStockShortage(String),
-
-    #[error("finished batch already exists: {0}")]
-    FinishedBatchAlreadyExists(String),
-
-    #[error("finished bin invalid: {0}")]
-    FinishedBinInvalid(String),
+    #[error("finished bin capacity exceeded")]
+    FinishedBinCapacityExceeded,
 
     #[error("genealogy write failed")]
     GenealogyWriteFailed,

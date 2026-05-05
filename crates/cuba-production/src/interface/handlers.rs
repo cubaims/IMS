@@ -4,29 +4,28 @@ use axum::{
     extract::{Path, Query, State},
     Json,
 };
-
 use cuba_shared::{ApiResponse, AppResult, AppState};
 
 use crate::{
     application::{
-        CompleteProductionOrderCommand, CreateProductionOrderCommand,
-        ListProductionOrdersQuery, ListProductionVariancesQuery,
-        PreviewBomExplosionCommand, ProductionService,
-        ReleaseProductionOrderCommand,
+        BomExplosionCommand, CompleteProductionOrderCommand, CreateProductionOrderCommand,
+        ProductionOrderQuery, ProductionVarianceQuery, ReleaseProductionOrderCommand,
     },
+    domain::ProductionOrderStatus,
     infrastructure::PostgresProductionRepository,
-    interface::dto::{
-        BomExplosionPreviewRequest, CancelProductionOrderRequest,
-        CloseProductionOrderRequest, CompleteProductionOrderRequest,
-        CreateProductionOrderRequest, ListProductionOrdersRequest,
-        ListProductionVariancesRequest, ReleaseProductionOrderRequest,
-    },
 };
 
-fn production_service(state: &AppState) -> ProductionService {
+use super::dto::{
+    BomExplosionPreviewRequest, CancelProductionOrderRequest, CloseProductionOrderRequest,
+    CompleteProductionOrderRequest, CreatedProductionOrderResponse, CreateProductionOrderRequest,
+    ProductionActionResponse, ProductionOrderListQuery, ProductionVarianceListQuery,
+    ReleaseProductionOrderRequest,
+};
+
+fn production_service(state: &AppState) -> crate::application::ProductionService {
     let repo = Arc::new(PostgresProductionRepository::new(state.db_pool.clone()));
 
-    ProductionService::new(
+    crate::application::ProductionService::new(
         repo.clone(),
         repo.clone(),
         repo.clone(),
@@ -35,14 +34,18 @@ fn production_service(state: &AppState) -> ProductionService {
     )
 }
 
+fn status_text(status: ProductionOrderStatus) -> String {
+    status.as_db_text().to_string()
+}
+
 pub async fn preview_bom_explosion(
     State(state): State<AppState>,
     Json(req): Json<BomExplosionPreviewRequest>,
-) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+) -> AppResult<Json<ApiResponse<crate::domain::BomExplosionResult>>> {
     let service = production_service(&state);
 
     let result = service
-        .preview_bom_explosion(PreviewBomExplosionCommand {
+        .explode_bom(BomExplosionCommand {
             variant_code: req.variant_code,
             finished_material_id: req.finished_material_id,
             quantity: req.quantity,
@@ -53,35 +56,13 @@ pub async fn preview_bom_explosion(
     Ok(Json(ApiResponse::ok(result)))
 }
 
-pub async fn list_production_orders(
-    State(state): State<AppState>,
-    Query(req): Query<ListProductionOrdersRequest>,
-) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
-    let service = production_service(&state);
-
-    let result = service
-        .list_orders(ListProductionOrdersQuery {
-            status: req.status,
-            variant_code: req.variant_code,
-            finished_material_id: req.finished_material_id,
-            work_center_id: req.work_center_id,
-            date_from: req.date_from,
-            date_to: req.date_to,
-            page: req.page,
-            page_size: req.page_size,
-        })
-        .await?;
-
-    Ok(Json(ApiResponse::ok(result)))
-}
-
 pub async fn create_production_order(
     State(state): State<AppState>,
     Json(req): Json<CreateProductionOrderRequest>,
-) -> AppResult<Json<ApiResponse<crate::application::CreateProductionOrderResult>>> {
+) -> AppResult<Json<ApiResponse<CreatedProductionOrderResponse>>> {
     let service = production_service(&state);
 
-    let result = service
+    let order_id = service
         .create_order(CreateProductionOrderCommand {
             variant_code: req.variant_code,
             finished_material_id: req.finished_material_id,
@@ -91,6 +72,29 @@ pub async fn create_production_order(
             planned_start_date: req.planned_start_date,
             planned_end_date: req.planned_end_date,
             remark: req.remark,
+            created_by: Some("API".to_string()),
+        })
+        .await?;
+
+    Ok(Json(ApiResponse::ok(CreatedProductionOrderResponse {
+        order_id: order_id.0,
+    })))
+}
+
+pub async fn list_production_orders(
+    State(state): State<AppState>,
+    Query(query): Query<ProductionOrderListQuery>,
+) -> AppResult<Json<ApiResponse<Vec<crate::domain::ProductionOrder>>>> {
+    let service = production_service(&state);
+
+    let result = service
+        .list_orders(ProductionOrderQuery {
+            order_id: query.order_id,
+            variant_code: query.variant_code,
+            finished_material_id: query.finished_material_id,
+            status: query.status,
+            page: query.page,
+            page_size: query.page_size,
         })
         .await?;
 
@@ -100,10 +104,19 @@ pub async fn create_production_order(
 pub async fn get_production_order(
     State(state): State<AppState>,
     Path(order_id): Path<String>,
-) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+) -> AppResult<Json<ApiResponse<crate::domain::ProductionOrder>>> {
     let service = production_service(&state);
+    let result = service.get_order(&order_id).await?;
 
-    let result = service.get_order(order_id).await?;
+    Ok(Json(ApiResponse::ok(result)))
+}
+
+pub async fn get_production_order_components(
+    State(state): State<AppState>,
+    Path(order_id): Path<String>,
+) -> AppResult<Json<ApiResponse<Vec<crate::domain::ProductionOrderLine>>>> {
+    let service = production_service(&state);
+    let result = service.list_order_lines(&order_id).await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
@@ -112,48 +125,62 @@ pub async fn release_production_order(
     State(state): State<AppState>,
     Path(order_id): Path<String>,
     Json(req): Json<ReleaseProductionOrderRequest>,
-) -> AppResult<Json<ApiResponse<crate::application::ReleaseProductionOrderResult>>> {
+) -> AppResult<Json<ApiResponse<ProductionActionResponse>>> {
     let service = production_service(&state);
 
     let result = service
         .release_order(ReleaseProductionOrderCommand {
             order_id,
             remark: req.remark,
+            operator: Some("API".to_string()),
         })
         .await?;
 
-    Ok(Json(ApiResponse::ok(result)))
+    Ok(Json(ApiResponse::ok(ProductionActionResponse {
+        order_id: result.order_id.0,
+        status: status_text(result.status),
+    })))
 }
 
 pub async fn cancel_production_order(
     State(state): State<AppState>,
     Path(order_id): Path<String>,
-    Json(req): Json<CancelProductionOrderRequest>,
-) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+    Json(_req): Json<CancelProductionOrderRequest>,
+) -> AppResult<Json<ApiResponse<ProductionActionResponse>>> {
     let service = production_service(&state);
 
-    let result = service.cancel_order(order_id, req.remark).await?;
+    let result = service
+        .cancel_order(&order_id, Some("API".to_string()))
+        .await?;
 
-    Ok(Json(ApiResponse::ok(result)))
+    Ok(Json(ApiResponse::ok(ProductionActionResponse {
+        order_id: result.order_id.0,
+        status: status_text(result.status),
+    })))
 }
 
 pub async fn close_production_order(
     State(state): State<AppState>,
     Path(order_id): Path<String>,
-    Json(req): Json<CloseProductionOrderRequest>,
-) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+    Json(_req): Json<CloseProductionOrderRequest>,
+) -> AppResult<Json<ApiResponse<ProductionActionResponse>>> {
     let service = production_service(&state);
 
-    let result = service.close_order(order_id, req.remark).await?;
+    let result = service
+        .close_order(&order_id, Some("API".to_string()))
+        .await?;
 
-    Ok(Json(ApiResponse::ok(result)))
+    Ok(Json(ApiResponse::ok(ProductionActionResponse {
+        order_id: result.order_id.0,
+        status: status_text(result.status),
+    })))
 }
 
 pub async fn complete_production_order(
     State(state): State<AppState>,
     Path(order_id): Path<String>,
     Json(req): Json<CompleteProductionOrderRequest>,
-) -> AppResult<Json<ApiResponse<crate::application::ProductionCompleteAppResult>>> {
+) -> AppResult<Json<ApiResponse<crate::domain::ProductionCompleteResult>>> {
     let service = production_service(&state);
 
     let result = service
@@ -165,86 +192,76 @@ pub async fn complete_production_order(
             posting_date: req.posting_date,
             pick_strategy: req.pick_strategy,
             remark: req.remark,
+            operator: Some("API".to_string()),
         })
         .await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
 
-pub async fn get_order_components(
+pub async fn get_production_genealogy(
     State(state): State<AppState>,
     Path(order_id): Path<String>,
-) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+) -> AppResult<Json<ApiResponse<Vec<crate::domain::BatchGenealogy>>>> {
     let service = production_service(&state);
-
-    let result = service.get_order_components(order_id).await?;
+    let result = service.get_genealogy(&order_id).await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
 
-pub async fn get_order_genealogy(
-    State(state): State<AppState>,
-    Path(order_id): Path<String>,
-) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
-    let service = production_service(&state);
-
-    let result = service.get_order_genealogy(order_id).await?;
-
-    Ok(Json(ApiResponse::ok(result)))
-}
-
-pub async fn get_components_by_finished_batch(
+pub async fn get_finished_batch_components(
     State(state): State<AppState>,
     Path(batch_number): Path<String>,
-) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
-    let service = production_service(&state);
+) -> AppResult<Json<ApiResponse<Vec<crate::domain::BatchGenealogy>>>> {
+    let repo = PostgresProductionRepository::new(state.db_pool.clone());
 
-    let result = service
-        .get_components_by_finished_batch(batch_number)
+    let result = crate::application::BatchGenealogyRepository::find_components_by_finished_batch(
+        &repo,
+        &batch_number,
+    )
         .await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
 
-pub async fn get_where_used_by_component_batch(
+pub async fn get_component_batch_where_used(
     State(state): State<AppState>,
     Path(batch_number): Path<String>,
-) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
-    let service = production_service(&state);
+) -> AppResult<Json<ApiResponse<Vec<crate::domain::BatchGenealogy>>>> {
+    let repo = PostgresProductionRepository::new(state.db_pool.clone());
 
-    let result = service
-        .get_where_used_by_component_batch(batch_number)
+    let result = crate::application::BatchGenealogyRepository::find_where_used_by_component_batch(
+        &repo,
+        &batch_number,
+    )
         .await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
 
-pub async fn get_order_variance(
+pub async fn get_production_variance(
     State(state): State<AppState>,
     Path(order_id): Path<String>,
-) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+) -> AppResult<Json<ApiResponse<crate::domain::ProductionVariance>>> {
     let service = production_service(&state);
-
-    let result = service.get_order_variance(order_id).await?;
+    let result = service.get_variance(&order_id).await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
 
 pub async fn list_production_variances(
     State(state): State<AppState>,
-    Query(req): Query<ListProductionVariancesRequest>,
-) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+    Query(query): Query<ProductionVarianceListQuery>,
+) -> AppResult<Json<ApiResponse<Vec<crate::domain::ProductionVariance>>>> {
     let service = production_service(&state);
 
     let result = service
-        .list_variances(ListProductionVariancesQuery {
-            order_id: req.order_id,
-            variant_code: req.variant_code,
-            date_from: req.date_from,
-            date_to: req.date_to,
-            only_over_budget: req.only_over_budget,
-            page: req.page,
-            page_size: req.page_size,
+        .list_variances(ProductionVarianceQuery {
+            order_id: query.order_id,
+            variant_code: query.variant_code,
+            only_over_budget: query.only_over_budget,
+            page: query.page,
+            page_size: query.page_size,
         })
         .await?;
 

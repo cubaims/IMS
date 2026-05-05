@@ -1,99 +1,55 @@
 use async_trait::async_trait;
-use serde_json::Value;
-
 use cuba_shared::AppResult;
 
-use crate::application::{
-    CompleteProductionOrderCommand, CreateProductionOrderCommand,
-    CreateProductionOrderResult, ListProductionOrdersQuery,
-    ListProductionVariancesQuery, PreviewBomExplosionCommand,
-    ProductionCompleteAppResult, ReleaseProductionOrderCommand,
-    ReleaseProductionOrderResult,
+use crate::domain::{
+    BatchGenealogy, BomExplosionResult, ProductionCompleteResult, ProductionOrder,
+    ProductionOrderId, ProductionOrderLine, ProductionVariance,
+};
+
+use super::{
+    BomExplosionCommand, CompleteProductionOrderCommand, CreateProductionOrderCommand,
+    ProductionOrderQuery, ProductionVarianceQuery, ReleaseProductionOrderCommand,
 };
 
 #[async_trait]
 pub trait ProductionOrderRepository: Send + Sync {
-    async fn create_order(
-        &self,
-        command: CreateProductionOrderCommand,
-    ) -> AppResult<CreateProductionOrderResult>;
+    async fn create_order(&self, command: CreateProductionOrderCommand) -> AppResult<ProductionOrderId>;
 
-    async fn list_orders(
-        &self,
-        query: ListProductionOrdersQuery,
-    ) -> AppResult<Value>;
+    async fn find_by_id(&self, order_id: &str) -> AppResult<ProductionOrder>;
 
-    async fn get_order(
-        &self,
-        order_id: String,
-    ) -> AppResult<Value>;
+    async fn list(&self, query: ProductionOrderQuery) -> AppResult<Vec<ProductionOrder>>;
 
-    async fn release_order(
-        &self,
-        command: ReleaseProductionOrderCommand,
-    ) -> AppResult<ReleaseProductionOrderResult>;
+    async fn list_lines(&self, order_id: &str) -> AppResult<Vec<ProductionOrderLine>>;
 
-    async fn cancel_order(
-        &self,
-        order_id: String,
-        remark: Option<String>,
-    ) -> AppResult<Value>;
+    async fn release(&self, command: ReleaseProductionOrderCommand) -> AppResult<ProductionOrder>;
 
-    async fn close_order(
-        &self,
-        order_id: String,
-        remark: Option<String>,
-    ) -> AppResult<Value>;
+    async fn cancel(&self, order_id: &str, operator: Option<String>) -> AppResult<ProductionOrder>;
+
+    async fn close(&self, order_id: &str, operator: Option<String>) -> AppResult<ProductionOrder>;
 }
 
 #[async_trait]
 pub trait BomExplosionRepository: Send + Sync {
-    async fn preview_bom_explosion(
-        &self,
-        command: PreviewBomExplosionCommand,
-    ) -> AppResult<Value>;
-
-    async fn get_order_components(
-        &self,
-        order_id: String,
-    ) -> AppResult<Value>;
+    async fn explode(&self, command: BomExplosionCommand) -> AppResult<BomExplosionResult>;
 }
 
 #[async_trait]
 pub trait ProductionPostingRepository: Send + Sync {
-    async fn complete_order(
-        &self,
-        command: CompleteProductionOrderCommand,
-    ) -> AppResult<ProductionCompleteAppResult>;
+    async fn complete_order(&self, command: CompleteProductionOrderCommand) -> AppResult<ProductionCompleteResult>;
 }
 
 #[async_trait]
 pub trait BatchGenealogyRepository: Send + Sync {
-    async fn get_order_genealogy(
-        &self,
-        order_id: String,
-    ) -> AppResult<Value>;
+    async fn find_by_order_id(&self, order_id: &str) -> AppResult<Vec<BatchGenealogy>>;
 
-    async fn get_components_by_finished_batch(
-        &self,
-        batch_number: String,
-    ) -> AppResult<Value>;
+    async fn find_components_by_finished_batch(&self, batch_number: &str) -> AppResult<Vec<BatchGenealogy>>;
 
-    async fn get_where_used_by_component_batch(
-        &self,
-        batch_number: String,
-    ) -> AppResult<Value>;
+    async fn find_where_used_by_component_batch(&self, batch_number: &str) -> AppResult<Vec<BatchGenealogy>>;
 }
 
 #[async_trait]
 pub trait ProductionVarianceRepository: Send + Sync {
-    async fn get_order_variance(
-        &self,
-        order_id: String,
-    ) -> AppResult<Value>;
+    async fn find_by_order_id(&self, order_id: &str) -> AppResult<ProductionVariance>;
 
-    async fn list_variances(
-        &self,
-        query: ListProductionVariancesQuery,
-    ) -> AppResult<Value>;
+    async fn list(&self, query: ProductionVarianceQuery) -> AppResult<Vec<ProductionVariance>>;
 }

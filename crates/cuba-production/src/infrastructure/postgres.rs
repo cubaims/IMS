@@ -1,17 +1,35 @@
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
-use chrono::Utc;
-use serde_json::{json, Value};
-use sqlx::{PgPool, Row};
+use chrono::{DateTime, NaiveDate, Utc};
+use cuba_shared::{db_error::map_production_db_error, AppError, AppResult};
+use rust_decimal::Decimal;
+use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 
-use cuba_shared::{AppError, AppResult};
-
-use crate::application::{
-    BatchGenealogyRepository, BomExplosionRepository, CompleteProductionOrderCommand,
-    CreateProductionOrderCommand, CreateProductionOrderResult, ListProductionOrdersQuery,
-    ListProductionVariancesQuery, PreviewBomExplosionCommand, ProductionCompleteAppResult,
-    ProductionOrderRepository, ProductionPostingRepository, ProductionTransactionDto,
-    ProductionVarianceRepository, ReleaseProductionOrderCommand, ReleaseProductionOrderResult,
+use crate::{
+    application::{
+        BatchGenealogyRepository, BomExplosionCommand, BomExplosionRepository,
+        CompleteProductionOrderCommand, CreateProductionOrderCommand, ProductionOrderQuery,
+        ProductionOrderRepository, ProductionPostingRepository, ProductionVarianceQuery,
+        ProductionVarianceRepository, ReleaseProductionOrderCommand,
+    },
+    domain::{
+        BatchGenealogy, BatchNumber, BinCode, BomExplosionComponent, BomExplosionResult, BomId,
+        MaterialId, ProductionCompleteResult, ProductionCompleteTransaction, ProductionOrder,
+        ProductionOrderId, ProductionOrderLine, ProductionOrderStatus, ProductionVariance,
+        VariantCode, WorkCenterId,
+    },
 };
+
+fn map_sqlx_error(err: sqlx::Error) -> AppError {
+    match err {
+        sqlx::Error::Database(db_err) => {
+            let message = db_err.message().to_string();
+            crate::interface::error_mapping::map_db_error_text(&message)
+        }
+        other => AppError::Database(other),
+    }
+}
 
 #[derive(Clone)]
 pub struct PostgresProductionRepository {
@@ -23,127 +41,87 @@ impl PostgresProductionRepository {
         Self { pool }
     }
 
+    fn new_order_id() -> String {
+        let suffix = uuid::Uuid::now_v7().to_string().replace('-', "");
+        format!("MO-{}", &suffix[..20])
+    }
+
     fn page_limit(page_size: Option<u32>) -> i64 {
         page_size.unwrap_or(20).clamp(1, 200) as i64
     }
 
     fn page_offset(page: Option<u32>, page_size: Option<u32>) -> i64 {
         let page = page.unwrap_or(1).max(1);
-        let limit = Self::page_limit(page_size);
-        ((page - 1) as i64) * limit
+        ((page - 1) as i64) * Self::page_limit(page_size)
     }
 
-    fn new_order_id() -> String {
-        format!("MO-{}", Utc::now().format("%Y%m%d%H%M%S%3f"))
-            .chars()
-            .take(30)
-            .collect()
+    fn row_to_order(row: &sqlx::postgres::PgRow) -> ProductionOrder {
+        let status_text: String = row.get("status");
+
+        ProductionOrder {
+            order_id: ProductionOrderId(row.get("order_id")),
+            variant_code: VariantCode(row.get::<Option<String>, _>("variant_code").unwrap_or_default()),
+            finished_material_id: MaterialId(row.get("output_material_id")),
+            bom_id: BomId(row.get::<Option<String>, _>("bom_id").unwrap_or_default()),
+            planned_qty: row.get("planned_quantity"),
+            completed_qty: row.get("actual_quantity"),
+            work_center_id: WorkCenterId(row.get::<Option<String>, _>("work_center_id").unwrap_or_default()),
+            planned_start_date: row.get::<Option<NaiveDate>, _>("planned_start_date"),
+            planned_end_date: row.get::<Option<NaiveDate>, _>("planned_finish_date"),
+            status: ProductionOrderStatus::from_db_text(&status_text),
+            remark: None,
+            created_by: row.get::<Option<String>, _>("created_by"),
+            created_at: row.get::<Option<DateTime<Utc>>, _>("created_at"),
+            updated_at: row.get::<Option<DateTime<Utc>>, _>("updated_at"),
+        }
     }
 
-    fn db_status_planned() -> &'static str {
-        "计划中"
+    fn row_to_line(row: &sqlx::postgres::PgRow) -> ProductionOrderLine {
+        ProductionOrderLine {
+            order_id: ProductionOrderId(row.get("order_id")),
+            line_no: row.get("line_no"),
+            component_material_id: MaterialId(row.get("material_id")),
+            required_qty: row.get("planned_qty"),
+            issued_qty: row.get("actual_qty"),
+            source_bin: row
+                .get::<Option<String>, _>("from_bin")
+                .map(BinCode),
+            status: None,
+        }
     }
 
-    fn db_status_released() -> &'static str {
-        "已下达"
+    fn row_to_genealogy(row: &sqlx::postgres::PgRow) -> BatchGenealogy {
+        BatchGenealogy {
+            parent_batch_number: BatchNumber(row.get("parent_batch_number")),
+            component_batch_number: BatchNumber(row.get("component_batch_number")),
+            parent_material_id: MaterialId(row.get("parent_material_id")),
+            component_material_id: MaterialId(row.get("component_material_id")),
+            production_order_id: ProductionOrderId(row.get("production_order_id")),
+            consumed_qty: row.get("consumed_qty"),
+            output_qty: row.get("output_qty"),
+            transaction_id: row.get::<Option<String>, _>("transaction_id"),
+        }
     }
 
-    fn db_status_completed() -> &'static str {
-        "完成"
-    }
-
-    fn db_status_cancelled() -> &'static str {
-        "取消"
-    }
-
-    async fn json_array_from_query(
-        &self,
-        sql: &str,
-        limit: i64,
-        offset: i64,
-    ) -> AppResult<Value> {
-        let wrapped = format!(
-            "SELECT COALESCE(json_agg(t), '[]'::json) AS data FROM ({sql} LIMIT $1 OFFSET $2) t"
-        );
-
-        let row = sqlx::query(&wrapped)
-            .bind(limit)
-            .bind(offset)
-            .fetch_one(&self.pool)
-            .await?;
-
-        Ok(row.get::<Value, _>("data"))
-    }
-}
-
-#[async_trait]
-impl BomExplosionRepository for PostgresProductionRepository {
-    async fn preview_bom_explosion(
-        &self,
-        command: PreviewBomExplosionCommand,
-    ) -> AppResult<Value> {
-        let row = sqlx::query(
-            r#"
-            SELECT COALESCE(json_agg(x), '[]'::json) AS data
-            FROM (
-                SELECT
-                    bom_level,
-                    parent_material_id,
-                    component_material_id,
-                    component_name,
-                    unit_qty,
-                    required_qty,
-                    available_qty,
-                    shortage_qty,
-                    is_critical,
-                    CASE WHEN shortage_qty > 0 THEN true ELSE false END AS is_shortage
-                FROM wms.fn_bom_explosion($1, $2, $3)
-                ORDER BY bom_level, parent_material_id, component_material_id
-            ) x
-            "#,
-        )
-            .bind(&command.finished_material_id)
-            .bind(command.quantity)
-            .bind(&command.variant_code)
-            .fetch_one(&self.pool)
-            .await?;
-
-        let components = row.get::<Value, _>("data");
-
-        Ok(json!({
-            "variant_code": command.variant_code,
-            "finished_material_id": command.finished_material_id,
-            "quantity": command.quantity,
-            "merge_components": command.merge_components,
-            "components": components
-        }))
-    }
-
-    async fn get_order_components(&self, order_id: String) -> AppResult<Value> {
-        let row = sqlx::query(
-            r#"
-            SELECT COALESCE(json_agg(x ORDER BY x.line_no), '[]'::json) AS data
-            FROM (
-                SELECT
-                    d.line_no,
-                    d.material_id AS component_material_id,
-                    m.material_name AS component_material_name,
-                    d.planned_qty,
-                    d.actual_qty,
-                    d.from_bin,
-                    d.batch_number,
-                    d.issue_transaction_id
-                FROM wms.wms_production_orders_d d
-                JOIN mdm.mdm_materials m ON m.material_id = d.material_id
-                WHERE d.order_id = $1
-            ) x
-            "#,
-        )
-            .bind(order_id)
-            .fetch_one(&self.pool)
-            .await?;
-
-        Ok(row.get::<Value, _>("data"))
+    fn row_to_variance(row: &sqlx::postgres::PgRow) -> ProductionVariance {
+        ProductionVariance {
+            order_id: ProductionOrderId(row.get("order_id")),
+            variant_code: row
+                .get::<Option<String>, _>("variant_code")
+                .map(VariantCode),
+            output_material_id: MaterialId(row.get("output_material_id")),
+            planned_quantity: row.get("planned_quantity"),
+            actual_quantity: row.get("actual_quantity"),
+            planned_unit_cost: row.get("planned_unit_cost"),
+            actual_unit_cost: row.get("actual_unit_cost"),
+            planned_material_cost: row.get("planned_material_cost"),
+            actual_material_cost: row.get("actual_material_cost"),
+            material_variance: row.get("material_variance"),
+            labor_variance: row.get("labor_variance"),
+            overhead_variance: row.get("overhead_variance"),
+            total_variance: row.get("total_variance"),
+            variance_pct: row.get::<Option<Decimal>, _>("variance_pct"),
+        }
     }
 }
 
@@ -152,88 +130,57 @@ impl ProductionOrderRepository for PostgresProductionRepository {
     async fn create_order(
         &self,
         command: CreateProductionOrderCommand,
-    ) -> AppResult<CreateProductionOrderResult> {
+    ) -> AppResult<ProductionOrderId> {
         let mut tx = self.pool.begin().await?;
 
         let order_id = Self::new_order_id();
 
-        let exists = sqlx::query(
+        let variant_exists: Option<(String,)> = sqlx::query_as(
             r#"
-            SELECT
-                pv.variant_code,
-                pv.base_material_id,
-                pv.bom_id,
-                pv.status AS variant_status,
-                bh.status AS bom_status,
-                wc.status AS work_center_status
-            FROM mdm.mdm_product_variants pv
-            JOIN mdm.mdm_bom_headers bh ON bh.bom_id = $2
-            LEFT JOIN mdm.mdm_work_centers wc ON wc.work_center_id = $3
-            WHERE pv.variant_code = $1
+            SELECT variant_code
+            FROM mdm.mdm_product_variants
+            WHERE variant_code = $1
+              AND is_active = true
             "#,
         )
             .bind(&command.variant_code)
+            .fetch_optional(&mut *tx)
+            .await?;
+
+        if variant_exists.is_none() {
+            return Err(AppError::Validation("产品变体不存在或未启用".to_string()));
+        }
+
+        let bom_exists: Option<(String,)> = sqlx::query_as(
+            r#"
+            SELECT bom_id
+            FROM mdm.mdm_bom_headers
+            WHERE bom_id = $1
+              AND status = '生效'
+            "#,
+        )
             .bind(&command.bom_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+
+        if bom_exists.is_none() {
+            return Err(AppError::Validation("BOM 不存在或未生效".to_string()));
+        }
+
+        let wc_exists: Option<(String,)> = sqlx::query_as(
+            r#"
+            SELECT work_center_id
+            FROM mdm.mdm_work_centers
+            WHERE work_center_id = $1
+              AND is_active = true
+            "#,
+        )
             .bind(&command.work_center_id)
             .fetch_optional(&mut *tx)
             .await?;
 
-        let master = exists.ok_or_else(|| {
-            AppError::Validation(
-                "product variant, BOM, or work center does not exist".to_string(),
-            )
-        })?;
-
-        let variant_status: Option<String> = master.try_get("variant_status").ok();
-        let bom_status: Option<String> = master.try_get("bom_status").ok();
-        let work_center_status: Option<String> = master.try_get("work_center_status").ok();
-
-        if variant_status.as_deref() != Some("启用") && variant_status.as_deref() != Some("生效") {
-            return Err(AppError::Validation(
-                "product variant is not active".to_string(),
-            ));
-        }
-
-        if bom_status.as_deref() != Some("生效") {
-            return Err(AppError::Validation(
-                "BOM is not active".to_string(),
-            ));
-        }
-
-        if let Some(status) = work_center_status {
-            if status != "启用" && status != "正常" {
-                return Err(AppError::Validation(
-                    "work center is not active".to_string(),
-                ));
-            }
-        }
-
-        let explosion_rows = sqlx::query(
-            r#"
-            SELECT
-                bom_level,
-                parent_material_id,
-                component_material_id,
-                component_name,
-                unit_qty,
-                required_qty,
-                available_qty,
-                shortage_qty,
-                is_critical
-            FROM wms.fn_bom_explosion($1, $2, $3)
-            ORDER BY bom_level, parent_material_id, component_material_id
-            "#,
-        )
-            .bind(&command.finished_material_id)
-            .bind(command.planned_qty)
-            .bind(&command.variant_code)
-            .fetch_all(&mut *tx)
-            .await?;
-
-        if explosion_rows.is_empty() {
-            return Err(AppError::Validation(
-                "BOM explosion returned no components".to_string(),
-            ));
+        if wc_exists.is_none() {
+            return Err(AppError::Validation("工作中心不存在或未启用".to_string()));
         }
 
         sqlx::query(
@@ -251,7 +198,7 @@ impl ProductionOrderRepository for PostgresProductionRepository {
                 planned_finish_date,
                 created_by
             )
-            VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10)
+            VALUES ($1,$2,$3,$4,$5,$6,0,'计划中',$7,$8,$9)
             "#,
         )
             .bind(&order_id)
@@ -260,141 +207,148 @@ impl ProductionOrderRepository for PostgresProductionRepository {
             .bind(&command.finished_material_id)
             .bind(&command.work_center_id)
             .bind(command.planned_qty)
-            .bind(Self::db_status_planned())
             .bind(command.planned_start_date)
             .bind(command.planned_end_date)
-            .bind("API")
+            .bind(command.created_by.clone())
             .execute(&mut *tx)
             .await?;
 
-        for (idx, row) in explosion_rows.iter().enumerate() {
-            let component_material_id: String = row.get("component_material_id");
-            let required_qty: rust_decimal::Decimal = row.get("required_qty");
+        let components = sqlx::query(
+            r#"
+            SELECT *
+            FROM wms.fn_bom_explosion($1, $2, $3)
+            "#,
+        )
+            .bind(&command.finished_material_id)
+            .bind(Decimal::from(command.planned_qty))
+            .bind(&command.variant_code)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(map_production_db_error)?;
+
+        if components.is_empty() {
+            return Err(AppError::Validation("BOM 爆炸结果为空，不能创建生产订单".to_string()));
+        }
+
+        for (idx, row) in components.iter().enumerate() {
+            let material_id: String = row.get("component_material_id");
+            let required_qty: Decimal = row.get("required_qty");
+            let planned_qty = required_qty.ceil().to_string().parse::<i32>().unwrap_or(0);
+
+            if planned_qty <= 0 {
+                return Err(AppError::Validation(
+                    format!("组件 {material_id} 的需求数量无效")
+                ));
+            }
 
             sqlx::query(
                 r#"
-                INSERT INTO wms.wms_production_orders_d (
-                    order_id,
-                    line_no,
-                    material_id,
-                    planned_qty,
-                    actual_qty
-                )
-                VALUES ($1, $2, $3, $4, 0)
-                "#,
+        INSERT INTO wms.wms_production_orders_d (
+            order_id,
+            line_no,
+            material_id,
+            planned_qty,
+            actual_qty
+        )
+        VALUES ($1,$2,$3,$4,0)
+        "#,
             )
                 .bind(&order_id)
                 .bind((idx + 1) as i32 * 10)
-                .bind(component_material_id)
-                .bind(required_qty.round().to_string().parse::<i32>().unwrap_or(0))
+                .bind(material_id)
+                .bind(planned_qty)
                 .execute(&mut *tx)
                 .await?;
         }
 
         tx.commit().await?;
 
-        Ok(CreateProductionOrderResult {
-            order_id,
-            status: "PLANNED".to_string(),
-            variant_code: command.variant_code,
-            finished_material_id: command.finished_material_id,
-            planned_qty: command.planned_qty,
-            component_count: explosion_rows.len(),
-        })
+        Ok(ProductionOrderId(order_id))
     }
 
-    async fn list_orders(&self, query: ListProductionOrdersQuery) -> AppResult<Value> {
-        let limit = Self::page_limit(query.page_size);
-        let offset = Self::page_offset(query.page, query.page_size);
-
-        let sql = r#"
-            SELECT
-                h.order_id,
-                h.variant_code,
-                h.bom_id,
-                h.output_material_id,
-                m.material_name AS output_material_name,
-                h.work_center_id,
-                wc.work_center_name,
-                h.planned_quantity,
-                h.actual_quantity,
-                h.status,
-                h.planned_start_date,
-                h.planned_finish_date,
-                h.actual_start_date,
-                h.actual_finish_date,
-                h.created_by,
-                h.created_at,
-                h.updated_at
-            FROM wms.wms_production_orders_h h
-            JOIN mdm.mdm_materials m ON m.material_id = h.output_material_id
-            LEFT JOIN mdm.mdm_work_centers wc ON wc.work_center_id = h.work_center_id
-            ORDER BY h.created_at DESC
-        "#;
-
-        self.json_array_from_query(sql, limit, offset).await
-    }
-
-    async fn get_order(&self, order_id: String) -> AppResult<Value> {
+    async fn find_by_id(&self, order_id: &str) -> AppResult<ProductionOrder> {
         let row = sqlx::query(
             r#"
-            SELECT row_to_json(x) AS data
-            FROM (
-                SELECT
-                    h.*,
-                    m.material_name AS output_material_name,
-                    COALESCE(
-                        (
-                            SELECT json_agg(d ORDER BY d.line_no)
-                            FROM (
-                                SELECT
-                                    d.line_no,
-                                    d.material_id,
-                                    cm.material_name,
-                                    d.batch_number,
-                                    d.serial_number,
-                                    d.planned_qty,
-                                    d.actual_qty,
-                                    d.from_bin,
-                                    d.issue_transaction_id,
-                                    d.created_at
-                                FROM wms.wms_production_orders_d d
-                                JOIN mdm.mdm_materials cm ON cm.material_id = d.material_id
-                                WHERE d.order_id = h.order_id
-                            ) d
-                        ),
-                        '[]'::json
-                    ) AS lines
-                FROM wms.wms_production_orders_h h
-                JOIN mdm.mdm_materials m ON m.material_id = h.output_material_id
-                WHERE h.order_id = $1
-            ) x
+            SELECT *
+            FROM wms.wms_production_orders_h
+            WHERE order_id = $1
             "#,
         )
             .bind(order_id)
             .fetch_optional(&self.pool)
-            .await?;
+            .await?
+            .ok_or_else(|| AppError::NotFound("生产订单不存在".to_string()))?;
 
-        let Some(row) = row else {
-            return Err(AppError::NotFound("production order not found".to_string()));
-        };
-
-        Ok(row.get::<Value, _>("data"))
+        Ok(Self::row_to_order(&row))
     }
 
-    async fn release_order(
-        &self,
-        command: ReleaseProductionOrderCommand,
-    ) -> AppResult<ReleaseProductionOrderResult> {
-        let mut tx = self.pool.begin().await?;
+    async fn list(&self, query: ProductionOrderQuery) -> AppResult<Vec<ProductionOrder>> {
+        let mut builder = QueryBuilder::<Postgres>::new(
+            r#"
+            SELECT *
+            FROM wms.wms_production_orders_h
+            WHERE 1 = 1
+            "#,
+        );
 
-        sqlx::query("SET LOCAL lock_timeout = '5s'")
-            .execute(&mut *tx)
+        if let Some(order_id) = query.order_id {
+            builder.push(" AND order_id = ");
+            builder.push_bind(order_id);
+        }
+
+        if let Some(variant_code) = query.variant_code {
+            builder.push(" AND variant_code = ");
+            builder.push_bind(variant_code);
+        }
+
+        if let Some(finished_material_id) = query.finished_material_id {
+            builder.push(" AND output_material_id = ");
+            builder.push_bind(finished_material_id);
+        }
+
+        if let Some(status) = query.status {
+            builder.push(" AND status = ");
+            builder.push_bind(status);
+        }
+
+        builder.push(" ORDER BY created_at DESC LIMIT ");
+        builder.push_bind(Self::page_limit(query.page_size));
+        builder.push(" OFFSET ");
+        builder.push_bind(Self::page_offset(query.page, query.page_size));
+
+        let rows = builder
+            .build()
+            .fetch_all(&self.pool)
             .await?;
 
-        let current = sqlx::query(
+        Ok(rows.iter().map(Self::row_to_order).collect())
+    }
+
+    async fn list_lines(&self, order_id: &str) -> AppResult<Vec<ProductionOrderLine>> {
+        let rows = sqlx::query(
             r#"
-            SELECT status
+            SELECT *
+            FROM wms.wms_production_orders_d
+            WHERE order_id = $1
+            ORDER BY line_no
+            "#,
+        )
+            .bind(order_id)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(rows.iter().map(Self::row_to_line).collect())
+    }
+
+    async fn release(
+        &self,
+        command: ReleaseProductionOrderCommand,
+    ) -> AppResult<ProductionOrder> {
+        let mut tx = self.pool.begin().await?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT *
             FROM wms.wms_production_orders_h
             WHERE order_id = $1
             FOR UPDATE
@@ -402,18 +356,14 @@ impl ProductionOrderRepository for PostgresProductionRepository {
         )
             .bind(&command.order_id)
             .fetch_optional(&mut *tx)
-            .await?;
+            .await?
+            .ok_or_else(|| AppError::NotFound("生产订单不存在".to_string()))?;
 
-        let Some(row) = current else {
-            return Err(AppError::NotFound("production order not found".to_string()));
-        };
+        let status_text: String = row.get("status");
+        let status = ProductionOrderStatus::from_db_text(&status_text);
 
-        let status: String = row.get("status");
-
-        if status != Self::db_status_planned() {
-            return Err(AppError::Validation(format!(
-                "production order status invalid for release: {status}"
-            )));
+        if !status.can_release() {
+            return Err(AppError::Validation("只有计划中生产订单可以下达".to_string()));
         }
 
         let component_count: i64 = sqlx::query_scalar(
@@ -428,94 +378,132 @@ impl ProductionOrderRepository for PostgresProductionRepository {
             .await?;
 
         if component_count == 0 {
-            return Err(AppError::Validation(
-                "production order has no component lines".to_string(),
-            ));
+            return Err(AppError::Validation("生产订单没有组件行，不能下达".to_string()));
         }
 
         sqlx::query(
             r#"
             UPDATE wms.wms_production_orders_h
-            SET
-                status = $2,
+            SET status = '已下达',
                 actual_start_date = COALESCE(actual_start_date, CURRENT_DATE),
                 updated_at = NOW()
             WHERE order_id = $1
             "#,
         )
             .bind(&command.order_id)
-            .bind(Self::db_status_released())
             .execute(&mut *tx)
             .await?;
 
         tx.commit().await?;
 
-        Ok(ReleaseProductionOrderResult {
-            order_id: command.order_id,
-            status: "RELEASED".to_string(),
-        })
+        self.find_by_id(&command.order_id).await
     }
 
-    async fn cancel_order(
+    async fn cancel(
         &self,
-        order_id: String,
-        _remark: Option<String>,
-    ) -> AppResult<Value> {
-        let result = sqlx::query(
+        order_id: &str,
+        _operator: Option<String>,
+    ) -> AppResult<ProductionOrder> {
+        sqlx::query(
             r#"
             UPDATE wms.wms_production_orders_h
-            SET status = $2, updated_at = NOW()
+            SET status = '取消',
+                updated_at = NOW()
             WHERE order_id = $1
-              AND status IN ('计划中', '已下达', '生产中')
-            RETURNING order_id, status
+              AND status IN ('计划中','已下达')
             "#,
         )
-            .bind(&order_id)
-            .bind(Self::db_status_cancelled())
-            .fetch_optional(&self.pool)
+            .bind(order_id)
+            .execute(&self.pool)
             .await?;
 
-        let Some(row) = result else {
-            return Err(AppError::Validation(
-                "production order cannot be cancelled".to_string(),
-            ));
-        };
-
-        Ok(json!({
-            "order_id": row.get::<String, _>("order_id"),
-            "status": "CANCELLED"
-        }))
+        self.find_by_id(order_id).await
     }
 
-    async fn close_order(
+    async fn close(
         &self,
-        order_id: String,
-        _remark: Option<String>,
-    ) -> AppResult<Value> {
-        let result = sqlx::query(
+        order_id: &str,
+        _operator: Option<String>,
+    ) -> AppResult<ProductionOrder> {
+        sqlx::query(
             r#"
             UPDATE wms.wms_production_orders_h
-            SET status = $2, updated_at = NOW()
+            SET status = '完成',
+                actual_finish_date = COALESCE(actual_finish_date, CURRENT_DATE),
+                updated_at = NOW()
             WHERE order_id = $1
               AND status = '完成'
-            RETURNING order_id, status
             "#,
         )
-            .bind(&order_id)
-            .bind(Self::db_status_completed())
-            .fetch_optional(&self.pool)
+            .bind(order_id)
+            .execute(&self.pool)
             .await?;
 
-        let Some(row) = result else {
-            return Err(AppError::Validation(
-                "production order cannot be closed".to_string(),
-            ));
-        };
+        self.find_by_id(order_id).await
+    }
+}
 
-        Ok(json!({
-            "order_id": row.get::<String, _>("order_id"),
-            "status": "CLOSED"
-        }))
+#[async_trait]
+impl BomExplosionRepository for PostgresProductionRepository {
+    async fn explode(&self, command: BomExplosionCommand) -> AppResult<BomExplosionResult> {
+        let rows = sqlx::query(
+            r#"
+            SELECT *
+            FROM wms.fn_bom_explosion($1, $2, $3)
+            "#,
+        )
+            .bind(&command.finished_material_id)
+            .bind(Decimal::from(command.quantity))
+            .bind(&command.variant_code)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let merge = command.merge_components.unwrap_or(true);
+
+        let mut components = Vec::new();
+
+        for row in rows {
+            let component = BomExplosionComponent {
+                level: row.get("bom_level"),
+                parent_material_id: MaterialId(row.get("parent_material_id")),
+                component_material_id: MaterialId(row.get("component_material_id")),
+                component_name: row.get::<Option<String>, _>("component_name"),
+                quantity_per: row.get("unit_qty"),
+                required_qty: row.get("required_qty"),
+                available_qty: Decimal::from(row.get::<i32, _>("available_qty")),
+                net_requirement_qty: row.get("shortage_qty"),
+                is_shortage: row.get::<Decimal, _>("shortage_qty") > Decimal::ZERO,
+            };
+
+            components.push(component);
+        }
+
+        if merge {
+            let mut merged: BTreeMap<String, BomExplosionComponent> = BTreeMap::new();
+
+            for component in components {
+                let key = component.component_material_id.0.clone();
+
+                merged
+                    .entry(key)
+                    .and_modify(|existing| {
+                        existing.required_qty += component.required_qty;
+                        existing.net_requirement_qty += component.net_requirement_qty;
+                        existing.is_shortage = existing.is_shortage || component.is_shortage;
+                    })
+                    .or_insert(component);
+            }
+
+            components = merged.into_values().collect();
+        }
+
+        Ok(BomExplosionResult {
+            variant_code: command.variant_code.map(VariantCode),
+            finished_material_id: MaterialId(command.finished_material_id),
+            quantity: command.quantity,
+            merge_components: merge,
+            components,
+        })
     }
 }
 
@@ -524,16 +512,12 @@ impl ProductionPostingRepository for PostgresProductionRepository {
     async fn complete_order(
         &self,
         command: CompleteProductionOrderCommand,
-    ) -> AppResult<ProductionCompleteAppResult> {
+    ) -> AppResult<ProductionCompleteResult> {
         let mut tx = self.pool.begin().await?;
 
-        sqlx::query("SET LOCAL lock_timeout = '10s'")
-            .execute(&mut *tx)
-            .await?;
-
-        let current = sqlx::query(
+        let order_row = sqlx::query(
             r#"
-            SELECT status, planned_quantity, actual_quantity
+            SELECT *
             FROM wms.wms_production_orders_h
             WHERE order_id = $1
             FOR UPDATE
@@ -541,37 +525,36 @@ impl ProductionPostingRepository for PostgresProductionRepository {
         )
             .bind(&command.order_id)
             .fetch_optional(&mut *tx)
-            .await?;
+            .await?
+            .ok_or_else(|| AppError::NotFound("生产订单不存在".to_string()))?;
 
-        let Some(row) = current else {
-            return Err(AppError::NotFound("production order not found".to_string()));
-        };
+        let status_text: String = order_row.get("status");
+        let status = ProductionOrderStatus::from_db_text(&status_text);
 
-        let status: String = row.get("status");
-        let planned_quantity: i32 = row.get("planned_quantity");
-        let actual_quantity: i32 = row.get("actual_quantity");
-
-        if status != Self::db_status_released() && status != "生产中" {
-            return Err(AppError::Validation(format!(
-                "production order status invalid for completion: {status}"
-            )));
+        if !status.can_complete() {
+            return Err(AppError::Validation("只有已下达或生产中的订单可以完工".to_string()));
         }
 
-        let remaining = planned_quantity - actual_quantity;
-        if command.completed_qty <= 0 || command.completed_qty > remaining {
-            return Err(AppError::Validation(
-                "completed quantity exceeds remaining planned quantity".to_string(),
-            ));
+        let planned_qty: i32 = order_row.get("planned_quantity");
+        let actual_qty: i32 = order_row.get("actual_quantity");
+
+        if command.completed_qty <= 0 {
+            return Err(AppError::Validation("完工数量必须大于 0".to_string()));
         }
 
-        let rows = sqlx::query(
+        if actual_qty + command.completed_qty > planned_qty {
+            return Err(AppError::Validation("完工数量超过计划剩余数量".to_string()));
+        }
+
+        let posting_time = command.posting_date.unwrap_or_else(Utc::now);
+        let operator = command
+            .operator
+            .clone()
+            .unwrap_or_else(|| "API".to_string());
+
+        let posted_rows = sqlx::query(
             r#"
-            SELECT
-                posted_action,
-                posted_material_id,
-                posted_batch_number,
-                posted_qty,
-                posted_transaction_id
+            SELECT *
             FROM wms.fn_post_production_complete(
                 $1,
                 $2,
@@ -579,7 +562,7 @@ impl ProductionPostingRepository for PostgresProductionRepository {
                 $4,
                 $5,
                 '合格'::mdm.quality_status,
-                COALESCE($6, NOW())
+                $6
             )
             "#,
         )
@@ -587,39 +570,38 @@ impl ProductionPostingRepository for PostgresProductionRepository {
             .bind(&command.finished_batch_number)
             .bind(&command.finished_to_bin)
             .bind(command.completed_qty)
-            .bind("API")
-            .bind(command.posting_date)
+            .bind(&operator)
+            .bind(posting_time)
             .fetch_all(&mut *tx)
-            .await?;
+            .await
+            .map_err(map_production_db_error)?;
 
         let mut finished_transaction = None;
         let mut component_transactions = Vec::new();
 
-        for row in rows {
+        for row in posted_rows {
             let action: String = row.get("posted_action");
-            let material_id: String = row.get("posted_material_id");
-            let batch_number: Option<String> = row.get("posted_batch_number");
-            let qty: i32 = row.get("posted_qty");
-            let transaction_id: String = row.get("posted_transaction_id");
 
-            let dto = ProductionTransactionDto {
-                transaction_id,
+            let item = ProductionCompleteTransaction {
+                transaction_id: row.get("posted_transaction_id"),
                 movement_type: if action == "入库" {
                     "101".to_string()
                 } else {
                     "261".to_string()
                 },
-                material_id,
-                quantity: qty,
-                batch_number,
+                material_id: MaterialId(row.get("posted_material_id")),
+                quantity: row.get("posted_qty"),
+                batch_number: row
+                    .get::<Option<String>, _>("posted_batch_number")
+                    .map(BatchNumber),
                 from_bin: None,
                 to_bin: None,
             };
 
             if action == "入库" {
-                finished_transaction = Some(dto);
+                finished_transaction = Some(item);
             } else {
-                component_transactions.push(dto);
+                component_transactions.push(item);
             }
         }
 
@@ -645,16 +627,41 @@ impl ProductionPostingRepository for PostgresProductionRepository {
             .fetch_optional(&mut *tx)
             .await?;
 
+        let updated_status = if actual_qty + command.completed_qty >= planned_qty {
+            ProductionOrderStatus::Completed
+        } else {
+            ProductionOrderStatus::InProduction
+        };
+
+        sqlx::query(
+            r#"
+    UPDATE wms.wms_production_orders_h
+    SET status = $2,
+        actual_quantity = LEAST(planned_quantity, actual_quantity + $3),
+        actual_finish_date = CASE
+            WHEN actual_quantity + $3 >= planned_quantity THEN COALESCE(actual_finish_date, CURRENT_DATE)
+            ELSE actual_finish_date
+        END,
+        updated_at = NOW()
+    WHERE order_id = $1
+    "#,
+        )
+            .bind(&command.order_id)
+            .bind(updated_status.as_db_text())
+            .bind(command.completed_qty)
+            .execute(&mut *tx)
+            .await?;
+
         tx.commit().await?;
 
-        Ok(ProductionCompleteAppResult {
-            order_id: command.order_id,
-            status: "COMPLETED".to_string(),
+        Ok(ProductionCompleteResult {
+            order_id: ProductionOrderId(command.order_id),
+            status: updated_status,
             completed_qty: command.completed_qty,
             finished_transaction,
             component_transactions,
             genealogy_count,
-            variance_id,
+            variance_id: variance_id.map(|id| id.to_string()),
             reports_stale: true,
         })
     }
@@ -662,154 +669,112 @@ impl ProductionPostingRepository for PostgresProductionRepository {
 
 #[async_trait]
 impl BatchGenealogyRepository for PostgresProductionRepository {
-    async fn get_order_genealogy(&self, order_id: String) -> AppResult<Value> {
-        let row = sqlx::query(
+    async fn find_by_order_id(&self, order_id: &str) -> AppResult<Vec<BatchGenealogy>> {
+        let rows = sqlx::query(
             r#"
-            SELECT COALESCE(json_agg(x ORDER BY x.created_at), '[]'::json) AS data
-            FROM (
-                SELECT
-                    g.id,
-                    g.production_order_id,
-                    g.parent_batch_number,
-                    g.component_batch_number,
-                    g.parent_material_id,
-                    pm.material_name AS parent_material_name,
-                    g.component_material_id,
-                    cm.material_name AS component_material_name,
-                    g.consumed_qty,
-                    g.output_qty,
-                    g.transaction_id,
-                    g.created_at
-                FROM wms.wms_batch_genealogy g
-                JOIN mdm.mdm_materials pm ON pm.material_id = g.parent_material_id
-                JOIN mdm.mdm_materials cm ON cm.material_id = g.component_material_id
-                WHERE g.production_order_id = $1
-            ) x
+            SELECT *
+            FROM wms.wms_batch_genealogy
+            WHERE production_order_id = $1
+            ORDER BY created_at, component_batch_number
             "#,
         )
             .bind(order_id)
-            .fetch_one(&self.pool)
+            .fetch_all(&self.pool)
             .await?;
 
-        Ok(row.get::<Value, _>("data"))
+        Ok(rows.iter().map(Self::row_to_genealogy).collect())
     }
 
-    async fn get_components_by_finished_batch(
+    async fn find_components_by_finished_batch(
         &self,
-        batch_number: String,
-    ) -> AppResult<Value> {
-        let row = sqlx::query(
+        batch_number: &str,
+    ) -> AppResult<Vec<BatchGenealogy>> {
+        let rows = sqlx::query(
             r#"
-            SELECT COALESCE(json_agg(x ORDER BY x.created_at), '[]'::json) AS data
-            FROM (
-                SELECT
-                    g.id,
-                    g.production_order_id,
-                    g.parent_batch_number AS finished_batch_number,
-                    g.component_batch_number,
-                    g.parent_material_id AS finished_material_id,
-                    pm.material_name AS finished_material_name,
-                    g.component_material_id,
-                    cm.material_name AS component_material_name,
-                    g.consumed_qty,
-                    g.output_qty,
-                    g.transaction_id,
-                    g.created_at
-                FROM wms.wms_batch_genealogy g
-                JOIN mdm.mdm_materials pm ON pm.material_id = g.parent_material_id
-                JOIN mdm.mdm_materials cm ON cm.material_id = g.component_material_id
-                WHERE g.parent_batch_number = $1
-            ) x
+            SELECT *
+            FROM wms.wms_batch_genealogy
+            WHERE parent_batch_number = $1
+            ORDER BY created_at, component_batch_number
             "#,
         )
             .bind(batch_number)
-            .fetch_one(&self.pool)
+            .fetch_all(&self.pool)
             .await?;
 
-        Ok(row.get::<Value, _>("data"))
+        Ok(rows.iter().map(Self::row_to_genealogy).collect())
     }
 
-    async fn get_where_used_by_component_batch(
+    async fn find_where_used_by_component_batch(
         &self,
-        batch_number: String,
-    ) -> AppResult<Value> {
-        let row = sqlx::query(
+        batch_number: &str,
+    ) -> AppResult<Vec<BatchGenealogy>> {
+        let rows = sqlx::query(
             r#"
-            SELECT COALESCE(json_agg(x ORDER BY x.created_at), '[]'::json) AS data
-            FROM (
-                SELECT
-                    g.id,
-                    g.production_order_id,
-                    g.component_batch_number,
-                    g.parent_batch_number AS finished_batch_number,
-                    g.component_material_id,
-                    cm.material_name AS component_material_name,
-                    g.parent_material_id AS finished_material_id,
-                    pm.material_name AS finished_material_name,
-                    g.consumed_qty,
-                    g.output_qty,
-                    g.transaction_id,
-                    g.created_at
-                FROM wms.wms_batch_genealogy g
-                JOIN mdm.mdm_materials pm ON pm.material_id = g.parent_material_id
-                JOIN mdm.mdm_materials cm ON cm.material_id = g.component_material_id
-                WHERE g.component_batch_number = $1
-            ) x
+            SELECT *
+            FROM wms.wms_batch_genealogy
+            WHERE component_batch_number = $1
+            ORDER BY created_at, parent_batch_number
             "#,
         )
             .bind(batch_number)
-            .fetch_one(&self.pool)
+            .fetch_all(&self.pool)
             .await?;
 
-        Ok(row.get::<Value, _>("data"))
+        Ok(rows.iter().map(Self::row_to_genealogy).collect())
     }
 }
 
 #[async_trait]
 impl ProductionVarianceRepository for PostgresProductionRepository {
-    async fn get_order_variance(&self, order_id: String) -> AppResult<Value> {
+    async fn find_by_order_id(&self, order_id: &str) -> AppResult<ProductionVariance> {
         let row = sqlx::query(
             r#"
-            SELECT row_to_json(x) AS data
-            FROM (
-                SELECT
-                    v.*,
-                    m.material_name AS output_material_name
-                FROM wms.wms_production_variances v
-                JOIN mdm.mdm_materials m ON m.material_id = v.output_material_id
-                WHERE v.order_id = $1
-            ) x
+            SELECT *
+            FROM wms.wms_production_variances
+            WHERE order_id = $1
             "#,
         )
             .bind(order_id)
             .fetch_optional(&self.pool)
-            .await?;
+            .await?
+            .ok_or_else(|| AppError::NotFound("生产成本差异不存在".to_string()))?;
 
-        let Some(row) = row else {
-            return Err(AppError::NotFound(
-                "production variance not found".to_string(),
-            ));
-        };
-
-        Ok(row.get::<Value, _>("data"))
+        Ok(Self::row_to_variance(&row))
     }
 
-    async fn list_variances(
-        &self,
-        query: ListProductionVariancesQuery,
-    ) -> AppResult<Value> {
-        let limit = Self::page_limit(query.page_size);
-        let offset = Self::page_offset(query.page, query.page_size);
+    async fn list(&self, query: ProductionVarianceQuery) -> AppResult<Vec<ProductionVariance>> {
+        let mut builder = QueryBuilder::<Postgres>::new(
+            r#"
+            SELECT *
+            FROM wms.wms_production_variances
+            WHERE 1 = 1
+            "#,
+        );
 
-        let sql = r#"
-            SELECT
-                v.*,
-                m.material_name AS output_material_name
-            FROM wms.wms_production_variances v
-            JOIN mdm.mdm_materials m ON m.material_id = v.output_material_id
-            ORDER BY v.calculated_at DESC
-        "#;
+        if let Some(order_id) = query.order_id {
+            builder.push(" AND order_id = ");
+            builder.push_bind(order_id);
+        }
 
-        self.json_array_from_query(sql, limit, offset).await
+        if let Some(variant_code) = query.variant_code {
+            builder.push(" AND variant_code = ");
+            builder.push_bind(variant_code);
+        }
+
+        if query.only_over_budget.unwrap_or(false) {
+            builder.push(" AND total_variance > 0 ");
+        }
+
+        builder.push(" ORDER BY calculated_at DESC LIMIT ");
+        builder.push_bind(Self::page_limit(query.page_size));
+        builder.push(" OFFSET ");
+        builder.push_bind(Self::page_offset(query.page, query.page_size));
+
+        let rows = builder
+            .build()
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(rows.iter().map(Self::row_to_variance).collect())
     }
 }
