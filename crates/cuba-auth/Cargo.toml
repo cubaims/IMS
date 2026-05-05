@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 async-trait.workspace = true
 axum.workspace = true
@@ -21,4 +24,4 @@ validator.workspace = true
 chrono.workspace = true
 argon2.workspace = true
 jsonwebtoken.workspace = true
-ipnetwork = "0.20"
+ipnetwork.workspace = true

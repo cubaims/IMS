@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 async-trait.workspace = true
 axum.workspace = true
@@ -18,4 +21,4 @@ thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 validator.workspace = true
-time = "0.3.47"
+time.workspace = true
