@@ -7,6 +7,199 @@ use crate::application::{
     PickBatchFefoCommand, PostInventoryCommand, TransferInventoryCommand,
 };
 
+use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+
+use crate::domain::{
+    InventoryCount,
+    InventoryCountLine,
+    InventoryCountLineStatus,
+    InventoryCountMovementType,
+    InventoryCountScope,
+    InventoryCountStatus,
+    InventoryCountType,
+};
+
+/// 创建盘点单请求
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateInventoryCountRequest {
+    pub count_type: InventoryCountType,
+    pub count_scope: InventoryCountScope,
+
+    pub zone_code: Option<String>,
+    pub bin_code: Option<String>,
+    pub material_id: Option<String>,
+    pub batch_number: Option<String>,
+
+    pub remark: Option<String>,
+}
+
+/// 创建盘点单响应
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateInventoryCountResponse {
+    pub count_doc_id: String,
+    pub status: InventoryCountStatus,
+}
+
+/// 盘点单详情响应
+#[derive(Debug, Clone, Serialize)]
+pub struct InventoryCountResponse {
+    pub count_doc_id: String,
+    pub count_type: InventoryCountType,
+    pub count_scope: InventoryCountScope,
+
+    pub zone_code: Option<String>,
+    pub bin_code: Option<String>,
+    pub material_id: Option<String>,
+    pub batch_number: Option<String>,
+
+    pub status: InventoryCountStatus,
+
+    pub created_by: String,
+    pub approved_by: Option<String>,
+    pub posted_by: Option<String>,
+
+    pub created_at: DateTime<Utc>,
+    pub approved_at: Option<DateTime<Utc>>,
+    pub posted_at: Option<DateTime<Utc>>,
+    pub closed_at: Option<DateTime<Utc>>,
+
+    pub remark: Option<String>,
+    pub lines: Vec<InventoryCountLineResponse>,
+}
+
+impl From<InventoryCount> for InventoryCountResponse {
+    fn from(value: InventoryCount) -> Self {
+        Self {
+            count_doc_id: value.count_doc_id,
+            count_type: value.count_type,
+            count_scope: value.count_scope,
+            zone_code: value.zone_code,
+            bin_code: value.bin_code,
+            material_id: value.material_id,
+            batch_number: value.batch_number,
+            status: value.status,
+            created_by: value.created_by,
+            approved_by: value.approved_by,
+            posted_by: value.posted_by,
+            created_at: value.created_at,
+            approved_at: value.approved_at,
+            posted_at: value.posted_at,
+            closed_at: value.closed_at,
+            remark: value.remark,
+            lines: value
+                .lines
+                .into_iter()
+                .map(InventoryCountLineResponse::from)
+                .collect(),
+        }
+    }
+}
+
+/// 盘点明细响应
+#[derive(Debug, Clone, Serialize)]
+pub struct InventoryCountLineResponse {
+    pub count_doc_id: String,
+    pub line_no: i32,
+
+    pub material_id: String,
+    pub bin_code: String,
+    pub batch_number: Option<String>,
+    pub quality_status: Option<String>,
+
+    pub system_qty: Decimal,
+    pub counted_qty: Option<Decimal>,
+    pub difference_qty: Option<Decimal>,
+    pub difference_reason: Option<String>,
+
+    /// 这里对外返回 701 / 702，而不是内部枚举名 Gain701 / Loss702
+    pub movement_type: Option<String>,
+
+    pub transaction_id: Option<String>,
+    pub status: InventoryCountLineStatus,
+    pub remark: Option<String>,
+}
+
+impl From<InventoryCountLine> for InventoryCountLineResponse {
+    fn from(value: InventoryCountLine) -> Self {
+        Self {
+            count_doc_id: value.count_doc_id,
+            line_no: value.line_no,
+            material_id: value.material_id,
+            bin_code: value.bin_code,
+            batch_number: value.batch_number,
+            quality_status: value.quality_status,
+            system_qty: value.system_qty,
+            counted_qty: value.counted_qty,
+            difference_qty: value.difference_qty,
+            difference_reason: value.difference_reason,
+            movement_type: value
+                .movement_type
+                .as_ref()
+                .map(InventoryCountMovementType::as_code)
+                .map(str::to_string),
+            transaction_id: value.transaction_id,
+            status: value.status,
+            remark: value.remark,
+        }
+    }
+}
+
+/// 录入单行实盘数量请求
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateInventoryCountLineRequest {
+    pub counted_qty: Decimal,
+    pub difference_reason: Option<String>,
+    pub remark: Option<String>,
+}
+
+/// 批量录入实盘数量请求
+#[derive(Debug, Clone, Deserialize)]
+pub struct BatchUpdateInventoryCountLinesRequest {
+    pub lines: Vec<BatchUpdateInventoryCountLineItem>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BatchUpdateInventoryCountLineItem {
+    pub line_no: i32,
+    pub counted_qty: Decimal,
+    pub difference_reason: Option<String>,
+    pub remark: Option<String>,
+}
+
+/// 提交盘点单请求
+#[derive(Debug, Clone, Deserialize)]
+pub struct SubmitInventoryCountRequest {
+    pub remark: Option<String>,
+}
+
+/// 审核盘点单请求
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApproveInventoryCountRequest {
+    pub approved: bool,
+    pub remark: Option<String>,
+}
+
+/// 盘点过账请求
+#[derive(Debug, Clone, Deserialize)]
+pub struct PostInventoryCountRequest {
+    pub posting_date: DateTime<Utc>,
+    pub remark: Option<String>,
+}
+
+/// 关闭盘点单请求
+#[derive(Debug, Clone, Deserialize)]
+pub struct CloseInventoryCountRequest {
+    pub remark: Option<String>,
+}
+
+/// 取消盘点单请求
+#[derive(Debug, Clone, Deserialize)]
+pub struct CancelInventoryCountRequest {
+    pub remark: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostInventoryRequest {
     pub material_id: String,
