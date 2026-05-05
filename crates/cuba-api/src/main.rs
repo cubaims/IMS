@@ -54,6 +54,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/sales-orders", cuba_sales::interface::routes::routes())
         .nest("/api/production", cuba_production::interface::routes::production_routes())
         .nest("/api/production-orders", cuba_production::interface::routes::production_order_routes())
+        .nest("/api/quality", cuba_quality::interface::routes::routes())
         .with_state(state)
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
