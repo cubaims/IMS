@@ -4,7 +4,7 @@
 
 pub mod batch_quality;
 pub mod enums;
-pub mod error;
+pub mod errors;
 pub mod inspection_lot;
 pub mod inspection_result;
 pub mod quality_notification;
@@ -12,7 +12,7 @@ pub mod value_objects;
 
 pub use batch_quality::*;
 pub use enums::*;
-pub use error::*;
+pub use errors::*;
 pub use inspection_lot::*;
 pub use inspection_result::*;
 pub use quality_notification::*;

@@ -41,6 +41,9 @@ pub struct InspectionLot {
     /// 最终质量判定。
     pub decision: Option<InspectionDecision>,
 
+    /// 质量判定原因。
+    pub decision_reason: Option<String>,
+
     /// 创建人。
     pub created_by: Operator,
 
@@ -89,6 +92,7 @@ impl InspectionLot {
             sample_qty: input.sample_qty,
             status: InspectionLotStatus::Created,
             decision: None,
+            decision_reason: None,
             created_by: input.created_by,
             inspected_by: None,
             decided_by: None,
@@ -127,9 +131,40 @@ impl InspectionLot {
     }
 
     /// 做质量判定。
+    ///
+    /// 兼容旧调用点。新代码建议使用 make_decision_with_reason。
     pub fn make_decision(
         &mut self,
         decision: InspectionDecision,
+        operator: Operator,
+        now: OffsetDateTime,
+    ) -> QualityResult<()> {
+        self.apply_decision(decision, None, operator, now)
+    }
+
+    /// 做带原因的质量判定。
+    ///
+    /// 质量判定原因必须填写，方便后续写入批次历史和审计日志。
+    pub fn make_decision_with_reason(
+        &mut self,
+        decision: InspectionDecision,
+        reason: String,
+        operator: Operator,
+        now: OffsetDateTime,
+    ) -> QualityResult<()> {
+        let reason = reason.trim().to_string();
+
+        if reason.is_empty() {
+            return Err(QualityError::QualityDecisionReasonRequired);
+        }
+
+        self.apply_decision(decision, Some(reason), operator, now)
+    }
+
+    fn apply_decision(
+        &mut self,
+        decision: InspectionDecision,
+        reason: Option<String>,
         operator: Operator,
         now: OffsetDateTime,
     ) -> QualityResult<()> {
@@ -139,6 +174,7 @@ impl InspectionLot {
 
         self.status = InspectionLotStatus::Decided;
         self.decision = Some(decision);
+        self.decision_reason = reason;
         self.decided_by = Some(operator);
         self.decided_at = Some(now);
 

@@ -1,13 +1,33 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use crate::domain::{QualityError, QualityResult};
+
+fn normalize_required(value: impl Into<String>, field: &'static str) -> QualityResult<String> {
+    let value = value.into().trim().to_string();
+
+    if value.is_empty() {
+        return Err(QualityError::RequiredFieldEmpty(field));
+    }
+
+    Ok(value)
+}
+
 /// 检验批 ID。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct InspectionLotId(String);
 
 impl InspectionLotId {
+    /// 向后兼容的非校验构造。
+    ///
+    /// 新代码建议使用 try_new。
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
+    }
+
+    /// 带业务校验的安全构造。
+    pub fn try_new(value: impl Into<String>) -> QualityResult<Self> {
+        Ok(Self(normalize_required(value, "inspection_lot_id")?))
     }
 
     pub fn as_str(&self) -> &str {
@@ -30,8 +50,18 @@ impl InspectionResultId {
         Self(value.into())
     }
 
+    pub fn try_new(value: impl Into<String>) -> QualityResult<Self> {
+        Ok(Self(normalize_required(value, "inspection_result_id")?))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl fmt::Display for InspectionResultId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -44,8 +74,18 @@ impl QualityNotificationId {
         Self(value.into())
     }
 
+    pub fn try_new(value: impl Into<String>) -> QualityResult<Self> {
+        Ok(Self(normalize_required(value, "quality_notification_id")?))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl fmt::Display for QualityNotificationId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -61,8 +101,18 @@ impl MaterialId {
         Self(value.into())
     }
 
+    pub fn try_new(value: impl Into<String>) -> QualityResult<Self> {
+        Ok(Self(normalize_required(value, "material_id")?))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl fmt::Display for MaterialId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -75,8 +125,18 @@ impl BatchNumber {
         Self(value.into())
     }
 
+    pub fn try_new(value: impl Into<String>) -> QualityResult<Self> {
+        Ok(Self(normalize_required(value, "batch_number")?))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl fmt::Display for BatchNumber {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -89,8 +149,18 @@ impl InspectionCharId {
         Self(value.into())
     }
 
+    pub fn try_new(value: impl Into<String>) -> QualityResult<Self> {
+        Ok(Self(normalize_required(value, "inspection_char_id")?))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl fmt::Display for InspectionCharId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -103,8 +173,18 @@ impl DefectCode {
         Self(value.into())
     }
 
+    pub fn try_new(value: impl Into<String>) -> QualityResult<Self> {
+        Ok(Self(normalize_required(value, "defect_code")?))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl fmt::Display for DefectCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -117,7 +197,17 @@ impl Operator {
         Self(value.into())
     }
 
+    pub fn try_new(value: impl Into<String>) -> QualityResult<Self> {
+        Ok(Self(normalize_required(value, "operator")?))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl fmt::Display for Operator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }

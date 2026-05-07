@@ -28,7 +28,6 @@ impl QualityStatus {
     }
 }
 
-
 impl fmt::Display for QualityStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_db_text())

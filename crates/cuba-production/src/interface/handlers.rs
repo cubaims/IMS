@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, Query, State},
     Json,
+    extract::{Path, Query, State},
 };
 use cuba_shared::{ApiResponse, AppResult, AppState};
 
@@ -17,7 +17,7 @@ use crate::{
 
 use super::dto::{
     BomExplosionPreviewRequest, CancelProductionOrderRequest, CloseProductionOrderRequest,
-    CompleteProductionOrderRequest, CreatedProductionOrderResponse, CreateProductionOrderRequest,
+    CompleteProductionOrderRequest, CreateProductionOrderRequest, CreatedProductionOrderResponse,
     ProductionActionResponse, ProductionOrderListQuery, ProductionVarianceListQuery,
     ReleaseProductionOrderRequest,
 };
@@ -219,7 +219,7 @@ pub async fn get_finished_batch_components(
         &repo,
         &batch_number,
     )
-        .await?;
+    .await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
@@ -234,7 +234,7 @@ pub async fn get_component_batch_where_used(
         &repo,
         &batch_number,
     )
-        .await?;
+    .await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }

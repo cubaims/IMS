@@ -1,26 +1,19 @@
-use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use sqlx::{PgPool, Row};
+use time::OffsetDateTime;
 
 use crate::application::common::Page;
 use crate::application::errors::InventoryCountApplicationError;
 use crate::application::inventory_count_model::{
-    InventoryCountScopeFilter,
-    ListInventoryCountsInput,
+    InventoryCountScopeFilter, ListInventoryCountsInput,
 };
 use crate::application::inventory_count_repository::{
-    InventoryCountRepository,
-    InventoryCountSummary,
+    InventoryCountRepository, InventoryCountSummary,
 };
 use crate::domain::{
-    InventoryCount,
-    InventoryCountLine,
-    InventoryCountLineStatus,
-    InventoryCountMovementType,
-    InventoryCountPostedTransaction,
-    InventoryCountScope,
-    InventoryCountStatus,
-    InventoryCountType,
+    InventoryCount, InventoryCountLine, InventoryCountLineStatus, InventoryCountMovementType,
+    InventoryCountPostedTransaction, InventoryCountPostingResult, InventoryCountScope,
+    InventoryCountStatus, InventoryCountType,
 };
 
 /// PostgreSQL 盘点仓储实现
@@ -47,7 +40,7 @@ impl PostgresInventoryCountRepository {
         to_bin: Option<&str>,
         quality_status: Option<&str>,
         operator: &str,
-        posting_date: DateTime<Utc>,
+        posting_date: OffsetDateTime,
         reference_doc: Option<&str>,
         reference_line_no: Option<i32>,
         remark: Option<&str>,
@@ -70,25 +63,86 @@ impl PostgresInventoryCountRepository {
             ) AS transaction_id
             "#,
         )
-            .bind(movement_type)
-            .bind(material_id)
-            .bind(batch_number)
-            .bind(quantity)
-            .bind(from_bin)
-            .bind(to_bin)
-            .bind(quality_status)
-            .bind(operator)
-            .bind(posting_date)
-            .bind(reference_doc)
-            .bind(reference_line_no)
-            .bind(remark)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|err| {
-                InventoryCountApplicationError::DifferencePostFailed(format!(
-                    "调用 wms.post_inventory_transaction({movement_type}) 失败: {err}"
-                ))
-            })?;
+        .bind(movement_type)
+        .bind(material_id)
+        .bind(batch_number)
+        .bind(quantity)
+        .bind(from_bin)
+        .bind(to_bin)
+        .bind(quality_status)
+        .bind(operator)
+        .bind(posting_date)
+        .bind(reference_doc)
+        .bind(reference_line_no)
+        .bind(remark)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|err| {
+            InventoryCountApplicationError::DifferencePostFailed(format!(
+                "调用 wms.post_inventory_transaction({movement_type}) 失败: {err}"
+            ))
+        })?;
+
+        let transaction_id: String = row
+            .try_get("transaction_id")
+            .map_err(InventoryCountApplicationError::database)?;
+
+        Ok(transaction_id)
+    }
+    /// 在同一个数据库事务内调用库存过账函数。
+    async fn call_post_inventory_transaction_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        movement_type: &str,
+        material_id: &str,
+        batch_number: Option<&str>,
+        quantity: Decimal,
+        from_bin: Option<&str>,
+        to_bin: Option<&str>,
+        quality_status: Option<&str>,
+        operator: &str,
+        posting_date: OffsetDateTime,
+        reference_doc: Option<&str>,
+        reference_line_no: Option<i32>,
+        remark: Option<&str>,
+    ) -> Result<String, InventoryCountApplicationError> {
+        let row = sqlx::query(
+            r#"
+            SELECT wms.post_inventory_transaction(
+                p_movement_type     => $1,
+                p_material_id       => $2,
+                p_batch_number      => $3,
+                p_quantity          => $4,
+                p_from_bin          => $5,
+                p_to_bin            => $6,
+                p_quality_status    => $7,
+                p_operator          => $8,
+                p_posting_date      => $9,
+                p_reference_doc     => $10,
+                p_reference_line_no => $11,
+                p_remark            => $12
+            ) AS transaction_id
+            "#,
+        )
+        .bind(movement_type)
+        .bind(material_id)
+        .bind(batch_number)
+        .bind(quantity)
+        .bind(from_bin)
+        .bind(to_bin)
+        .bind(quality_status)
+        .bind(operator)
+        .bind(posting_date)
+        .bind(reference_doc)
+        .bind(reference_line_no)
+        .bind(remark)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|err| {
+            InventoryCountApplicationError::DifferencePostFailed(format!(
+                "调用 wms.post_inventory_transaction({movement_type}) 失败: {err}"
+            ))
+        })?;
 
         let transaction_id: String = row
             .try_get("transaction_id")
@@ -123,10 +177,10 @@ struct InventoryCountHeaderRow {
     pub approved_by: Option<String>,
     pub posted_by: Option<String>,
 
-    pub created_at: DateTime<Utc>,
-    pub approved_at: Option<DateTime<Utc>>,
-    pub posted_at: Option<DateTime<Utc>>,
-    pub closed_at: Option<DateTime<Utc>>,
+    pub created_at: OffsetDateTime,
+    pub approved_at: Option<OffsetDateTime>,
+    pub posted_at: Option<OffsetDateTime>,
+    pub closed_at: Option<OffsetDateTime>,
 
     pub remark: Option<String>,
 }
@@ -168,7 +222,7 @@ struct InventoryCountSummaryRow {
 
     pub status: String,
     pub created_by: String,
-    pub created_at: DateTime<Utc>,
+    pub created_at: OffsetDateTime,
 
     pub line_count: i64,
     pub difference_line_count: i64,
@@ -269,7 +323,7 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
         &self,
         count_doc_id: &str,
         operator: &str,
-        posting_date: DateTime<Utc>,
+        posting_date: OffsetDateTime,
         remark: Option<&str>,
     ) -> Result<InventoryCountPostingResult, InventoryCountApplicationError> {
         let mut tx = self
@@ -303,11 +357,11 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
             FOR UPDATE
             "#,
         )
-            .bind(count_doc_id)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(InventoryCountApplicationError::database)?
-            .ok_or(InventoryCountApplicationError::CountNotFound)?;
+        .bind(count_doc_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(InventoryCountApplicationError::database)?
+        .ok_or(InventoryCountApplicationError::CountNotFound)?;
 
         let mut count = InventoryCount::try_from(header_row)?;
 
@@ -340,10 +394,10 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
             FOR UPDATE
             "#,
         )
-            .bind(count_doc_id)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(InventoryCountApplicationError::database)?;
+        .bind(count_doc_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(InventoryCountApplicationError::database)?;
 
         if line_rows.is_empty() {
             return Err(InventoryCountApplicationError::NoLines);
@@ -362,8 +416,27 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                 .difference_qty
                 .ok_or(InventoryCountApplicationError::LineNotCounted)?;
 
-            // 无差异：不生成库存事务，也不回写 transaction_id
+            // 无差异：不生成库存事务，但明细也应标记为 POSTED，保持单据与明细状态一致
             if difference_qty == Decimal::ZERO {
+                let updated = sqlx::query(
+                    r#"
+                    UPDATE wms.wms_inventory_count_d
+                    SET status = 'POSTED'
+                    WHERE count_doc_id = $1
+                      AND line_no = $2
+                    "#,
+                )
+                .bind(count_doc_id)
+                .bind(line.line_no)
+                .execute(&mut *tx)
+                .await
+                .map_err(InventoryCountApplicationError::database)?;
+
+                if updated.rows_affected() == 0 {
+                    return Err(InventoryCountApplicationError::CountLineNotFound);
+                }
+
+                line.status = InventoryCountLineStatus::Posted;
                 continue;
             }
 
@@ -378,16 +451,17 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                 ));
             }
 
-            let (movement_type, from_bin, to_bin) = if line.is_gain() {
-                // 盘盈：701，增加到当前货位
-                ("701", None, Some(line.bin_code.as_str()))
-            } else if line.is_loss() {
-                // 盘亏：702，从当前货位扣减
-                ("702", Some(line.bin_code.as_str()), None)
-            } else {
-                // 理论上不会走到这里，前面已经处理 difference_qty == 0
-                continue;
-            };
+            let (movement_type, from_bin, to_bin): (&str, Option<String>, Option<String>) =
+                if line.is_gain() {
+                    // 盘盈：701，增加到当前货位
+                    ("701", None, Some(line.bin_code.clone()))
+                } else if line.is_loss() {
+                    // 盘亏：702，从当前货位扣减
+                    ("702", Some(line.bin_code.clone()), None)
+                } else {
+                    // 理论上不会走到这里，前面已经处理 difference_qty == 0
+                    continue;
+                };
 
             let transaction_id = self
                 .call_post_inventory_transaction_tx(
@@ -396,8 +470,8 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                     &line.material_id,
                     line.batch_number.as_deref(),
                     posting_qty,
-                    from_bin,
-                    to_bin,
+                    from_bin.as_deref(),
+                    to_bin.as_deref(),
                     line.quality_status.as_deref(),
                     operator,
                     posting_date,
@@ -418,12 +492,12 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                   AND line_no = $2
                 "#,
             )
-                .bind(count_doc_id)
-                .bind(line.line_no)
-                .bind(&transaction_id)
-                .execute(&mut *tx)
-                .await
-                .map_err(InventoryCountApplicationError::database)?;
+            .bind(count_doc_id)
+            .bind(line.line_no)
+            .bind(&transaction_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
 
             if updated.rows_affected() == 0 {
                 return Err(InventoryCountApplicationError::CountLineNotFound);
@@ -437,16 +511,19 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                 movement_type: movement_type.to_string(),
                 material_id: line.material_id.clone(),
                 quantity: posting_qty,
-                from_bin: from_bin.map(str::to_string),
-                to_bin: to_bin.map(str::to_string),
+                from_bin: from_bin.clone(),
+                to_bin: to_bin.clone(),
                 batch_number: line.batch_number.clone(),
             });
         }
 
         // 6. 领域层标记 POSTED
+        // 注意：count 是从 header row 构造的，必须把本事务中处理后的 lines 放回聚合，
+        // 否则领域层看不到真实明细状态。
+        count.lines = lines;
         count.mark_posted(operator.to_string())?;
 
-        let posted_at = count.posted_at.unwrap_or_else(Utc::now);
+        let posted_at = count.posted_at.unwrap_or_else(OffsetDateTime::now_utc);
 
         // 7. 更新盘点单头 posted 信息和状态
         let updated = sqlx::query(
@@ -460,13 +537,13 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
             WHERE count_doc_id = $1
             "#,
         )
-            .bind(count_doc_id)
-            .bind(operator)
-            .bind(posted_at)
-            .bind(remark)
-            .execute(&mut *tx)
-            .await
-            .map_err(InventoryCountApplicationError::database)?;
+        .bind(count_doc_id)
+        .bind(operator)
+        .bind(posted_at)
+        .bind(remark)
+        .execute(&mut *tx)
+        .await
+        .map_err(InventoryCountApplicationError::database)?;
 
         if updated.rows_affected() == 0 {
             return Err(InventoryCountApplicationError::CountNotFound);
@@ -502,11 +579,11 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
             WHERE count_doc_id = $1
             "#,
         )
-            .bind(count_doc_id)
-            .bind(remark)
-            .execute(&self.pool)
-            .await
-            .map_err(InventoryCountApplicationError::database)?;
+        .bind(count_doc_id)
+        .bind(remark)
+        .execute(&self.pool)
+        .await
+        .map_err(InventoryCountApplicationError::database)?;
 
         if result.rows_affected() == 0 {
             return Err(InventoryCountApplicationError::CountNotFound);
@@ -540,53 +617,29 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
             )
             "#,
         )
-            .bind(count_scope)
-            .bind(&scope.zone_code)
-            .bind(&scope.bin_code)
-            .bind(&scope.material_id)
-            .bind(&scope.batch_number)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(InventoryCountApplicationError::database)?;
+        .bind(count_scope)
+        .bind(&scope.zone_code)
+        .bind(&scope.bin_code)
+        .bind(&scope.material_id)
+        .bind(&scope.batch_number)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(InventoryCountApplicationError::database)?;
 
         Ok(exists)
     }
 
     /// 盘盈 701 过账
     ///
-    /// 下一段替换为真实 SQL 调用。
-    async fn post_gain_701(
-        &self,
-        _line: &InventoryCountLine,
-        _operator: &str,
-        _posting_date: DateTime<Utc>,
-        _remark: Option<&str>,
-    ) -> Result<InventoryCountPostedTransaction, InventoryCountApplicationError> {
-        Err(InventoryCountApplicationError::DifferencePostFailed(
-            "post_gain_701 尚未实现".to_string(),
-        ))
-    }
 
     /// 盘亏 702 过账
     ///
-    /// 下一段替换为真实 SQL 调用。
-    async fn post_loss_702(
-        &self,
-        _line: &InventoryCountLine,
-        _operator: &str,
-        _posting_date: DateTime<Utc>,
-        _remark: Option<&str>,
-    ) -> Result<InventoryCountPostedTransaction, InventoryCountApplicationError> {
-        Err(InventoryCountApplicationError::DifferencePostFailed(
-            "post_loss_702 尚未实现".to_string(),
-        ))
-    }
     /// 更新审核信息
     async fn update_approved_info(
         &self,
         count_doc_id: &str,
         approved_by: &str,
-        approved_at: DateTime<Utc>,
+        approved_at: OffsetDateTime,
         remark: Option<&str>,
     ) -> Result<(), InventoryCountApplicationError> {
         let result = sqlx::query(
@@ -599,13 +652,13 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
             WHERE count_doc_id = $1
             "#,
         )
-            .bind(count_doc_id)
-            .bind(approved_by)
-            .bind(approved_at)
-            .bind(remark)
-            .execute(&self.pool)
-            .await
-            .map_err(InventoryCountApplicationError::database)?;
+        .bind(count_doc_id)
+        .bind(approved_by)
+        .bind(approved_at)
+        .bind(remark)
+        .execute(&self.pool)
+        .await
+        .map_err(InventoryCountApplicationError::database)?;
 
         if result.rows_affected() == 0 {
             return Err(InventoryCountApplicationError::CountNotFound);
@@ -631,12 +684,12 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
               AND line_no = $2
             "#,
         )
-            .bind(count_doc_id)
-            .bind(line_no)
-            .bind(transaction_id)
-            .execute(&self.pool)
-            .await
-            .map_err(InventoryCountApplicationError::database)?;
+        .bind(count_doc_id)
+        .bind(line_no)
+        .bind(transaction_id)
+        .execute(&self.pool)
+        .await
+        .map_err(InventoryCountApplicationError::database)?;
 
         if result.rows_affected() == 0 {
             return Err(InventoryCountApplicationError::CountLineNotFound);
@@ -650,7 +703,7 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
         &self,
         count_doc_id: &str,
         posted_by: &str,
-        posted_at: DateTime<Utc>,
+        posted_at: OffsetDateTime,
         remark: Option<&str>,
     ) -> Result<(), InventoryCountApplicationError> {
         let result = sqlx::query(
@@ -663,13 +716,13 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
             WHERE count_doc_id = $1
             "#,
         )
-            .bind(count_doc_id)
-            .bind(posted_by)
-            .bind(posted_at)
-            .bind(remark)
-            .execute(&self.pool)
-            .await
-            .map_err(InventoryCountApplicationError::database)?;
+        .bind(count_doc_id)
+        .bind(posted_by)
+        .bind(posted_at)
+        .bind(remark)
+        .execute(&self.pool)
+        .await
+        .map_err(InventoryCountApplicationError::database)?;
 
         if result.rows_affected() == 0 {
             return Err(InventoryCountApplicationError::CountNotFound);
@@ -686,7 +739,7 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
         &self,
         count_doc_id: &str,
         _closed_by: &str,
-        closed_at: DateTime<Utc>,
+        closed_at: OffsetDateTime,
         remark: Option<&str>,
     ) -> Result<(), InventoryCountApplicationError> {
         let result = sqlx::query(
@@ -699,12 +752,12 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
             WHERE count_doc_id = $1
             "#,
         )
-            .bind(count_doc_id)
-            .bind(closed_at)
-            .bind(remark)
-            .execute(&self.pool)
-            .await
-            .map_err(InventoryCountApplicationError::database)?;
+        .bind(count_doc_id)
+        .bind(closed_at)
+        .bind(remark)
+        .execute(&self.pool)
+        .await
+        .map_err(InventoryCountApplicationError::database)?;
 
         if result.rows_affected() == 0 {
             return Err(InventoryCountApplicationError::CountNotFound);
@@ -775,12 +828,12 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
             WHERE count_doc_id = $1
             "#,
         )
-            .bind(count_doc_id)
-            .bind(count_status_to_db(&status))
-            .bind(remark)
-            .execute(&self.pool)
-            .await
-            .map_err(InventoryCountApplicationError::database)?;
+        .bind(count_doc_id)
+        .bind(count_status_to_db(&status))
+        .bind(remark)
+        .execute(&self.pool)
+        .await
+        .map_err(InventoryCountApplicationError::database)?;
 
         if result.rows_affected() == 0 {
             return Err(InventoryCountApplicationError::CountNotFound);
@@ -828,17 +881,17 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                 remark
             "#,
         )
-            .bind(count_doc_id)
-            .bind(line_no)
-            .bind(counted_qty)
-            .bind(difference_qty)
-            .bind(movement_type)
-            .bind(difference_reason)
-            .bind(remark)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(InventoryCountApplicationError::database)?
-            .ok_or(InventoryCountApplicationError::CountLineNotFound)?;
+        .bind(count_doc_id)
+        .bind(line_no)
+        .bind(counted_qty)
+        .bind(difference_qty)
+        .bind(movement_type)
+        .bind(difference_reason)
+        .bind(remark)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(InventoryCountApplicationError::database)?
+        .ok_or(InventoryCountApplicationError::CountLineNotFound)?;
 
         InventoryCountLine::try_from(row)
     }
@@ -1319,7 +1372,11 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
             .bind(line.counted_qty)
             .bind(line.difference_qty)
             .bind(&line.difference_reason)
-            .bind(line.movement_type.as_ref().map(InventoryCountMovementType::as_code))
+            .bind(
+                line.movement_type
+                    .as_ref()
+                    .map(InventoryCountMovementType::as_code),
+            )
             .bind(&line.transaction_id)
             .bind(line_status_to_db(&line.status))
             .bind(&line.remark)
@@ -1352,7 +1409,7 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
         &self,
         line: &InventoryCountLine,
         operator: &str,
-        posting_date: DateTime<Utc>,
+        posting_date: OffsetDateTime,
         remark: Option<&str>,
     ) -> Result<InventoryCountPostedTransaction, InventoryCountApplicationError> {
         let qty = line.posting_qty();
@@ -1407,7 +1464,7 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
         &self,
         line: &InventoryCountLine,
         operator: &str,
-        posting_date: DateTime<Utc>,
+        posting_date: OffsetDateTime,
         remark: Option<&str>,
     ) -> Result<InventoryCountPostedTransaction, InventoryCountApplicationError> {
         let qty = line.posting_qty();
@@ -1552,7 +1609,9 @@ fn line_status_to_db(value: &InventoryCountLineStatus) -> &'static str {
     }
 }
 
-fn parse_line_status(value: &str) -> Result<InventoryCountLineStatus, InventoryCountApplicationError> {
+fn parse_line_status(
+    value: &str,
+) -> Result<InventoryCountLineStatus, InventoryCountApplicationError> {
     match value {
         "PENDING" => Ok(InventoryCountLineStatus::Pending),
         "COUNTED" => Ok(InventoryCountLineStatus::Counted),
@@ -1573,5 +1632,11 @@ fn parse_movement_type_opt(
         Some(other) => Err(InventoryCountApplicationError::database(format!(
             "未知盘点移动类型: {other}"
         ))),
+    }
+}
+
+impl PostgresInventoryCountRepository {
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self { pool }
     }
 }

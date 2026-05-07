@@ -1,5 +1,6 @@
 use cuba_shared::{AppError, CurrentUser};
 
+/// 业务层权限检查用例（推荐在 Handler / Service 中使用）
 pub struct AuthorizeUseCase;
 
 impl AuthorizeUseCase {
@@ -18,7 +19,7 @@ impl AuthorizeUseCase {
         user: &CurrentUser,
         permissions: &[&str],
     ) -> Result<(), AppError> {
-        if permissions.iter().any(|p| user.has_permission(p)) {
+        if user.has_any_permission(permissions) {
             Ok(())
         } else {
             Err(AppError::PermissionDenied(format!(

@@ -1,8 +1,8 @@
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDate, Utc};
 use cuba_shared::{AppError, AppResult, map_inventory_db_error};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
+use time::{Date, OffsetDateTime};
 use uuid::Uuid;
 
 use crate::application::{
@@ -239,7 +239,7 @@ impl PostgresSalesOrderRepository {
                 "batch_number": row.get::<String, _>("batch_number"),
                 "bin_code": row.get::<String, _>("bin_code"),
                 "pick_qty": pick_qty,
-                "expiry_date": row.get::<Option<NaiveDate>, _>("expiry_date"),
+                "expiry_date": row.get::<Option<Date>, _>("expiry_date"),
                 "available_qty": row.get::<i32, _>("available_qty")
             }));
         }
@@ -488,7 +488,8 @@ impl SalesOrderRepository for PostgresSalesOrderRepository {
             return Err(AppError::Validation("发货明细不能为空".to_string()));
         }
 
-        let posting_date: DateTime<Utc> = command.posting_date.unwrap_or_else(Utc::now);
+        let posting_date: OffsetDateTime =
+            command.posting_date.unwrap_or_else(OffsetDateTime::now_utc);
         let strategy = command
             .pick_strategy
             .clone()

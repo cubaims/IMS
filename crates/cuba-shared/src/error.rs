@@ -65,17 +65,39 @@ impl AppError {
             Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             Self::PermissionDenied(_) => StatusCode::FORBIDDEN,
             Self::Business { code, .. } => match *code {
+                // Not found
+                "MRP_RUN_NOT_FOUND"
+                | "MRP_SUGGESTION_NOT_FOUND"
+                | "MRP_VARIANT_NOT_FOUND"
+                | "MRP_MATERIAL_NOT_FOUND_OR_INACTIVE" => StatusCode::NOT_FOUND,
+
+                // Bad request
+                "MRP_DEMAND_INVALID"
+                | "MRP_VARIANT_REQUIRED"
+                | "MRP_QUERY_INVALID"
+                | "REPORT_QUERY_INVALID"
+                | "REPORT_FORMAT_UNSUPPORTED"
+                | "PO_RECEIPT_QTY_EXCEEDED"
+                | "SO_SHIPMENT_QTY_EXCEEDED"
+                | "INVALID_MOVEMENT_TYPE" => StatusCode::BAD_REQUEST,
+
+                // Conflict
                 "INSUFFICIENT_STOCK"
                 | "INSUFFICIENT_BATCH_STOCK"
                 | "INSUFFICIENT_BIN_STOCK"
                 | "NO_AVAILABLE_BATCH"
                 | "BIN_CAPACITY_EXCEEDED"
                 | "PO_STATUS_INVALID"
-                | "SO_STATUS_INVALID" => StatusCode::CONFLICT,
+                | "SO_STATUS_INVALID"
+                | "MRP_SUGGESTION_STATUS_INVALID"
+                | "MRP_BUSINESS_RULE_VIOLATION" => StatusCode::CONFLICT,
 
-                "PO_RECEIPT_QTY_EXCEEDED"
-                | "SO_SHIPMENT_QTY_EXCEEDED"
-                | "INVALID_MOVEMENT_TYPE" => StatusCode::BAD_REQUEST,
+                // Server-side operation failed
+                "MRP_RUN_FAILED"
+                | "REPORT_REFRESH_FAILED"
+                | "REPORT_EXPORT_FAILED"
+                | "DATA_CONSISTENCY_FAILED"
+                | "MATERIALIZED_VIEW_REFRESH_FAILED" => StatusCode::INTERNAL_SERVER_ERROR,
 
                 _ => StatusCode::CONFLICT,
             },

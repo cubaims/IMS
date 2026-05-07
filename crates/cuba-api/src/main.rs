@@ -1,71 +1,142 @@
-use axum::{Router, routing::get};
-use cuba_shared::AppState;
-use dotenvy::dotenv;
+use axum::body::Body;
+use axum::http::Request;
+use axum::middleware::Next;
+use anyhow::{Context, Result};
+use cuba_shared::{AppState, Settings};
 use sqlx::postgres::PgPoolOptions;
-use std::net::SocketAddr;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use std::{net::SocketAddr, time::Duration};
+use tokio::{net::TcpListener, signal};
+use tracing_subscriber::{EnvFilter, layer::Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    dotenv().ok();
+async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
+    init_tracing();
 
-    // 初始化日志
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "cuba_api=debug,cuba_auth=debug,sqlx=warn".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    let settings = Settings::from_env();
 
-    // 读取环境变量
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let jwt_secret = std::env::var("IMS_JWT_SECRET")
-        .or_else(|_| std::env::var("JWT_SECRET"))
-        .unwrap_or_else(|_| "dev-secret-change-me".to_string());
-
-    // 创建数据库连接池
+    // 数据库连接池
     let pool = PgPoolOptions::new()
-        .max_connections(10)
-        .connect(&database_url)
-        .await?;
+        .max_connections(settings.db_max_conn)
+        .min_connections(settings.db_min_conn)
+        .acquire_timeout(Duration::from_secs(settings.db_acquire_timeout_secs))
+        .idle_timeout(Some(Duration::from_secs(settings.db_idle_timeout_secs)))
+        .max_lifetime(Some(Duration::from_secs(settings.db_max_lifetime_secs)))
+        .test_before_acquire(true)
+        .connect(&settings.database_url)
+        .await
+        .context("connecting to PostgreSQL")?;
+
+    // 运行迁移
+    if std::env::var("RUN_MIGRATIONS")
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(true)
+    {
+        tracing::info!("running database migrations…");
+        sqlx::migrate!("../../migrations")
+            .run(&pool)
+            .await
+            .context("running migrations")?;
+    }
+
+    let repo = std::sync::Arc::new(
+        cuba_master_data::infrastructure::PostgresMasterDataRepository::new(pool.clone()),
+    );
+
+    let master_data_service =
+        std::sync::Arc::new(cuba_master_data::application::MasterDataService::new(
+            repo.clone(),
+            repo.clone(),
+            repo.clone(),
+            repo.clone(),
+            repo.clone(),
+            repo.clone(),
+            repo.clone(),
+            repo.clone(),
+            repo,
+        ));
 
     let state = AppState {
         db_pool: pool,
-        jwt_secret,
+        jwt_secret: settings.jwt_secret,
+        jwt_issuer: settings.jwt_issuer,
+        jwt_expires_seconds: settings.jwt_expires_seconds,
     };
 
-    // 路由注册
-    let app = Router::new()
-        .route("/health", get(health_check))
-        .nest("/api/auth", cuba_auth::interface::routes::routes())
-        .nest(
-            "/api/master-data",
-            cuba_master_data::interface::routes::routes(),
-        )
-        .nest(
-            "/api/inventory",
-            cuba_inventory::interface::routes::routes(),
-        )
-        .nest(
-            "/api/purchase-orders",
-            cuba_purchase::interface::routes::routes(),
-        )
-        .nest("/api/sales-orders", cuba_sales::interface::routes::routes())
-        .nest("/api/production", cuba_production::interface::routes::production_routes())
-        .nest("/api/production-orders", cuba_production::interface::routes::production_order_routes())
-        .nest("/api/quality", cuba_quality::interface::routes::routes())
-        .with_state(state)
-        .layer(tower_http::trace::TraceLayer::new_for_http());
+    let app = cuba_api::build_router(state).layer(axum::middleware::from_fn({
+        let master_data_service = master_data_service.clone();
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
-    tracing::info!("🚀 cuba-api (Phase 2) listening on {}", addr);
+        move |mut req: Request<Body>, next: Next| {
+            let service = master_data_service.clone();
+            async move {
+                req.extensions_mut().insert(service);
+                next.run(req).await
+            }
+        }
+    }));
 
-    axum::serve(tokio::net::TcpListener::bind(addr).await?, app).await?;
+    let addr = SocketAddr::from(([0, 0, 0, 0], settings.port));
 
+    let listener = TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("binding {addr}"))?;
+
+    tracing::info!(
+        "🚀 cuba-api listening on http://{addr} (env={}, db_max_conn={})",
+        std::env::var("APP_ENV").unwrap_or_else(|_| "development".into()),
+        settings.db_max_conn
+    );
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .context("axum server error")?;
+
+    tracing::info!("👋 server shut down cleanly");
     Ok(())
 }
 
-async fn health_check() -> &'static str {
-    "OK"
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("cuba_api=info,cuba_auth=info,sqlx=warn,tower_http=info")
+    });
+
+    let use_json = std::env::var("LOG_FORMAT")
+        .map(|v| v.eq_ignore_ascii_case("json"))
+        .unwrap_or_else(|_| !cfg!(debug_assertions));
+
+    let fmt_layer = if use_json {
+        tracing_subscriber::fmt::layer().json().boxed()
+    } else {
+        tracing_subscriber::fmt::layer().pretty().boxed()
+    };
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt_layer)
+        .init();
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c    => tracing::info!("SIGINT received, shutting down"),
+        _ = terminate => tracing::info!("SIGTERM received, shutting down"),
+    }
 }

@@ -1,8 +1,11 @@
-use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use time::{Date, OffsetDateTime};
 
-use super::{BatchNumber, BinCode, BomId, MaterialId, ProductionOrderId, ProductionOrderStatus, VariantCode, WorkCenterId};
+use super::{
+    BatchNumber, BinCode, BomId, MaterialId, ProductionOrderId, ProductionOrderStatus, VariantCode,
+    WorkCenterId,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProductionOrder {
@@ -13,13 +16,13 @@ pub struct ProductionOrder {
     pub planned_qty: i32,
     pub completed_qty: i32,
     pub work_center_id: WorkCenterId,
-    pub planned_start_date: Option<NaiveDate>,
-    pub planned_end_date: Option<NaiveDate>,
+    pub planned_start_date: Option<Date>,
+    pub planned_end_date: Option<Date>,
     pub status: ProductionOrderStatus,
     pub remark: Option<String>,
     pub created_by: Option<String>,
-    pub created_at: Option<DateTime<Utc>>,
-    pub updated_at: Option<DateTime<Utc>>,
+    pub created_at: Option<OffsetDateTime>,
+    pub updated_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

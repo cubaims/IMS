@@ -1,45 +1,26 @@
+//! JWT 认证中间件。
+//!
+//! 解析 Authorization Bearer token，将 cuba_shared::CurrentUser 注入 request extensions。
+
 use axum::{
-    extract::State,
-    http::{Request, StatusCode},
+    extract::{Request, State},
     middleware::Next,
     response::Response,
 };
-use jsonwebtoken::{decode, DecodingKey, Validation};
+use cuba_auth::{verify_access_token, VerifyError};
+use cuba_shared::{AppError, AppState, CurrentUser};
 
-use cuba_auth::{JwtClaims, CurrentUser};
-use crate::AppState;
+const BEARER: &str = "Bearer ";
 
-/// JWT 认证中间件
-/// 解析成功后将 CurrentUser 放入 request.extensions
-pub async fn auth_middleware<B>(
+pub async fn auth_middleware(
     State(state): State<AppState>,
-    mut request: Request<B>,
-    next: Next<B>,
-) -> Result<Response, StatusCode> {
-    // 获取 Authorization header
-    let auth_header = request
-        .headers()
-        .get("authorization")
-        .and_then(|header| header.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    mut request: Request,
+    next: Next,
+) -> Result<Response, AppError> {
+    let token = extract_bearer(&request)?;
 
-    if !auth_header.starts_with("Bearer ") {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
+    let claims = verify_access_token(token, &state.jwt_secret).map_err(map_verify_error)?;
 
-    let token = &auth_header[7..];
-
-    // 解析 JWT
-    let token_data = decode::<JwtClaims>(
-        token,
-        &DecodingKey::from_secret(state.jwt_secret.as_bytes()),
-        &Validation::default(),
-    )
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
-
-    let claims = token_data.claims;
-
-    // 构造 CurrentUser
     let current_user = CurrentUser {
         user_id: claims.sub,
         username: claims.username,
@@ -49,9 +30,31 @@ pub async fn auth_middleware<B>(
         permissions: claims.permissions,
     };
 
-    // 将 CurrentUser 放入 extensions
     request.extensions_mut().insert(current_user);
 
-    // 继续执行后续 handler
     Ok(next.run(request).await)
+}
+
+fn extract_bearer(req: &Request) -> Result<&str, AppError> {
+    let header = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .ok_or_else(|| AppError::Unauthorized("UNAUTHORIZED".to_string()))?
+        .to_str()
+        .map_err(|_| AppError::Unauthorized("TOKEN_INVALID".to_string()))?;
+
+    if !header.starts_with(BEARER) {
+        return Err(AppError::Unauthorized("TOKEN_INVALID".to_string()));
+    }
+
+    Ok(header[BEARER.len()..].trim())
+}
+
+fn map_verify_error(error: VerifyError) -> AppError {
+    match error {
+        VerifyError::Expired => AppError::Unauthorized("TOKEN_EXPIRED".to_string()),
+        VerifyError::Invalid(_) | VerifyError::BadIssuer | VerifyError::BadSignature => {
+            AppError::Unauthorized("TOKEN_INVALID".to_string())
+        }
+    }
 }

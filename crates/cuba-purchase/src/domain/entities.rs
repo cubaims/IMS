@@ -1,18 +1,18 @@
-use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use time::{Date, OffsetDateTime};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PurchaseOrder {
     pub po_id: String,
     pub supplier_id: String,
-    pub po_date: NaiveDate,
-    pub expected_date: Option<NaiveDate>,
+    pub po_date: Date,
+    pub expected_date: Option<Date>,
     pub status: PurchaseOrderStatus,
     pub remark: Option<String>,
     pub created_by: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
     pub lines: Vec<PurchaseOrderLine>,
 }
 

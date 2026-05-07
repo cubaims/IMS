@@ -1,5 +1,5 @@
-use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
+use time::{Date, OffsetDateTime};
 use validator::Validate;
 
 #[derive(Debug, Clone, Deserialize, Validate)]
@@ -12,8 +12,8 @@ pub struct CreateProductionOrderRequest {
     pub planned_qty: i32,
 
     pub work_center_id: String,
-    pub planned_start_date: Option<NaiveDate>,
-    pub planned_end_date: Option<NaiveDate>,
+    pub planned_start_date: Option<Date>,
+    pub planned_end_date: Option<Date>,
     pub remark: Option<String>,
 }
 
@@ -39,7 +39,7 @@ pub struct CompleteProductionOrderRequest {
 
     pub finished_batch_number: String,
     pub finished_to_bin: String,
-    pub posting_date: Option<DateTime<Utc>>,
+    pub posting_date: Option<OffsetDateTime>,
     pub pick_strategy: Option<String>,
     pub remark: Option<String>,
 }

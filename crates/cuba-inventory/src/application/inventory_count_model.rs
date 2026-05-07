@@ -1,10 +1,9 @@
-use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
+use serde::Deserialize;
+use time::OffsetDateTime;
 
 use crate::application::common::PageQuery;
-use crate::domain::{
-    InventoryCountScope, InventoryCountStatus, InventoryCountType,
-};
+use crate::domain::{InventoryCountScope, InventoryCountStatus, InventoryCountType};
 
 /// 创建盘点单输入
 pub struct CreateInventoryCountInput {
@@ -32,6 +31,7 @@ pub struct GenerateInventoryCountLinesInput {
 ///
 /// 不做读写分离，所以这里不叫 Query。
 /// 只是 service/repository 的普通入参。
+#[derive(Debug, Clone, Deserialize)]
 pub struct ListInventoryCountsInput {
     pub status: Option<InventoryCountStatus>,
     pub count_type: Option<InventoryCountType>,
@@ -44,8 +44,8 @@ pub struct ListInventoryCountsInput {
 
     pub created_by: Option<String>,
 
-    pub date_from: Option<DateTime<Utc>>,
-    pub date_to: Option<DateTime<Utc>>,
+    pub date_from: Option<OffsetDateTime>,
+    pub date_to: Option<OffsetDateTime>,
 
     pub page: PageQuery,
 }
@@ -103,7 +103,7 @@ pub struct ApproveInventoryCountInput {
 /// 盘点过账输入
 pub struct PostInventoryCountInput {
     pub count_doc_id: String,
-    pub posting_date: DateTime<Utc>,
+    pub posting_date: OffsetDateTime,
     pub operator: String,
     pub remark: Option<String>,
 }

@@ -10,3 +10,4 @@ pub use infrastructure::PostgresAuthRepository;
 pub use interface::dto::*;
 pub use interface::handlers;
 pub use interface::routes;
+pub use application::{verify_access_token, VerifyError};

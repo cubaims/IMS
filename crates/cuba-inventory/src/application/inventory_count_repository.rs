@@ -1,25 +1,20 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
+use serde::Serialize;
+use time::OffsetDateTime;
 
 use crate::application::common::Page;
 use crate::application::errors::InventoryCountApplicationError;
 use crate::application::inventory_count_model::{
-    InventoryCountScopeFilter,
-    ListInventoryCountsInput,
+    InventoryCountScopeFilter, ListInventoryCountsInput,
 };
 use crate::domain::{
-    InventoryCount,
-    InventoryCountLine,
-    InventoryCountPostedTransaction,
-    InventoryCountPostingResult,
-    InventoryCountScope,
-    InventoryCountStatus,
-    InventoryCountType,
+    InventoryCount, InventoryCountLine, InventoryCountPostedTransaction,
+    InventoryCountPostingResult, InventoryCountScope, InventoryCountStatus, InventoryCountType,
 };
 
 /// 盘点单列表摘要
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]   // ← 必须加上 Serialize
 pub struct InventoryCountSummary {
     pub count_doc_id: String,
     pub count_type: InventoryCountType,
@@ -32,7 +27,7 @@ pub struct InventoryCountSummary {
 
     pub status: InventoryCountStatus,
     pub created_by: String,
-    pub created_at: DateTime<Utc>,
+    pub created_at: OffsetDateTime,
 
     pub line_count: i64,
     pub difference_line_count: i64,
@@ -148,7 +143,7 @@ pub trait InventoryCountRepository: Send + Sync {
         &self,
         count_doc_id: &str,
         approved_by: &str,
-        approved_at: DateTime<Utc>,
+        approved_at: OffsetDateTime,
         remark: Option<&str>,
     ) -> Result<(), InventoryCountApplicationError>;
 
@@ -160,7 +155,7 @@ pub trait InventoryCountRepository: Send + Sync {
         &self,
         line: &InventoryCountLine,
         operator: &str,
-        posting_date: DateTime<Utc>,
+        posting_date: OffsetDateTime,
         remark: Option<&str>,
     ) -> Result<InventoryCountPostedTransaction, InventoryCountApplicationError>;
 
@@ -172,7 +167,7 @@ pub trait InventoryCountRepository: Send + Sync {
         &self,
         line: &InventoryCountLine,
         operator: &str,
-        posting_date: DateTime<Utc>,
+        posting_date: OffsetDateTime,
         remark: Option<&str>,
     ) -> Result<InventoryCountPostedTransaction, InventoryCountApplicationError>;
 
@@ -189,7 +184,7 @@ pub trait InventoryCountRepository: Send + Sync {
         &self,
         count_doc_id: &str,
         posted_by: &str,
-        posted_at: DateTime<Utc>,
+        posted_at: OffsetDateTime,
         remark: Option<&str>,
     ) -> Result<(), InventoryCountApplicationError>;
 
@@ -198,7 +193,7 @@ pub trait InventoryCountRepository: Send + Sync {
         &self,
         count_doc_id: &str,
         closed_by: &str,
-        closed_at: DateTime<Utc>,
+        closed_at: OffsetDateTime,
         remark: Option<&str>,
     ) -> Result<(), InventoryCountApplicationError>;
 
@@ -234,7 +229,7 @@ pub trait InventoryCountRepository: Send + Sync {
         &self,
         count_doc_id: &str,
         operator: &str,
-        posting_date: DateTime<Utc>,
+        posting_date: OffsetDateTime,
         remark: Option<&str>,
     ) -> Result<InventoryCountPostingResult, InventoryCountApplicationError>;
 }

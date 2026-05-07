@@ -1,6 +1,8 @@
-use axum::{Json, http::StatusCode, response::IntoResponse};
+use axum::{Json, response::IntoResponse};
 use serde::Serialize;
+use uuid::Uuid;
 
+/// 统一 API 响应格式
 #[derive(Serialize)]
 pub struct ApiResponse<T> {
     pub success: bool,
@@ -16,7 +18,7 @@ impl<T: Serialize> ApiResponse<T> {
             success: true,
             data: Some(data),
             message: Some("OK".to_string()),
-            trace_id: uuid::Uuid::new_v4().to_string(),
+            trace_id: Uuid::new_v4().to_string(), // 默认值，会被 middleware 覆盖
         }
     }
 
@@ -56,6 +58,15 @@ impl ApiResponse<()> {
 
 impl<T: Serialize> IntoResponse for ApiResponse<T> {
     fn into_response(self) -> axum::response::Response {
-        (StatusCode::OK, Json(self)).into_response()
+        (axum::http::StatusCode::OK, Json(self)).into_response()
     }
+}
+
+/// 从 Request 中提取 x-request-id
+pub fn extract_trace_id<B>(req: &axum::http::Request<B>) -> String {
+    req.headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string())
 }

@@ -1,6 +1,6 @@
 use axum::{
     Router,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 
 use cuba_shared::AppState;
@@ -9,6 +9,7 @@ use super::handlers;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        // 库存核心功能
         .route("/post", post(handlers::post_inventory))
         .route("/transfer", post(handlers::transfer_inventory))
         .route("/pick-batch-fefo", post(handlers::pick_batch_fefo))
@@ -29,5 +30,41 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/materials/{material_id}/map-history",
             get(handlers::list_material_map_history),
+        )
+        // ==================== 盘点模块 ====================
+        .route("/counts", post(handlers::create_inventory_count))
+        .route("/counts", get(handlers::list_inventory_counts))
+        .route("/counts/{count_doc_id}", get(handlers::get_inventory_count))
+        .route(
+            "/counts/{count_doc_id}/generate-lines",
+            post(handlers::generate_inventory_count_lines),
+        )
+        .route(
+            "/counts/{count_doc_id}/lines/{line_no}",
+            patch(handlers::update_inventory_count_line),
+        )
+        .route(
+            "/counts/{count_doc_id}/lines/batch",
+            patch(handlers::batch_update_inventory_count_lines),
+        )
+        .route(
+            "/counts/{count_doc_id}/submit",
+            post(handlers::submit_inventory_count),
+        )
+        .route(
+            "/counts/{count_doc_id}/approve",
+            post(handlers::approve_inventory_count),
+        )
+        .route(
+            "/counts/{count_doc_id}/post",
+            post(handlers::post_inventory_count),
+        )
+        .route(
+            "/counts/{count_doc_id}/close",
+            post(handlers::close_inventory_count),
+        )
+        .route(
+            "/counts/{count_doc_id}/cancel",
+            post(handlers::cancel_inventory_count),
         )
 }

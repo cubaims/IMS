@@ -16,6 +16,11 @@ impl CurrentUser {
         self.permissions.iter().any(|p| p == perm)
     }
 
+    /// 新增：检查是否拥有任意一个权限（供 require_any_permission 使用）
+    pub fn has_any_permission(&self, perms: &[&str]) -> bool {
+        perms.iter().any(|p| self.has_permission(p))
+    }
+
     pub fn has_role(&self, role: &str) -> bool {
         self.roles.iter().any(|r| r == role)
     }

@@ -1,9 +1,9 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use cuba_shared::{AppError, AppResult, map_inventory_db_error};
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::application::{
@@ -354,7 +354,8 @@ impl PurchaseOrderRepository for PostgresPurchaseOrderRepository {
             return Err(AppError::Validation("收货明细不能为空".to_string()));
         }
 
-        let posting_date: DateTime<Utc> = command.posting_date.unwrap_or_else(Utc::now);
+        let posting_date: OffsetDateTime =
+            command.posting_date.unwrap_or_else(OffsetDateTime::now_utc);
         let mut tx = self.pool.begin().await?;
 
         sqlx::query("SET LOCAL lock_timeout = '5s'")

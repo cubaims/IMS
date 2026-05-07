@@ -1,26 +1,18 @@
-use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use crate::application::{
     BatchHistoryQuery, BatchQuery, CurrentStockQuery, InventoryTransactionQuery, MapHistoryQuery,
     PickBatchFefoCommand, PostInventoryCommand, TransferInventoryCommand,
 };
 
-use chrono::{DateTime, Utc};
-use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
-
 use crate::domain::{
-    InventoryCount,
-    InventoryCountLine,
-    InventoryCountLineStatus,
-    InventoryCountMovementType,
-    InventoryCountScope,
-    InventoryCountStatus,
-    InventoryCountType,
+    InventoryCount, InventoryCountLine, InventoryCountLineStatus, InventoryCountMovementType,
+    InventoryCountScope, InventoryCountStatus, InventoryCountType,
 };
 
+// ====================== 盘点模块 DTO ======================
 /// 创建盘点单请求
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateInventoryCountRequest {
@@ -60,10 +52,10 @@ pub struct InventoryCountResponse {
     pub approved_by: Option<String>,
     pub posted_by: Option<String>,
 
-    pub created_at: DateTime<Utc>,
-    pub approved_at: Option<DateTime<Utc>>,
-    pub posted_at: Option<DateTime<Utc>>,
-    pub closed_at: Option<DateTime<Utc>>,
+    pub created_at: OffsetDateTime,
+    pub approved_at: Option<OffsetDateTime>,
+    pub posted_at: Option<OffsetDateTime>,
+    pub closed_at: Option<OffsetDateTime>,
 
     pub remark: Option<String>,
     pub lines: Vec<InventoryCountLineResponse>,
@@ -113,7 +105,6 @@ pub struct InventoryCountLineResponse {
     pub difference_qty: Option<Decimal>,
     pub difference_reason: Option<String>,
 
-    /// 这里对外返回 701 / 702，而不是内部枚举名 Gain701 / Loss702
     pub movement_type: Option<String>,
 
     pub transaction_id: Option<String>,
@@ -184,7 +175,7 @@ pub struct ApproveInventoryCountRequest {
 /// 盘点过账请求
 #[derive(Debug, Clone, Deserialize)]
 pub struct PostInventoryCountRequest {
-    pub posting_date: DateTime<Utc>,
+    pub posting_date: OffsetDateTime,
     pub remark: Option<String>,
 }
 
@@ -200,11 +191,12 @@ pub struct CancelInventoryCountRequest {
     pub remark: Option<String>,
 }
 
+// ====================== 库存核心 DTO（保持不变） ======================
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostInventoryRequest {
     pub material_id: String,
     pub movement_type: String,
-    pub quantity: i32,
+    pub quantity: Decimal,
     pub from_bin: Option<String>,
     pub to_bin: Option<String>,
     pub batch_number: Option<String>,
@@ -213,7 +205,7 @@ pub struct PostInventoryRequest {
     pub quality_status: Option<String>,
     pub remark: Option<String>,
     pub unit_price: Option<Decimal>,
-    pub posting_date: Option<DateTime<Utc>>,
+    pub posting_date: Option<OffsetDateTime>,
 }
 
 impl From<PostInventoryRequest> for PostInventoryCommand {
@@ -238,7 +230,7 @@ impl From<PostInventoryRequest> for PostInventoryCommand {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferInventoryRequest {
     pub material_id: String,
-    pub quantity: i32,
+    pub quantity: Decimal,
     pub from_bin: String,
     pub to_bin: String,
     pub batch_number: Option<String>,
@@ -246,7 +238,7 @@ pub struct TransferInventoryRequest {
     pub reference_doc: Option<String>,
     pub quality_status: Option<String>,
     pub remark: Option<String>,
-    pub posting_date: Option<DateTime<Utc>>,
+    pub posting_date: Option<OffsetDateTime>,
 }
 
 impl From<TransferInventoryRequest> for TransferInventoryCommand {
@@ -269,7 +261,7 @@ impl From<TransferInventoryRequest> for TransferInventoryCommand {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PickBatchFefoRequest {
     pub material_id: String,
-    pub quantity: i32,
+    pub quantity: Decimal,
     pub from_zone: Option<String>,
     pub quality_status: Option<String>,
 }
@@ -322,8 +314,8 @@ pub struct InventoryTransactionRequest {
     pub to_bin: Option<String>,
     pub reference_doc: Option<String>,
     pub operator: Option<String>,
-    pub date_from: Option<DateTime<Utc>>,
-    pub date_to: Option<DateTime<Utc>>,
+    pub date_from: Option<OffsetDateTime>,
+    pub date_to: Option<OffsetDateTime>,
     pub page: Option<u32>,
     pub page_size: Option<u32>,
 }
@@ -376,8 +368,8 @@ impl From<BatchRequest> for BatchQuery {
 pub struct BatchHistoryRequest {
     pub event_type: Option<String>,
     pub operator: Option<String>,
-    pub date_from: Option<DateTime<Utc>>,
-    pub date_to: Option<DateTime<Utc>>,
+    pub date_from: Option<OffsetDateTime>,
+    pub date_to: Option<OffsetDateTime>,
     pub page: Option<u32>,
     pub page_size: Option<u32>,
 }
@@ -399,8 +391,8 @@ impl From<BatchHistoryRequest> for BatchHistoryQuery {
 pub struct MapHistoryRequest {
     pub material_id: Option<String>,
     pub transaction_id: Option<String>,
-    pub date_from: Option<DateTime<Utc>>,
-    pub date_to: Option<DateTime<Utc>>,
+    pub date_from: Option<OffsetDateTime>,
+    pub date_to: Option<OffsetDateTime>,
     pub page: Option<u32>,
     pub page_size: Option<u32>,
 }
@@ -414,6 +406,34 @@ impl From<MapHistoryRequest> for MapHistoryQuery {
             date_to: value.date_to,
             page: value.page,
             page_size: value.page_size,
+        }
+    }
+}
+
+impl From<CreateInventoryCountRequest> for crate::application::CreateInventoryCountInput {
+    fn from(req: CreateInventoryCountRequest) -> Self {
+        Self {
+            count_type: req.count_type,
+            count_scope: req.count_scope,
+            zone_code: req.zone_code,
+            bin_code: req.bin_code,
+            material_id: req.material_id,
+            batch_number: req.batch_number,
+            remark: req.remark,
+            operator: "system".to_string(), // 默认值，后续会从 CurrentUser 自动注入
+        }
+    }
+}
+
+impl From<BatchUpdateInventoryCountLineItem>
+    for crate::application::inventory_count_model::BatchUpdateInventoryCountLineItem
+{
+    fn from(dto: BatchUpdateInventoryCountLineItem) -> Self {
+        Self {
+            line_no: dto.line_no,
+            counted_qty: dto.counted_qty,
+            difference_reason: dto.difference_reason,
+            remark: dto.remark,
         }
     }
 }

@@ -32,6 +32,18 @@ pub enum InventoryDomainError {
     #[error("movement type {0} requires to_bin")]
     ToBinRequired(String),
 
+    #[error("movement type {0} must not include from_bin")]
+    FromBinMustBeEmpty(String),
+
+    #[error("movement type {0} must not include to_bin")]
+    ToBinMustBeEmpty(String),
+
+    #[error("reference_doc or remark is required for manual inventory posting")]
+    ReferenceDocOrRemarkRequired,
+
+    #[error("quality status {0} cannot be issued from stock")]
+    InvalidOutboundQualityStatus(String),
+
     #[error("batch number is required for this inventory operation")]
     BatchRequired,
 

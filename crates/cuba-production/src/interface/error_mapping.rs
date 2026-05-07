@@ -3,11 +3,14 @@ use cuba_shared::AppError;
 pub fn map_db_error_text(message: &str) -> AppError {
     let lower = message.to_lowercase();
 
-    if message.contains("生产订单不存在") || lower.contains("production order") && lower.contains("not found") {
+    if message.contains("生产订单不存在")
+        || lower.contains("production order") && lower.contains("not found")
+    {
         return AppError::NotFound("PRODUCTION_ORDER_NOT_FOUND".to_string());
     }
 
-    if message.contains("只有已下达") || message.contains("状态") || lower.contains("status") {
+    if message.contains("只有已下达") || message.contains("状态") || lower.contains("status")
+    {
         return AppError::Validation("PRODUCTION_ORDER_STATUS_INVALID".to_string());
     }
 

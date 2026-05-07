@@ -1,3 +1,4 @@
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 use super::InventoryDomainError;
@@ -94,19 +95,27 @@ impl TransactionId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Quantity(i32);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Quantity(Decimal);
 
 impl Quantity {
-    pub fn new(value: i32) -> Result<Self, InventoryDomainError> {
-        if value <= 0 {
+    pub fn new(value: Decimal) -> Result<Self, InventoryDomainError> {
+        if value <= Decimal::ZERO {
             return Err(InventoryDomainError::InvalidQuantity);
         }
 
         Ok(Self(value))
     }
 
-    pub fn value(&self) -> i32 {
+    pub fn from_i32(value: i32) -> Result<Self, InventoryDomainError> {
+        Self::new(Decimal::from(value))
+    }
+
+    pub fn value(&self) -> Decimal {
+        self.0
+    }
+
+    pub fn into_inner(self) -> Decimal {
         self.0
     }
 }

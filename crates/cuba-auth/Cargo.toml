@@ -21,7 +21,8 @@ thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 validator.workspace = true
-chrono.workspace = true
 argon2.workspace = true
 jsonwebtoken.workspace = true
 ipnetwork.workspace = true
+
+time = { workspace = true }

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::{fmt, str::FromStr};
 
 /// 检验批类型。
 ///
@@ -121,6 +122,16 @@ pub enum BatchQualityStatus {
 }
 
 impl BatchQualityStatus {
+    /// 数据库存储和接口展示使用的质量状态文本。
+    pub fn as_db_text(self) -> &'static str {
+        match self {
+            Self::PendingInspection => "待检",
+            Self::Qualified => "合格",
+            Self::Frozen => "冻结",
+            Self::Scrapped => "报废",
+        }
+    }
+
     /// 是否允许出库类动作。
     ///
     /// MVP 规则：
@@ -145,6 +156,28 @@ impl BatchQualityStatus {
             self,
             Self::PendingInspection | Self::Qualified | Self::Frozen
         )
+    }
+}
+
+impl fmt::Display for BatchQualityStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_db_text())
+    }
+}
+
+impl FromStr for BatchQualityStatus {
+    type Err = crate::domain::QualityError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim() {
+            "待检" | "PENDING_INSPECTION" | "pending_inspection" | "PendingInspection" => {
+                Ok(Self::PendingInspection)
+            }
+            "合格" | "QUALIFIED" | "qualified" | "Qualified" => Ok(Self::Qualified),
+            "冻结" | "FROZEN" | "frozen" | "Frozen" => Ok(Self::Frozen),
+            "报废" | "SCRAPPED" | "scrapped" | "Scrapped" => Ok(Self::Scrapped),
+            _ => Err(crate::domain::QualityError::BatchQualityStatusInvalid),
+        }
     }
 }
 

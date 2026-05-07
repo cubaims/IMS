@@ -1,32 +1,19 @@
-use std::sync::Arc;
-use rust_decimal::prelude::Zero;
 use crate::application::common::Page;
 use crate::application::errors::InventoryCountApplicationError;
 use crate::application::inventory_count_model::{
-    ApproveInventoryCountInput,
-    BatchUpdateInventoryCountLinesInput,
-    CancelInventoryCountInput,
-    CloseInventoryCountInput,
-    CreateInventoryCountInput,
-    GenerateInventoryCountLinesInput,
-    GetInventoryCountInput,
-    InventoryCountScopeFilter,
-    ListInventoryCountsInput,
-    PostInventoryCountInput,
-    SubmitInventoryCountInput,
-    UpdateInventoryCountLineInput,
+    ApproveInventoryCountInput, BatchUpdateInventoryCountLinesInput, CancelInventoryCountInput,
+    CloseInventoryCountInput, CreateInventoryCountInput, GenerateInventoryCountLinesInput,
+    GetInventoryCountInput, InventoryCountScopeFilter, ListInventoryCountsInput,
+    PostInventoryCountInput, SubmitInventoryCountInput, UpdateInventoryCountLineInput,
 };
 use crate::application::inventory_count_repository::{
-    InventoryCountRepository,
-    InventoryCountSummary,
+    InventoryCountRepository, InventoryCountSummary,
 };
 use crate::domain::{
-    InventoryCount,
-    InventoryCountLine,
-    InventoryCountMovementType,
-    InventoryCountPostingResult,
-    InventoryCountStatus,
+    InventoryCount, InventoryCountLine, InventoryCountMovementType, InventoryCountStatus,
 };
+use std::sync::Arc;
+use time::OffsetDateTime;
 
 /// 盘点应用服务
 ///
@@ -73,10 +60,7 @@ where
 
         let scope_filter = Self::scope_filter_from_count(&count);
 
-        let exists_open = self
-            .repo
-            .exists_open_count_for_scope(&scope_filter)
-            .await?;
+        let exists_open = self.repo.exists_open_count_for_scope(&scope_filter).await?;
 
         if exists_open {
             return Err(InventoryCountApplicationError::DuplicatedScope);
@@ -124,9 +108,7 @@ where
         // 领域对象负责状态流转校验
         count.mark_counting(lines.clone())?;
 
-        self.repo
-            .insert_lines(&input.count_doc_id, &lines)
-            .await?;
+        self.repo.insert_lines(&input.count_doc_id, &lines).await?;
 
         self.repo
             .update_status(
@@ -140,7 +122,7 @@ where
         self.get_count(GetInventoryCountInput {
             count_doc_id: input.count_doc_id,
         })
-            .await
+        .await
     }
 
     /// 查询盘点单详情
@@ -184,10 +166,7 @@ where
             return Err(InventoryCountApplicationError::StatusInvalid);
         }
 
-        let mut lines = self
-            .repo
-            .lock_lines_for_update(&input.count_doc_id)
-            .await?;
+        let mut lines = self.repo.lock_lines_for_update(&input.count_doc_id).await?;
 
         let line = lines
             .iter_mut()
@@ -195,11 +174,7 @@ where
             .ok_or(InventoryCountApplicationError::CountLineNotFound)?;
 
         // 领域对象负责差异计算和 701 / 702 判断
-        line.enter_counted_qty(
-            input.counted_qty,
-            input.difference_reason,
-            input.remark,
-        )?;
+        line.enter_counted_qty(input.counted_qty, input.difference_reason, input.remark)?;
 
         let difference_qty = line
             .difference_qty
@@ -239,10 +214,7 @@ where
             return Err(InventoryCountApplicationError::StatusInvalid);
         }
 
-        let mut existing_lines = self
-            .repo
-            .lock_lines_for_update(&input.count_doc_id)
-            .await?;
+        let mut existing_lines = self.repo.lock_lines_for_update(&input.count_doc_id).await?;
 
         for item in input.lines {
             let line = existing_lines
@@ -251,11 +223,7 @@ where
                 .ok_or(InventoryCountApplicationError::CountLineNotFound)?;
 
             // 每一行都走同一个领域方法，避免批量逻辑绕过规则
-            line.enter_counted_qty(
-                item.counted_qty,
-                item.difference_reason,
-                item.remark,
-            )?;
+            line.enter_counted_qty(item.counted_qty, item.difference_reason, item.remark)?;
         }
 
         self.repo
@@ -279,10 +247,7 @@ where
             .lock_header_for_update(&input.count_doc_id)
             .await?;
 
-        let lines = self
-            .repo
-            .lock_lines_for_update(&input.count_doc_id)
-            .await?;
+        let lines = self.repo.lock_lines_for_update(&input.count_doc_id).await?;
 
         if lines.is_empty() {
             return Err(InventoryCountApplicationError::NoLines);
@@ -308,7 +273,7 @@ where
         self.get_count(GetInventoryCountInput {
             count_doc_id: input.count_doc_id,
         })
-            .await
+        .await
     }
 
     /// 从盘点单头构造范围过滤条件
@@ -357,7 +322,7 @@ where
                 .update_approved_info(
                     &input.count_doc_id,
                     &input.operator,
-                    count.approved_at.unwrap_or_else(chrono::Utc::now),
+                    count.approved_at.unwrap_or_else(OffsetDateTime::now_utc),
                     input.remark.as_deref(),
                 )
                 .await?;
@@ -387,28 +352,23 @@ where
         self.get_count(GetInventoryCountInput {
             count_doc_id: input.count_doc_id,
         })
-            .await
+        .await
     }
 
     /// 盘点过账
     ///
-    /// 规则：
-    /// 1. 只有 APPROVED 状态允许过账
-    /// 2. difference_qty > 0 生成 701
-    /// 3. difference_qty < 0 生成 702
-    /// 4. difference_qty = 0 不生成库存事务
-    /// 5. 每条差异行回写 transaction_id
-    /// 6. 单据状态更新为 POSTED
-    /// 7. 返回 reports_stale = true，提示报表需要刷新
-    ///
-    /// 重要：
-    /// PostgreSQL 实现里必须保证此方法在同一个数据库事务中执行。
-    /// 任一行 701 / 702 失败，整单回滚。
+    /// 事务边界放在 Repository 实现中：
+    /// 1. 锁定盘点单头
+    /// 2. 锁定盘点明细
+    /// 3. 校验状态 = APPROVED
+    /// 4. 差异行逐行调用 701 / 702
+    /// 5. 回写 transaction_id
+    /// 6. 更新盘点单状态 = POSTED
+    /// 7. COMMIT
     pub async fn post(
         &self,
         input: crate::application::inventory_count_model::PostInventoryCountInput,
     ) -> Result<crate::domain::InventoryCountPostingResult, InventoryCountApplicationError> {
-
         self.repo
             .post_count_transactional(
                 &input.count_doc_id,
@@ -416,122 +376,7 @@ where
                 input.posting_date,
                 input.remark.as_deref(),
             )
-            .await;
-        
-        let mut count = self
-            .repo
-            .lock_header_for_update(&input.count_doc_id)
-            .await?;
-
-        if !count.status.can_post() {
-            return Err(InventoryCountApplicationError::StatusInvalid);
-        }
-
-        let mut lines = self
-            .repo
-            .lock_lines_for_update(&input.count_doc_id)
-            .await?;
-
-        if lines.is_empty() {
-            return Err(InventoryCountApplicationError::NoLines);
-        }
-
-        let mut transactions = Vec::new();
-
-        for line in lines.iter_mut() {
-            // 未录入实盘的行不允许过账
-            let difference_qty = line
-                .difference_qty
-                .ok_or(InventoryCountApplicationError::LineNotCounted)?;
-
-            // 无差异行直接跳过，不生成库存事务
-            if difference_qty.is_zero() {
-                continue;
-            }
-
-            // 有差异的行必须有差异原因
-            line.validate_before_submit()?;
-
-            let posted_transaction = if line.is_gain() {
-                // 盘盈：701，to_bin = bin_code
-                self.repo
-                    .post_gain_701(
-                        line,
-                        &input.operator,
-                        input.posting_date,
-                        input.remark.as_deref(),
-                    )
-                    .await
-                    .map_err(|err| {
-                        InventoryCountApplicationError::DifferencePostFailed(format!(
-                            "盘盈行 line_no={} 过账失败: {}",
-                            line.line_no, err
-                        ))
-                    })?
-            } else if line.is_loss() {
-                // 盘亏：702，from_bin = bin_code
-                self.repo
-                    .post_loss_702(
-                        line,
-                        &input.operator,
-                        input.posting_date,
-                        input.remark.as_deref(),
-                    )
-                    .await
-                    .map_err(|err| {
-                        InventoryCountApplicationError::DifferencePostFailed(format!(
-                            "盘亏行 line_no={} 过账失败: {}",
-                            line.line_no, err
-                        ))
-                    })?
-            } else {
-                // 理论上前面 difference_qty.is_zero 已经处理，这里只是防御
-                continue;
-            };
-
-            // 回写 transaction_id 到盘点明细
-            self.repo
-                .update_line_transaction_id(
-                    &input.count_doc_id,
-                    line.line_no,
-                    &posted_transaction.transaction_id,
-                )
-                .await?;
-
-            line.mark_posted(posted_transaction.transaction_id.clone());
-            transactions.push(posted_transaction);
-        }
-
-        // 领域对象负责 APPROVED -> POSTED 的状态流转
-        count.mark_posted(input.operator.clone())?;
-
-        let posted_at = count.posted_at.unwrap_or_else(chrono::Utc::now);
-
-        self.repo
-            .update_posted_info(
-                &input.count_doc_id,
-                &input.operator,
-                posted_at,
-                input.remark.as_deref(),
-            )
-            .await?;
-
-        self.repo
-            .update_status(
-                &input.count_doc_id,
-                InventoryCountStatus::Posted,
-                &input.operator,
-                input.remark.as_deref(),
-            )
-            .await?;
-
-        Ok(crate::domain::InventoryCountPostingResult {
-            count_doc_id: input.count_doc_id,
-            status: InventoryCountStatus::Posted,
-            transactions,
-            // 盘点过账后不要在事务里刷新物化视图，只告诉前端报表已过期
-            reports_stale: true,
-        })
+            .await
     }
 
     /// 关闭盘点单
@@ -551,7 +396,7 @@ where
         // 领域对象负责 POSTED -> CLOSED 校验
         count.close()?;
 
-        let closed_at = count.closed_at.unwrap_or_else(chrono::Utc::now);
+        let closed_at = count.closed_at.unwrap_or_else(OffsetDateTime::now_utc);
 
         self.repo
             .close(
@@ -565,7 +410,7 @@ where
         self.get_count(GetInventoryCountInput {
             count_doc_id: input.count_doc_id,
         })
-            .await
+        .await
     }
 
     /// 取消盘点单
@@ -601,7 +446,6 @@ where
         self.get_count(GetInventoryCountInput {
             count_doc_id: input.count_doc_id,
         })
-            .await
+        .await
     }
 }
-

@@ -1,7 +1,7 @@
-use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use time::OffsetDateTime;
 
 /// 盘点领域错误
 /// 这里先放领域层能直接判断的错误，后续 application 层会继续包装成统一 API 错误。
@@ -21,6 +21,12 @@ pub enum InventoryCountDomainError {
 
     #[error("盘点行尚未录入实盘数量")]
     LineNotCounted,
+
+    #[error("盘点单没有明细行")]
+    EmptyCountLines,
+
+    #[error("存在未完成过账的差异行")]
+    DifferenceLineNotPosted,
 }
 
 /// 盘点单状态
@@ -160,10 +166,10 @@ pub struct InventoryCount {
     pub approved_by: Option<String>,
     pub posted_by: Option<String>,
 
-    pub created_at: DateTime<Utc>,
-    pub approved_at: Option<DateTime<Utc>>,
-    pub posted_at: Option<DateTime<Utc>>,
-    pub closed_at: Option<DateTime<Utc>>,
+    pub created_at: OffsetDateTime,
+    pub approved_at: Option<OffsetDateTime>,
+    pub posted_at: Option<OffsetDateTime>,
+    pub closed_at: Option<OffsetDateTime>,
 
     pub remark: Option<String>,
 
@@ -215,7 +221,7 @@ impl InventoryCount {
             created_by,
             approved_by: None,
             posted_by: None,
-            created_at: Utc::now(),
+            created_at: OffsetDateTime::now_utc(),
             approved_at: None,
             posted_at: None,
             closed_at: None,
@@ -225,7 +231,10 @@ impl InventoryCount {
     }
 
     /// 生成明细后进入 COUNTING 状态
-    pub fn mark_counting(&mut self, lines: Vec<InventoryCountLine>) -> Result<(), InventoryCountDomainError> {
+    pub fn mark_counting(
+        &mut self,
+        lines: Vec<InventoryCountLine>,
+    ) -> Result<(), InventoryCountDomainError> {
         if !self.status.can_generate_lines() {
             return Err(InventoryCountDomainError::StatusInvalid);
         }
@@ -245,6 +254,10 @@ impl InventoryCount {
             return Err(InventoryCountDomainError::StatusInvalid);
         }
 
+        if self.lines.is_empty() {
+            return Err(InventoryCountDomainError::EmptyCountLines);
+        }
+
         for line in &self.lines {
             line.validate_before_submit()?;
         }
@@ -261,7 +274,7 @@ impl InventoryCount {
 
         self.status = InventoryCountStatus::Approved;
         self.approved_by = Some(approved_by);
-        self.approved_at = Some(Utc::now());
+        self.approved_at = Some(OffsetDateTime::now_utc());
 
         Ok(())
     }
@@ -282,9 +295,18 @@ impl InventoryCount {
             return Err(InventoryCountDomainError::StatusInvalid);
         }
 
+        let has_unposted_difference_line = self
+            .lines
+            .iter()
+            .any(|line| line.has_difference() && line.status != InventoryCountLineStatus::Posted);
+
+        if has_unposted_difference_line {
+            return Err(InventoryCountDomainError::DifferenceLineNotPosted);
+        }
+
         self.status = InventoryCountStatus::Posted;
         self.posted_by = Some(posted_by);
-        self.posted_at = Some(Utc::now());
+        self.posted_at = Some(OffsetDateTime::now_utc());
 
         Ok(())
     }
@@ -296,7 +318,7 @@ impl InventoryCount {
         }
 
         self.status = InventoryCountStatus::Closed;
-        self.closed_at = Some(Utc::now());
+        self.closed_at = Some(OffsetDateTime::now_utc());
 
         Ok(())
     }

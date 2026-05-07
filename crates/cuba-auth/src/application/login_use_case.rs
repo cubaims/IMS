@@ -1,8 +1,8 @@
 use crate::domain::{JwtClaims, User};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
-use chrono::{Duration, Utc};
 use cuba_shared::{AppError, CurrentUser};
 use jsonwebtoken::{EncodingKey, Header, encode};
+use time::{Duration, OffsetDateTime};
 use tracing::info;
 
 pub struct LoginUseCase {
@@ -20,7 +20,6 @@ impl LoginUseCase {
         }
     }
 
-    /// 执行登录逻辑：密码校验 + 生成 JWT + 返回 CurrentUser
     pub fn execute(
         &self,
         user: &User,
@@ -28,7 +27,6 @@ impl LoginUseCase {
         roles: Vec<String>,
         permissions: Vec<String>,
     ) -> Result<(String, CurrentUser), AppError> {
-        // Argon2 密码校验
         let parsed_hash = PasswordHash::new(&user.password_hash)
             .map_err(|e| AppError::Internal(e.to_string()))?;
 
@@ -40,8 +38,8 @@ impl LoginUseCase {
             return Err(AppError::PermissionDenied("用户已被禁用".to_string()));
         }
 
-        // 生成 JWT
-        let now = Utc::now();
+        // 使用 time crate
+        let now = OffsetDateTime::now_utc();
         let exp = now + Duration::seconds(self.jwt_expires_seconds);
 
         let claims = JwtClaims {
@@ -49,8 +47,8 @@ impl LoginUseCase {
             username: user.username.clone(),
             roles: roles.clone(),
             permissions: permissions.clone(),
-            exp: exp.timestamp() as usize,
-            iat: now.timestamp() as usize,
+            exp: exp.unix_timestamp() as usize,
+            iat: now.unix_timestamp() as usize,
             iss: self.jwt_issuer.clone(),
         };
 

@@ -13,7 +13,10 @@ use super::{
 
 #[async_trait]
 pub trait ProductionOrderRepository: Send + Sync {
-    async fn create_order(&self, command: CreateProductionOrderCommand) -> AppResult<ProductionOrderId>;
+    async fn create_order(
+        &self,
+        command: CreateProductionOrderCommand,
+    ) -> AppResult<ProductionOrderId>;
 
     async fn find_by_id(&self, order_id: &str) -> AppResult<ProductionOrder>;
 
@@ -35,16 +38,25 @@ pub trait BomExplosionRepository: Send + Sync {
 
 #[async_trait]
 pub trait ProductionPostingRepository: Send + Sync {
-    async fn complete_order(&self, command: CompleteProductionOrderCommand) -> AppResult<ProductionCompleteResult>;
+    async fn complete_order(
+        &self,
+        command: CompleteProductionOrderCommand,
+    ) -> AppResult<ProductionCompleteResult>;
 }
 
 #[async_trait]
 pub trait BatchGenealogyRepository: Send + Sync {
     async fn find_by_order_id(&self, order_id: &str) -> AppResult<Vec<BatchGenealogy>>;
 
-    async fn find_components_by_finished_batch(&self, batch_number: &str) -> AppResult<Vec<BatchGenealogy>>;
+    async fn find_components_by_finished_batch(
+        &self,
+        batch_number: &str,
+    ) -> AppResult<Vec<BatchGenealogy>>;
 
-    async fn find_where_used_by_component_batch(&self, batch_number: &str) -> AppResult<Vec<BatchGenealogy>>;
+    async fn find_where_used_by_component_batch(
+        &self,
+        batch_number: &str,
+    ) -> AppResult<Vec<BatchGenealogy>>;
 }
 
 #[async_trait]

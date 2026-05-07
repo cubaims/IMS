@@ -57,6 +57,20 @@ impl InspectionResult {
             ));
         }
 
+        if input.measured_value.is_some() && input.qualitative_result.is_some() {
+            return Err(QualityError::BusinessRuleViolation(
+                "数值型结果和定性结果不能同时填写".to_string(),
+            ));
+        }
+
+        if let (Some(lower), Some(upper)) = (input.lower_limit, input.upper_limit) {
+            if lower > upper {
+                return Err(QualityError::BusinessRuleViolation(
+                    "检验下限不能大于上限".to_string(),
+                ));
+            }
+        }
+
         let result_status = Self::calculate_result_status(
             input.measured_value,
             input.qualitative_result,
@@ -64,7 +78,32 @@ impl InspectionResult {
             input.upper_limit,
         )?;
 
-        if result_status == InspectionResultStatus::Fail && input.defect_code.is_none() {
+        match result_status {
+            InspectionResultStatus::Fail => {
+                if input.defect_code.is_none() {
+                    return Err(QualityError::DefectCodeRequired);
+                }
+            }
+            InspectionResultStatus::Pass => {
+                if input.defect_code.is_some() || input.defect_qty > Decimal::ZERO {
+                    return Err(QualityError::BusinessRuleViolation(
+                        "合格结果不能填写不良代码或不良数量".to_string(),
+                    ));
+                }
+            }
+            InspectionResultStatus::NotApplicable => {
+                if input.measured_value.is_some()
+                    || input.defect_code.is_some()
+                    || input.defect_qty > Decimal::ZERO
+                {
+                    return Err(QualityError::BusinessRuleViolation(
+                        "不适用结果不能填写测量值、不良代码或不良数量".to_string(),
+                    ));
+                }
+            }
+        }
+
+        if input.defect_qty > Decimal::ZERO && input.defect_code.is_none() {
             return Err(QualityError::DefectCodeRequired);
         }
 

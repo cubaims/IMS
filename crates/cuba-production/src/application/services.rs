@@ -74,10 +74,7 @@ impl ProductionService {
         self.production_posting.complete_order(command).await
     }
 
-    pub async fn explode_bom(
-        &self,
-        command: BomExplosionCommand,
-    ) -> AppResult<BomExplosionResult> {
+    pub async fn explode_bom(&self, command: BomExplosionCommand) -> AppResult<BomExplosionResult> {
         command
             .validate()
             .map_err(|err| AppError::Validation(err.to_string()))?;
@@ -96,24 +93,15 @@ impl ProductionService {
         self.production_orders.list(query).await
     }
 
-    pub async fn list_order_lines(
-        &self,
-        order_id: &str,
-    ) -> AppResult<Vec<ProductionOrderLine>> {
+    pub async fn list_order_lines(&self, order_id: &str) -> AppResult<Vec<ProductionOrderLine>> {
         self.production_orders.list_lines(order_id).await
     }
 
-    pub async fn get_genealogy(
-        &self,
-        order_id: &str,
-    ) -> AppResult<Vec<BatchGenealogy>> {
+    pub async fn get_genealogy(&self, order_id: &str) -> AppResult<Vec<BatchGenealogy>> {
         self.genealogy.find_by_order_id(order_id).await
     }
 
-    pub async fn get_variance(
-        &self,
-        order_id: &str,
-    ) -> AppResult<ProductionVariance> {
+    pub async fn get_variance(&self, order_id: &str) -> AppResult<ProductionVariance> {
         self.variances.find_by_order_id(order_id).await
     }
 

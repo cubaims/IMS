@@ -1,7 +1,6 @@
 use crate::domain::{
-    CreateMrpRun, MaterialId, MrpError, MrpResult, MrpRun, MrpRunId,
-    MrpRunStatus, MrpSuggestion, MrpSuggestionId, MrpSuggestionStatus,
-    MrpSuggestionType, Operator, ProductVariantId,
+    CreateMrpRun, MaterialId, MrpError, MrpResult, MrpRun, MrpRunId, MrpRunStatus, MrpSuggestion,
+    MrpSuggestionId, MrpSuggestionStatus, MrpSuggestionType, Operator, ProductVariantId,
 };
 use async_trait::async_trait;
 use cuba_shared::{Page, PageQuery};
@@ -80,25 +79,17 @@ pub trait MrpRunRepository: Send + Sync {
 #[async_trait]
 pub trait MrpSuggestionRepository: Send + Sync {
     /// 查询 MRP 建议。
-    async fn find_by_id(
-        &self,
-        suggestion_id: &MrpSuggestionId,
-    ) -> MrpResult<Option<MrpSuggestion>>;
+    async fn find_by_id(&self, suggestion_id: &MrpSuggestionId)
+    -> MrpResult<Option<MrpSuggestion>>;
 
     /// 锁定 MRP 建议。
-    async fn lock_by_id(
-        &self,
-        suggestion_id: &MrpSuggestionId,
-    ) -> MrpResult<MrpSuggestion>;
+    async fn lock_by_id(&self, suggestion_id: &MrpSuggestionId) -> MrpResult<MrpSuggestion>;
 
     /// 更新 MRP 建议。
     async fn update(&self, suggestion: &MrpSuggestion) -> MrpResult<()>;
 
     /// 分页查询 MRP 建议。
-    async fn list(
-        &self,
-        query: MrpSuggestionQuery,
-    ) -> MrpResult<Page<MrpSuggestion>>;
+    async fn list(&self, query: MrpSuggestionQuery) -> MrpResult<Page<MrpSuggestion>>;
 }
 
 /// MRP 数据库函数端口。
@@ -110,20 +101,14 @@ pub trait MrpPlannerGateway: Send + Sync {
     /// 运行数据库 MRP 函数。
     ///
     /// 返回 run_id 或数据库生成的运行结果标识。
-    async fn run_mrp_function(
-        &self,
-        run: &MrpRun,
-    ) -> MrpResult<()>;
+    async fn run_mrp_function(&self, run: &MrpRun) -> MrpResult<MrpRunId>;
 }
 
 /// MRP 主数据校验端口。
 #[async_trait]
 pub trait MrpMasterRepository: Send + Sync {
     /// 物料是否存在且启用。
-    async fn material_exists_and_active(
-        &self,
-        material_id: &MaterialId,
-    ) -> MrpResult<bool>;
+    async fn material_exists_and_active(&self, material_id: &MaterialId) -> MrpResult<bool>;
 
     /// 产品变体是否存在。
     async fn product_variant_exists(
@@ -175,12 +160,7 @@ where
     M: MrpMasterRepository,
     G: MrpIdGenerator,
 {
-    pub fn new(
-        run_repo: R,
-        planner_gateway: P,
-        master_repo: M,
-        id_generator: G,
-    ) -> Self {
+    pub fn new(run_repo: R, planner_gateway: P, master_repo: M, id_generator: G) -> Self {
         Self {
             run_repo,
             planner_gateway,
@@ -228,10 +208,18 @@ where
             }
         }
 
-        let run_id = self.id_generator.next_mrp_run_id();
+        // v9 的 wms.fn_run_mrp() 目前按 product_variant 运行。
+        // 如果后续数据库函数支持 finished_material_id，再放开纯 material_id 运行。
+        if command.product_variant_id.is_none() {
+            return Err(MrpError::ProductVariantRequired);
+        }
 
-        let mut run = MrpRun::create(CreateMrpRun {
-            id: run_id.clone(),
+        // 这里的 id 只是为了构造领域对象。
+        // 真正落库的 run_id 由 wms.fn_run_mrp() 返回。
+        let temp_run_id = self.id_generator.next_mrp_run_id();
+
+        let run = MrpRun::create(CreateMrpRun {
+            id: temp_run_id,
             material_id: command.material_id,
             product_variant_id: command.product_variant_id,
             demand_qty: command.demand_qty,
@@ -241,33 +229,16 @@ where
             remark: command.remark,
         })?;
 
-        self.run_repo.create(&run).await?;
+        let db_run_id = self.planner_gateway.run_mrp_function(&run).await?;
 
-        run.mark_running(now);
-        self.run_repo.update(&run).await?;
-
-        let planner_result = self.planner_gateway.run_mrp_function(&run).await;
-
-        match planner_result {
-            Ok(_) => {
-                run.mark_completed(OffsetDateTime::now_utc());
-                self.run_repo.update(&run).await?;
-            }
-            Err(error) => {
-                run.mark_failed(
-                    OffsetDateTime::now_utc(),
-                    error.to_string(),
-                );
-
-                self.run_repo.update(&run).await?;
-
-                return Err(MrpError::MrpRunFailed);
-            }
-        }
+        let status = match self.run_repo.find_by_id(&db_run_id).await? {
+            Some(saved_run) => saved_run.status,
+            None => MrpRunStatus::Completed,
+        };
 
         Ok(RunMrpOutput {
-            run_id,
-            status: run.status,
+            run_id: db_run_id,
+            status,
         })
     }
 }
@@ -281,6 +252,7 @@ where
 pub struct ConfirmMrpSuggestionCommand {
     pub suggestion_id: MrpSuggestionId,
     pub confirmed_by: Operator,
+    pub remark: Option<String>,
 }
 
 /// 确认 MRP 建议输出。
@@ -319,10 +291,70 @@ where
             .await?;
 
         suggestion.confirm(command.confirmed_by, now)?;
+        suggestion.remark = command.remark;
 
         self.suggestion_repo.update(&suggestion).await?;
 
         Ok(ConfirmMrpSuggestionOutput {
+            suggestion_id: command.suggestion_id,
+            status: suggestion.status,
+        })
+    }
+}
+
+
+// =============================================================================
+// Use Case：取消 MRP 建议
+// =============================================================================
+
+/// 取消 MRP 建议命令。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CancelMrpSuggestionCommand {
+    pub suggestion_id: MrpSuggestionId,
+    pub cancelled_by: Operator,
+    pub reason: String,
+}
+
+/// 取消 MRP 建议输出。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CancelMrpSuggestionOutput {
+    pub suggestion_id: MrpSuggestionId,
+    pub status: MrpSuggestionStatus,
+}
+
+/// 取消 MRP 建议用例。
+pub struct CancelMrpSuggestionUseCase<S>
+where
+    S: MrpSuggestionRepository,
+{
+    pub suggestion_repo: S,
+}
+
+impl<S> CancelMrpSuggestionUseCase<S>
+where
+    S: MrpSuggestionRepository,
+{
+    pub fn new(suggestion_repo: S) -> Self {
+        Self { suggestion_repo }
+    }
+
+    /// 执行取消。
+    pub async fn execute(
+        &self,
+        command: CancelMrpSuggestionCommand,
+    ) -> MrpResult<CancelMrpSuggestionOutput> {
+        let now = OffsetDateTime::now_utc();
+
+        let mut suggestion = self
+            .suggestion_repo
+            .lock_by_id(&command.suggestion_id)
+            .await?;
+
+        suggestion.cancel(command.cancelled_by, now, command.reason)?;
+
+        self.suggestion_repo.update(&suggestion).await?;
+
+        Ok(CancelMrpSuggestionOutput {
             suggestion_id: command.suggestion_id,
             status: suggestion.status,
         })

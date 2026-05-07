@@ -1,16 +1,16 @@
 use crate::application::{
-    MrpIdGenerator, MrpMasterRepository, MrpPlannerGateway, MrpRunQuery,
-    MrpRunRepository, MrpRunSummary, MrpSuggestionQuery, MrpSuggestionRepository,
+    MrpIdGenerator, MrpMasterRepository, MrpPlannerGateway, MrpRunQuery, MrpRunRepository,
+    MrpRunSummary, MrpSuggestionQuery, MrpSuggestionRepository,
 };
 use crate::domain::{
-    MaterialId, MrpError, MrpResult, MrpRun, MrpRunId, MrpRunStatus,
-    MrpSuggestion, MrpSuggestionId, MrpSuggestionStatus, MrpSuggestionType,
-    Operator, ProductVariantId,
+    MaterialId, MrpError, MrpResult, MrpRun, MrpRunId, MrpRunStatus, MrpSuggestion,
+    MrpSuggestionId, MrpSuggestionStatus, MrpSuggestionType, Operator, ProductVariantId,
 };
 use async_trait::async_trait;
 use cuba_shared::Page;
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use time::{Date, OffsetDateTime, Time};
 use uuid::Uuid;
@@ -155,9 +155,11 @@ fn suggestion_remarks_to_json(suggestion: &MrpSuggestion) -> String {
         "status": suggestion_status_to_code(suggestion.status),
         "confirmed_by": suggestion.confirmed_by.as_ref().map(|x| x.as_str().to_string()),
         "confirmed_at": suggestion.confirmed_at,
+        "cancelled_by": suggestion.cancelled_by.as_ref().map(|x| x.as_str().to_string()),
+        "cancelled_at": suggestion.cancelled_at,
         "remark": suggestion.remark
     })
-        .to_string()
+    .to_string()
 }
 
 /// 兼容历史纯文本 remarks。
@@ -217,9 +219,7 @@ fn mrp_run_from_row(row: &sqlx::postgres::PgRow) -> MrpResult<MrpRun> {
 fn mrp_suggestion_from_row(row: &sqlx::postgres::PgRow) -> MrpResult<MrpSuggestion> {
     let remarks_meta = parse_remarks(row.get::<Option<String>, _>("remarks"));
 
-    let status = suggestion_status_from_code(
-        remarks_meta.get("status").and_then(|v| v.as_str()),
-    );
+    let status = suggestion_status_from_code(remarks_meta.get("status").and_then(|v| v.as_str()));
 
     let confirmed_by = remarks_meta
         .get("confirmed_by")
@@ -228,6 +228,15 @@ fn mrp_suggestion_from_row(row: &sqlx::postgres::PgRow) -> MrpResult<MrpSuggesti
 
     let confirmed_at = remarks_meta
         .get("confirmed_at")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+    let cancelled_by = remarks_meta
+        .get("cancelled_by")
+        .and_then(|v| v.as_str())
+        .map(Operator::new);
+
+    let cancelled_at = remarks_meta
+        .get("cancelled_at")
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
     let created_at: OffsetDateTime = row.get("created_at");
@@ -256,6 +265,8 @@ fn mrp_suggestion_from_row(row: &sqlx::postgres::PgRow) -> MrpResult<MrpSuggesti
         created_at,
         confirmed_by,
         confirmed_at,
+        cancelled_by,
+        cancelled_at,
         remark: remark_from_meta(&remarks_meta),
     })
 }
@@ -298,20 +309,22 @@ impl MrpRunRepository for PostgresMrpStore {
             )
             "#,
         )
-            .bind(run.id.as_str())
-            .bind(run.started_at.unwrap_or(run.created_at))
-            .bind(variant_code)
-            .bind(run.demand_qty.to_i32().ok_or_else(|| {
+        .bind(run.id.as_str())
+        .bind(run.started_at.unwrap_or(run.created_at))
+        .bind(variant_code)
+        .bind(
+            run.demand_qty.to_i32().ok_or_else(|| {
                 MrpError::BusinessRuleViolation("需求数量超过 i32 范围".to_string())
-            })?)
-            .bind(offset_datetime_to_date(run.demand_date))
-            .bind(30_i32)
-            .bind(run_status_to_db(run.status))
-            .bind(run.created_by.as_str())
-            .bind(run.created_at)
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+            })?,
+        )
+        .bind(offset_datetime_to_date(run.demand_date))
+        .bind(30_i32)
+        .bind(run_status_to_db(run.status))
+        .bind(run.created_by.as_str())
+        .bind(run.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
 
         Ok(run.id.clone())
     }
@@ -333,10 +346,10 @@ impl MrpRunRepository for PostgresMrpStore {
             WHERE run_id = $1
             "#,
         )
-            .bind(run_id.as_str())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(run_id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
 
         match row {
             Some(row) => Ok(Some(mrp_run_from_row(&row)?)),
@@ -362,10 +375,10 @@ impl MrpRunRepository for PostgresMrpStore {
             FOR UPDATE
             "#,
         )
-            .bind(run_id.as_str())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(run_id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
 
         let Some(row) = row else {
             return Err(MrpError::MrpRunNotFound);
@@ -384,12 +397,12 @@ impl MrpRunRepository for PostgresMrpStore {
             WHERE run_id = $1
             "#,
         )
-            .bind(run.id.as_str())
-            .bind(run_status_to_db(run.status))
-            .bind(run.started_at)
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(run.id.as_str())
+        .bind(run_status_to_db(run.status))
+        .bind(run.started_at)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
 
         if result.rows_affected() == 0 {
             return Err(MrpError::MrpRunNotFound);
@@ -420,13 +433,13 @@ impl MrpRunRepository for PostgresMrpStore {
               AND ($4::timestamptz IS NULL OR created_at < $4)
             "#,
         )
-            .bind(status)
-            .bind(variant_code.clone())
-            .bind(query.date_from)
-            .bind(query.date_to)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(status)
+        .bind(variant_code.clone())
+        .bind(query.date_from)
+        .bind(query.date_to)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
 
         let rows = sqlx::query(
             r#"
@@ -449,15 +462,15 @@ impl MrpRunRepository for PostgresMrpStore {
             LIMIT $5 OFFSET $6
             "#,
         )
-            .bind(status)
-            .bind(variant_code)
-            .bind(query.date_from)
-            .bind(query.date_to)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(status)
+        .bind(variant_code)
+        .bind(query.date_from)
+        .bind(query.date_to)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
 
         let mut items = Vec::with_capacity(rows.len());
 
@@ -489,9 +502,10 @@ impl MrpSuggestionRepository for PostgresMrpStore {
         &self,
         suggestion_id: &MrpSuggestionId,
     ) -> MrpResult<Option<MrpSuggestion>> {
-        let id = suggestion_id.as_str().parse::<i64>().map_err(|_| {
-            MrpError::BusinessRuleViolation("MRP 建议 ID 必须是数字".to_string())
-        })?;
+        let id = suggestion_id
+            .as_str()
+            .parse::<i64>()
+            .map_err(|_| MrpError::BusinessRuleViolation("MRP 建议 ID 必须是数字".to_string()))?;
 
         let row = sqlx::query(
             r#"
@@ -517,10 +531,10 @@ impl MrpSuggestionRepository for PostgresMrpStore {
             WHERE id = $1
             "#,
         )
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
 
         match row {
             Some(row) => Ok(Some(mrp_suggestion_from_row(&row)?)),
@@ -528,13 +542,11 @@ impl MrpSuggestionRepository for PostgresMrpStore {
         }
     }
 
-    async fn lock_by_id(
-        &self,
-        suggestion_id: &MrpSuggestionId,
-    ) -> MrpResult<MrpSuggestion> {
-        let id = suggestion_id.as_str().parse::<i64>().map_err(|_| {
-            MrpError::BusinessRuleViolation("MRP 建议 ID 必须是数字".to_string())
-        })?;
+    async fn lock_by_id(&self, suggestion_id: &MrpSuggestionId) -> MrpResult<MrpSuggestion> {
+        let id = suggestion_id
+            .as_str()
+            .parse::<i64>()
+            .map_err(|_| MrpError::BusinessRuleViolation("MRP 建议 ID 必须是数字".to_string()))?;
 
         let row = sqlx::query(
             r#"
@@ -561,10 +573,10 @@ impl MrpSuggestionRepository for PostgresMrpStore {
             FOR UPDATE
             "#,
         )
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
 
         let Some(row) = row else {
             return Err(MrpError::MrpSuggestionNotFound);
@@ -574,14 +586,16 @@ impl MrpSuggestionRepository for PostgresMrpStore {
     }
 
     async fn update(&self, suggestion: &MrpSuggestion) -> MrpResult<()> {
-        let id = suggestion.id.as_str().parse::<i64>().map_err(|_| {
-            MrpError::BusinessRuleViolation("MRP 建议 ID 必须是数字".to_string())
-        })?;
+        let id =
+            suggestion.id.as_str().parse::<i64>().map_err(|_| {
+                MrpError::BusinessRuleViolation("MRP 建议 ID 必须是数字".to_string())
+            })?;
 
         let remarks = suggestion_remarks_to_json(suggestion);
 
-        let result = sqlx::query(
-            r#"
+        let result =
+            sqlx::query(
+                r#"
             UPDATE wms.wms_mrp_suggestions
             SET
                 suggested_order_type = $2,
@@ -589,7 +603,7 @@ impl MrpSuggestionRepository for PostgresMrpStore {
                 remarks = $4
             WHERE id = $1
             "#,
-        )
+            )
             .bind(id)
             .bind(suggestion_type_to_db(suggestion.suggestion_type))
             .bind(suggestion.suggested_qty.to_i32().ok_or_else(|| {
@@ -607,38 +621,22 @@ impl MrpSuggestionRepository for PostgresMrpStore {
         Ok(())
     }
 
-    async fn list(
-        &self,
-        query: MrpSuggestionQuery,
-    ) -> MrpResult<Page<MrpSuggestion>> {
+    async fn list(&self, query: MrpSuggestionQuery) -> MrpResult<Page<MrpSuggestion>> {
         let page = query.page.page.max(1);
         let page_size = query.page.page_size.clamp(1, 200);
-        let offset = ((page - 1) * page_size) as i64;
-        let limit = page_size as i64;
+        let offset = ((page - 1).saturating_mul(page_size)) as usize;
+        let limit = page_size as usize;
 
         let run_id = query.run_id.as_ref().map(|x| x.as_str().to_string());
         let material_id = query.material_id.as_ref().map(|x| x.as_str().to_string());
         let suggestion_type = query.suggestion_type.map(suggestion_type_to_db);
 
-        // v9 表中没有 status 字段，status 只在 remarks JSON 中。
-        // 为了避免 SQL 复杂化，MVP 先在数据库层筛 run_id/type/material，
-        // status 在 Rust 里二次过滤。
-        let total: i64 = sqlx::query_scalar(
-            r#"
-            SELECT COUNT(*)
-            FROM wms.wms_mrp_suggestions
-            WHERE ($1::text IS NULL OR run_id = $1)
-              AND ($2::text IS NULL OR material_id = $2)
-              AND ($3::text IS NULL OR suggested_order_type = $3)
-            "#,
-        )
-            .bind(run_id.clone())
-            .bind(material_id.clone())
-            .bind(suggestion_type)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
-
+        // v9 表中没有独立 status 字段，应用层状态暂存在 remarks JSON 中。
+        // 因此这里先在 SQL 层筛 run_id / material_id / suggestion_type，
+        // 再在 Rust 层筛 status / required_date，最后做分页。
+        //
+        // 这样可以保证 total 与 items 一致。
+        // 后续如果数据库增加 status 字段，可以把 status/date 过滤下推到 SQL。
         let rows = sqlx::query(
             r#"
             SELECT
@@ -664,19 +662,16 @@ impl MrpSuggestionRepository for PostgresMrpStore {
               AND ($2::text IS NULL OR material_id = $2)
               AND ($3::text IS NULL OR suggested_order_type = $3)
             ORDER BY priority ASC, id ASC
-            LIMIT $4 OFFSET $5
             "#,
         )
-            .bind(run_id)
-            .bind(material_id)
-            .bind(suggestion_type)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(run_id)
+        .bind(material_id)
+        .bind(suggestion_type)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
 
-        let mut items = Vec::with_capacity(rows.len());
+        let mut filtered = Vec::with_capacity(rows.len());
 
         for row in rows {
             let suggestion = mrp_suggestion_from_row(&row)?;
@@ -687,10 +682,30 @@ impl MrpSuggestionRepository for PostgresMrpStore {
                 }
             }
 
-            items.push(suggestion);
+            if let Some(date_from) = query.required_date_from {
+                if suggestion.required_date < date_from {
+                    continue;
+                }
+            }
+
+            if let Some(date_to) = query.required_date_to {
+                if suggestion.required_date >= date_to {
+                    continue;
+                }
+            }
+
+            filtered.push(suggestion);
         }
 
-        Ok(Page::new(items, total as u64, page, page_size))
+        let total = filtered.len() as u64;
+
+        let items = filtered
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect();
+
+        Ok(Page::new(items, total, page, page_size))
     }
 }
 
@@ -712,33 +727,34 @@ impl MrpPlannerGateway for PostgresMrpStore {
     /// - 用返回的 run_id 查询结果
     ///
     /// 当前这个 Gateway 先给出函数调用实现。
-    async fn run_mrp_function(&self, run: &MrpRun) -> MrpResult<()> {
+    async fn run_mrp_function(&self, run: &MrpRun) -> MrpResult<MrpRunId> {
         let variant_code = run
             .product_variant_id
             .as_ref()
             .ok_or(MrpError::ProductVariantRequired)?;
 
-        let demand_qty = run.demand_qty.to_i32().ok_or_else(|| {
-            MrpError::BusinessRuleViolation("需求数量超过 i32 范围".to_string())
-        })?;
+        let demand_qty = run
+            .demand_qty
+            .to_i32()
+            .ok_or_else(|| MrpError::BusinessRuleViolation("需求数量超过 i32 范围".to_string()))?;
 
         let demand_date = offset_datetime_to_date(run.demand_date);
 
-        let _db_run_id: String = sqlx::query_scalar(
+        let db_run_id: String = sqlx::query_scalar(
             r#"
             SELECT wms.fn_run_mrp($1, $2, $3, $4, $5)
             "#,
         )
-            .bind(variant_code.as_str())
-            .bind(demand_qty)
-            .bind(demand_date)
-            .bind(30_i32)
-            .bind(run.created_by.as_str())
-            .fetch_one(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(variant_code.as_str())
+        .bind(demand_qty)
+        .bind(demand_date)
+        .bind(30_i32)
+        .bind(run.created_by.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
 
-        Ok(())
+        Ok(MrpRunId::new(db_run_id))
     }
 }
 
@@ -748,10 +764,7 @@ impl MrpPlannerGateway for PostgresMrpStore {
 
 #[async_trait]
 impl MrpMasterRepository for PostgresMrpStore {
-    async fn material_exists_and_active(
-        &self,
-        material_id: &MaterialId,
-    ) -> MrpResult<bool> {
+    async fn material_exists_and_active(&self, material_id: &MaterialId) -> MrpResult<bool> {
         let exists: bool = sqlx::query_scalar(
             r#"
             SELECT EXISTS (
@@ -762,10 +775,10 @@ impl MrpMasterRepository for PostgresMrpStore {
             )
             "#,
         )
-            .bind(material_id.as_str())
-            .fetch_one(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(material_id.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
 
         Ok(exists)
     }
@@ -784,10 +797,10 @@ impl MrpMasterRepository for PostgresMrpStore {
             )
             "#,
         )
-            .bind(product_variant_id.as_str())
-            .fetch_one(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(product_variant_id.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
 
         Ok(exists)
     }

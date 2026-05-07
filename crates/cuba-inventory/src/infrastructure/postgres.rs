@@ -1,7 +1,8 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use serde_json::Value;
 use sqlx::{PgPool, Row};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use cuba_shared::{AppError, AppResult};
@@ -41,8 +42,8 @@ impl PostgresInventoryRepository {
         let transaction_id: String = row.try_get("transaction_id").map_err(Self::db_error)?;
         let material_id: String = row.try_get("material_id").map_err(Self::db_error)?;
         let movement_type: String = row.try_get("movement_type").map_err(Self::db_error)?;
-        let quantity: i32 = row.try_get("quantity").map_err(Self::db_error)?;
-        let transaction_date: DateTime<Utc> =
+        let quantity: Decimal = row.try_get("quantity").map_err(Self::db_error)?;
+        let transaction_date: OffsetDateTime =
             row.try_get("transaction_date").map_err(Self::db_error)?;
 
         let movement_type = movement_type.parse::<MovementType>().map_err(|err| {
@@ -187,7 +188,7 @@ impl InventoryRepository for PostgresInventoryRepository {
     ) -> AppResult<InventoryPostingResult> {
         let transaction_id = Self::next_transaction_id(&command.movement_type);
         let movement_type = command.movement_type.clone();
-        let posting_date = command.posting_date.unwrap_or_else(Utc::now);
+        let posting_date = command.posting_date.unwrap_or_else(OffsetDateTime::now_utc);
         let quality_status = command
             .quality_status
             .clone()

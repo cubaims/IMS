@@ -1,8 +1,8 @@
 use std::str::FromStr;
 
-use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use validator::Validate;
 
 use crate::domain::{
@@ -17,8 +17,7 @@ pub struct PostInventoryCommand {
     #[validate(length(min = 3, max = 3))]
     pub movement_type: String,
 
-    #[validate(range(min = 1))]
-    pub quantity: i32,
+    pub quantity: Decimal,
 
     pub from_bin: Option<String>,
     pub to_bin: Option<String>,
@@ -28,7 +27,7 @@ pub struct PostInventoryCommand {
     pub quality_status: Option<String>,
     pub remark: Option<String>,
     pub unit_price: Option<Decimal>,
-    pub posting_date: Option<DateTime<Utc>>,
+    pub posting_date: Option<OffsetDateTime>,
 }
 
 impl PostInventoryCommand {
@@ -82,8 +81,7 @@ pub struct TransferInventoryCommand {
     #[validate(length(min = 1))]
     pub material_id: String,
 
-    #[validate(range(min = 1))]
-    pub quantity: i32,
+    pub quantity: Decimal,
 
     #[validate(length(min = 1))]
     pub from_bin: String,
@@ -96,7 +94,7 @@ pub struct TransferInventoryCommand {
     pub reference_doc: Option<String>,
     pub quality_status: Option<String>,
     pub remark: Option<String>,
-    pub posting_date: Option<DateTime<Utc>>,
+    pub posting_date: Option<OffsetDateTime>,
 }
 
 impl TransferInventoryCommand {
@@ -123,8 +121,7 @@ pub struct PickBatchFefoCommand {
     #[validate(length(min = 1))]
     pub material_id: String,
 
-    #[validate(range(min = 1))]
-    pub quantity: i32,
+    pub quantity: Decimal,
 
     pub from_zone: Option<String>,
     pub quality_status: Option<String>,

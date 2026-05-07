@@ -1,5 +1,5 @@
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageQuery {
@@ -58,8 +58,8 @@ pub struct InventoryTransactionQuery {
     pub to_bin: Option<String>,
     pub reference_doc: Option<String>,
     pub operator: Option<String>,
-    pub date_from: Option<DateTime<Utc>>,
-    pub date_to: Option<DateTime<Utc>>,
+    pub date_from: Option<OffsetDateTime>,
+    pub date_to: Option<OffsetDateTime>,
     pub page: Option<u32>,
     pub page_size: Option<u32>,
 }
@@ -97,8 +97,8 @@ impl BatchQuery {
 pub struct BatchHistoryQuery {
     pub event_type: Option<String>,
     pub operator: Option<String>,
-    pub date_from: Option<DateTime<Utc>>,
-    pub date_to: Option<DateTime<Utc>>,
+    pub date_from: Option<OffsetDateTime>,
+    pub date_to: Option<OffsetDateTime>,
     pub page: Option<u32>,
     pub page_size: Option<u32>,
 }
@@ -116,8 +116,8 @@ impl BatchHistoryQuery {
 pub struct MapHistoryQuery {
     pub material_id: Option<String>,
     pub transaction_id: Option<String>,
-    pub date_from: Option<DateTime<Utc>>,
-    pub date_to: Option<DateTime<Utc>>,
+    pub date_from: Option<OffsetDateTime>,
+    pub date_to: Option<OffsetDateTime>,
     pub page: Option<u32>,
     pub page_size: Option<u32>,
 }

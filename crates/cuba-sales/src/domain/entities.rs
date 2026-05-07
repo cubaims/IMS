@@ -1,18 +1,18 @@
-use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use time::{Date, OffsetDateTime};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SalesOrder {
     pub so_id: String,
     pub customer_id: String,
-    pub so_date: NaiveDate,
-    pub required_date: Option<NaiveDate>,
+    pub so_date: Date,
+    pub required_date: Option<Date>,
     pub status: SalesOrderStatus,
     pub remark: Option<String>,
     pub created_by: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
     pub lines: Vec<SalesOrderLine>,
 }
 
@@ -125,6 +125,6 @@ pub struct FefoPickBatch {
     pub batch_number: String,
     pub bin_code: String,
     pub pick_qty: i32,
-    pub expiry_date: Option<NaiveDate>,
+    pub expiry_date: Option<Date>,
     pub available_qty: i32,
 }

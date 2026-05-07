@@ -1,6 +1,6 @@
-use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use time::{Date, OffsetDateTime};
 use validator::Validate;
 
 #[derive(Debug, Clone, Deserialize, Validate)]
@@ -8,7 +8,7 @@ pub struct CreateSalesOrderCommand {
     #[validate(length(min = 1))]
     pub customer_id: String,
 
-    pub required_date: Option<NaiveDate>,
+    pub required_date: Option<Date>,
 
     pub remark: Option<String>,
 
@@ -37,7 +37,7 @@ pub struct PostSalesShipmentCommand {
     #[serde(default)]
     pub so_id: String,
 
-    pub posting_date: Option<DateTime<Utc>>,
+    pub posting_date: Option<OffsetDateTime>,
 
     pub pick_strategy: Option<String>,
 
@@ -82,8 +82,8 @@ pub struct SalesOrderQuery {
     pub customer_id: Option<String>,
     pub material_id: Option<String>,
     pub status: Option<String>,
-    pub date_from: Option<NaiveDate>,
-    pub date_to: Option<NaiveDate>,
+    pub date_from: Option<Date>,
+    pub date_to: Option<Date>,
     pub page: Option<u32>,
     pub page_size: Option<u32>,
 }

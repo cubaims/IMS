@@ -25,6 +25,9 @@ pub enum MrpError {
     #[error("产品变体不存在")]
     ProductVariantNotFound,
 
+    #[error("运行数据库 MRP 函数时必须提供产品变体")]
+    ProductVariantRequired,
+
     #[error("需求数量必须大于 0")]
     DemandQtyMustBePositive,
 
@@ -338,17 +341,19 @@ pub struct MrpSuggestion {
     /// 确认时间。
     pub confirmed_at: Option<OffsetDateTime>,
 
+    /// 取消人。
+    pub cancelled_by: Option<Operator>,
+
+    /// 取消时间。
+    pub cancelled_at: Option<OffsetDateTime>,
+
     /// 备注。
     pub remark: Option<String>,
 }
 
 impl MrpSuggestion {
     /// 确认 MRP 建议。
-    pub fn confirm(
-        &mut self,
-        operator: Operator,
-        now: OffsetDateTime,
-    ) -> MrpResult<()> {
+    pub fn confirm(&mut self, operator: Operator, now: OffsetDateTime) -> MrpResult<()> {
         if !self.status.can_confirm() {
             return Err(MrpError::MrpSuggestionStatusInvalid);
         }
@@ -361,12 +366,25 @@ impl MrpSuggestion {
     }
 
     /// 取消 MRP 建议。
-    pub fn cancel(&mut self) -> MrpResult<()> {
+    pub fn cancel(
+        &mut self,
+        operator: Operator,
+        now: OffsetDateTime,
+        reason: String,
+    ) -> MrpResult<()> {
         if !self.status.can_cancel() {
             return Err(MrpError::MrpSuggestionStatusInvalid);
         }
 
+        let reason = reason.trim().to_string();
+        if reason.is_empty() {
+            return Err(MrpError::RequiredFieldEmpty("reason"));
+        }
+
         self.status = MrpSuggestionStatus::Cancelled;
+        self.cancelled_by = Some(operator);
+        self.cancelled_at = Some(now);
+        self.remark = Some(reason);
 
         Ok(())
     }
