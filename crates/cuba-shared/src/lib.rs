@@ -9,13 +9,14 @@ pub mod error;
 pub mod pagination;
 pub mod response;
 pub mod state;
-pub mod settings;
+
 // ====================== 公开导出 ======================
+// 显式导出,避免通配符在多个子模块之间撞名。
 
 pub use config::Settings;
 pub use context::CurrentUser;
-pub use db_error::{map_inventory_db_error, map_production_db_error};
+pub use db_error::{map_inventory_db_error, map_master_data_db_error, map_production_db_error};
 pub use error::{AppError, AppResult};
-pub use pagination::*;
-pub use response::ApiResponse;
+pub use pagination::{Page, PageQuery, SortOrder};
+pub use response::{ApiResponse };
 pub use state::AppState;

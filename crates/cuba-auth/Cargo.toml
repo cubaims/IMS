@@ -10,19 +10,14 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-async-trait.workspace = true
+argon2.workspace = true
 axum.workspace = true
 cuba-shared = { path = "../cuba-shared" }
-rust_decimal.workspace = true
+ipnetwork.workspace = true
+jsonwebtoken.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+time.workspace = true
 tracing.workspace = true
 uuid.workspace = true
-validator.workspace = true
-argon2.workspace = true
-jsonwebtoken.workspace = true
-ipnetwork.workspace = true
-
-time = { workspace = true }

@@ -11,7 +11,6 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-argon2.workspace = true
 axum.workspace = true
 cuba-auth = { path = "../cuba-auth" }
 cuba-inventory = { path = "../cuba-inventory" }

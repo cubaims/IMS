@@ -1,7 +1,7 @@
+use anyhow::{Context, Result};
 use axum::body::Body;
 use axum::http::Request;
 use axum::middleware::Next;
-use anyhow::{Context, Result};
 use cuba_shared::{AppState, Settings};
 use sqlx::postgres::PgPoolOptions;
 use std::{net::SocketAddr, time::Duration};
@@ -10,6 +10,7 @@ use tracing_subscriber::{EnvFilter, layer::Layer, layer::SubscriberExt, util::Su
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // 整个进程仅在此处加载一次 .env;Settings::from_env() 内部不再做 dotenv。
     dotenvy::dotenv().ok();
     init_tracing();
 

@@ -1,4 +1,3 @@
-// crates/cuba-api/src/routes/health.rs
 use axum::{Json, Router, routing::get};
 use cuba_shared::{ApiResponse, AppResult, AppState};
 use serde::Serialize;
@@ -11,6 +10,9 @@ pub struct VersionInfo {
     pub git_sha: &'static str,
 }
 
+/// 健康/版本路由。挂在主路由根上即可:
+/// - GET /health
+/// - GET /api/version
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))

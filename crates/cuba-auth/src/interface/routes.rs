@@ -6,7 +6,7 @@ use cuba_shared::AppState;
 
 use super::handlers;
 
-/// 公开路由（不需要登录）
+/// 公开路由(不需要登录)
 pub fn public_routes() -> Router<AppState> {
     Router::new()
         .route("/health", get(handlers::health))

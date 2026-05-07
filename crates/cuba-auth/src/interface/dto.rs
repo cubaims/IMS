@@ -24,20 +24,9 @@ pub struct LoginResponse {
     pub user: UserInfoDto,
 }
 
-/// 用户信息 DTO
+/// 用户信息 DTO(同时用作 `me` 接口的响应)
 #[derive(Debug, Serialize)]
 pub struct UserInfoDto {
-    pub user_id: Uuid,
-    pub username: String,
-    pub display_name: Option<String>,
-    pub email: Option<String>,
-    pub roles: Vec<String>,
-    pub permissions: Vec<String>,
-}
-
-/// 当前用户信息响应 DTO（用于 GET /api/auth/me）
-#[derive(Debug, Serialize)]
-pub struct CurrentUserResponse {
     pub user_id: Uuid,
     pub username: String,
     pub display_name: Option<String>,

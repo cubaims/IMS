@@ -1,6 +1,7 @@
 use cuba_shared::{AppError, CurrentUser};
 
-/// 业务层权限检查用例（推荐在 Handler / Service 中使用）
+/// 业务层权限检查用例(推荐在 Handler / Service 中使用,
+/// 用于 cuba-api 中间件无法按 method 区分挂权限的场景)。
 pub struct AuthorizeUseCase;
 
 impl AuthorizeUseCase {

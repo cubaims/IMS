@@ -19,11 +19,13 @@ pub async fn auth_middleware(
 ) -> Result<Response, AppError> {
     let token = extract_bearer(&request)?;
 
-    let claims = verify_access_token(token, &state.jwt_secret).map_err(map_verify_error)?;
+    let claims = verify_access_token(token, &state.jwt_secret, &state.jwt_issuer)
+        .map_err(map_verify_error)?;
 
     let current_user = CurrentUser {
         user_id: claims.sub,
         username: claims.username,
+        // JWT 不携带这两个字段;handler 需要时应自行查 DB(见 cuba-auth me handler)。
         full_name: None,
         email: None,
         roles: claims.roles,
@@ -43,11 +45,13 @@ fn extract_bearer(req: &Request) -> Result<&str, AppError> {
         .to_str()
         .map_err(|_| AppError::Unauthorized("TOKEN_INVALID".to_string()))?;
 
-    if !header.starts_with(BEARER) {
+    // Bearer 大小写不敏感(RFC 6750)
+    let prefix_len = BEARER.len();
+    if header.len() < prefix_len || !header[..prefix_len].eq_ignore_ascii_case(BEARER) {
         return Err(AppError::Unauthorized("TOKEN_INVALID".to_string()));
     }
 
-    Ok(header[BEARER.len()..].trim())
+    Ok(header[prefix_len..].trim())
 }
 
 fn map_verify_error(error: VerifyError) -> AppError {

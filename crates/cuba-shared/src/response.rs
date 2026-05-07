@@ -1,57 +1,59 @@
 use axum::{Json, response::IntoResponse};
 use serde::Serialize;
-use uuid::Uuid;
 
-/// 统一 API 响应格式
+/// 统一 API 响应格式。
+///
+/// 注意：trace_id 已**不再**在 body 内携带。它由 tower-http 的
+/// `SetRequestIdLayer` / `PropagateRequestIdLayer` 通过 `x-request-id`
+/// 响应头透传,前端应从响应头读取该字段做链路关联。
+///
+/// 之前 body 里的 `trace_id` 字段每次都是新的随机 UUID,与
+/// 请求上的 `x-request-id` 没有任何关联,等同于无效字段,因此移除。
 #[derive(Serialize)]
 pub struct ApiResponse<T> {
     pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<T>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    pub trace_id: String,
 }
 
 impl<T: Serialize> ApiResponse<T> {
+    /// 业务成功 + 默认 message="OK"。
     pub fn ok(data: T) -> Self {
         Self {
             success: true,
             data: Some(data),
             message: Some("OK".to_string()),
-            trace_id: Uuid::new_v4().to_string(), // 默认值，会被 middleware 覆盖
         }
     }
 
-    pub fn success(data: T, trace_id: impl Into<String>) -> Self {
+    /// 业务成功,不带 message。
+    pub fn success(data: T) -> Self {
         Self {
             success: true,
             data: Some(data),
             message: None,
-            trace_id: trace_id.into(),
         }
     }
 
-    pub fn success_with_message(
-        data: T,
-        message: impl Into<String>,
-        trace_id: impl Into<String>,
-    ) -> Self {
+    /// 业务成功,自定义 message。
+    pub fn success_with_message(data: T, message: impl Into<String>) -> Self {
         Self {
             success: true,
             data: Some(data),
             message: Some(message.into()),
-            trace_id: trace_id.into(),
         }
     }
 }
 
 impl ApiResponse<()> {
-    pub fn ok_message(message: impl Into<String>, trace_id: impl Into<String>) -> Self {
+    /// 仅返回 message,不带 data。
+    pub fn ok_message(message: impl Into<String>) -> Self {
         Self {
             success: true,
             data: None,
             message: Some(message.into()),
-            trace_id: trace_id.into(),
         }
     }
 }
@@ -60,13 +62,4 @@ impl<T: Serialize> IntoResponse for ApiResponse<T> {
     fn into_response(self) -> axum::response::Response {
         (axum::http::StatusCode::OK, Json(self)).into_response()
     }
-}
-
-/// 从 Request 中提取 x-request-id
-pub fn extract_trace_id<B>(req: &axum::http::Request<B>) -> String {
-    req.headers()
-        .get("x-request-id")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| Uuid::new_v4().to_string())
 }

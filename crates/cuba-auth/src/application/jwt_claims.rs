@@ -1,49 +1,48 @@
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+//! JWT 验签逻辑。
+//!
+//! `JwtClaims` 数据结构在 `crate::domain::jwt_claims`,本文件只承载
+//! 验签函数与错误类型,避免之前 `domain` / `application` 双份定义。
 
-// ====================== JWT Claims ======================
+use crate::domain::JwtClaims;
+use jsonwebtoken::{decode, errors::ErrorKind, DecodingKey, Validation};
+use thiserror::Error;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct JwtClaims {
-    pub sub: Uuid,           // user_id
-    pub username: String,
-    pub roles: Vec<String>,
-    pub permissions: Vec<String>,
-    pub exp: usize,          // 过期时间（unix timestamp）
-    pub iat: usize,          // 签发时间
-    pub iss: String,         // 签发者
-}
-
-// ====================== JWT 验证逻辑 ======================
-
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
 pub enum VerifyError {
-    #[error("token 已过期")]
+    #[error("token expired")]
     Expired,
-    #[error("token 无效: {0}")]
-    Invalid(String),
-    #[error("签发者不匹配")]
-    BadIssuer,
-    #[error("签名无效")]
+    #[error("invalid signature")]
     BadSignature,
+    #[error("invalid issuer")]
+    BadIssuer,
+    #[error("invalid token: {0}")]
+    Invalid(String),
 }
 
-pub fn verify_access_token(token: &str, secret: &str) -> Result<JwtClaims, VerifyError> {
-    use jsonwebtoken::{decode, DecodingKey, Validation};
-
-    let mut validation = Validation::default();
-    validation.validate_exp = true;
+/// 验证一个 access token,返回解码后的 claims。
+///
+/// 校验项:
+/// - HS256 签名(使用 `secret`)
+/// - exp 过期时间(jsonwebtoken 默认开启)
+/// - iss 与 `expected_issuer` 严格匹配
+pub fn verify_access_token(
+    token: &str,
+    secret: &str,
+    expected_issuer: &str,
+) -> Result<JwtClaims, VerifyError> {
+    let mut validation = Validation::default(); // 默认 HS256 + 验 exp
+    validation.set_issuer(&[expected_issuer]);
 
     decode::<JwtClaims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
         &validation,
     )
-        .map(|data| data.claims)
+        .map(|d| d.claims)
         .map_err(|e| match e.kind() {
-            jsonwebtoken::errors::ErrorKind::ExpiredSignature => VerifyError::Expired,
-            jsonwebtoken::errors::ErrorKind::InvalidIssuer => VerifyError::BadIssuer,
-            jsonwebtoken::errors::ErrorKind::InvalidSignature => VerifyError::BadSignature,
+            ErrorKind::ExpiredSignature => VerifyError::Expired,
+            ErrorKind::InvalidSignature => VerifyError::BadSignature,
+            ErrorKind::InvalidIssuer => VerifyError::BadIssuer,
             _ => VerifyError::Invalid(e.to_string()),
         })
 }

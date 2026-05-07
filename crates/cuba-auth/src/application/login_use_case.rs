@@ -1,7 +1,7 @@
 use crate::domain::{JwtClaims, User};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use cuba_shared::{AppError, CurrentUser};
-use jsonwebtoken::{EncodingKey, Header, encode};
+use jsonwebtoken::{encode, EncodingKey, Header};
 use time::{Duration, OffsetDateTime};
 use tracing::info;
 
@@ -38,7 +38,6 @@ impl LoginUseCase {
             return Err(AppError::PermissionDenied("用户已被禁用".to_string()));
         }
 
-        // 使用 time crate
         let now = OffsetDateTime::now_utc();
         let exp = now + Duration::seconds(self.jwt_expires_seconds);
 
@@ -57,7 +56,7 @@ impl LoginUseCase {
             &claims,
             &EncodingKey::from_secret(self.jwt_secret.as_bytes()),
         )
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+            .map_err(|e| AppError::Internal(e.to_string()))?;
 
         let current_user = CurrentUser {
             user_id: user.user_id,

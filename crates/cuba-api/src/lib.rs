@@ -32,55 +32,60 @@ pub fn build_router(state: AppState) -> Router {
             auth_public.merge(auth_protected)
         })
         // ==================== master-data 模块（认证 + 权限控制） ====================
+        //
+        // FIXME: cuba-master-data 内部的 routes() 把 GET 和 POST/PUT 路由合在一起返回,
+        // 在外层无法按 HTTP method 区分挂权限。
+        // 当前作为安全网关:任意拥有 master-data:read 或 master-data:write 之一的用户
+        // 即可通过本网关。具体动作的细粒度授权应在 handler 内部使用
+        // `cuba_auth::AuthorizeUseCase::require_permission(user, "master-data:write")`
+        // 显式校验。理想方案是 cuba-master-data 暴露 `read_routes()` / `write_routes()`
+        // 由本层组合,与 MRP / reports 一致。
         .nest("/api/master-data", {
             cuba_master_data::interface::routes::routes()
-                // 所有 master-data 接口都需要登录
+                // 内层:权限闸门(必须先于 auth 添加,这样它在内层执行)
+                .layer(axum::middleware::from_fn(|req, next| {
+                    middleware::require_any_permission(
+                        &["master-data:read", "master-data:write"],
+                        req,
+                        next,
+                    )
+                }))
+                // 外层:auth_middleware,最后添加,保证它是最外层、先注入 CurrentUser
                 .layer(axum::middleware::from_fn_with_state(
                     state.clone(),
                     middleware::auth_middleware,
                 ))
-                // 读权限（查询接口）
-                .layer(axum::middleware::from_fn(|req, next| {
-                    middleware::require_permission("master-data:read", req, next)
-                }))
-                // 写权限（创建、修改、启用、停用等）
-                .layer(axum::middleware::from_fn(|req, next| {
-                    middleware::require_permission("master-data:write", req, next)
-                }))
         })
-        // ==================== inventory 模块（必须登录 + 权限控制） ====================
+        // ==================== inventory 模块 ====================
+        // 同 master-data 的处理思路。
         .nest("/api/inventory", {
             cuba_inventory::interface::routes::routes()
-                // 所有 inventory 接口都需要登录
+                .layer(axum::middleware::from_fn(|req, next| {
+                    middleware::require_any_permission(
+                        &["inventory:read", "inventory:post"],
+                        req,
+                        next,
+                    )
+                }))
                 .layer(axum::middleware::from_fn_with_state(
                     state.clone(),
-                    crate::middleware::auth_middleware,
+                    middleware::auth_middleware,
                 ))
-                // 读权限（查询库存、流水、批次、历史等）
-                .layer(axum::middleware::from_fn(|req, next| {
-                    crate::middleware::require_permission("inventory:read", req, next)
-                }))
-                // 写权限（过账、转储、盘点等）
-                .layer(axum::middleware::from_fn(|req, next| {
-                    crate::middleware::require_permission("inventory:post", req, next)
-                }))
         })
         // ==================== purchase 模块 ====================
         .nest("/api/purchase-orders", {
             cuba_purchase::interface::routes::routes()
-                // 必须登录
+                .layer(axum::middleware::from_fn(|req, next| {
+                    middleware::require_any_permission(
+                        &["purchase:read", "purchase:write"],
+                        req,
+                        next,
+                    )
+                }))
                 .layer(axum::middleware::from_fn_with_state(
                     state.clone(),
-                    crate::middleware::auth_middleware,
+                    middleware::auth_middleware,
                 ))
-                // 读权限
-                .layer(axum::middleware::from_fn(|req, next| {
-                    crate::middleware::require_permission("purchase:read", req, next)
-                }))
-                // 写权限（创建、收货、关闭等）
-                .layer(axum::middleware::from_fn(|req, next| {
-                    crate::middleware::require_permission("purchase:write", req, next)
-                }))
         })
         .nest("/api/sales-orders", cuba_sales::interface::routes::routes())
         .nest(
@@ -151,14 +156,7 @@ pub fn build_router(state: AppState) -> Router {
 
             public_routes.merge(protected_routes)
         })
-        // ==================== reporting 模块（临时保护：认证 + report:read） ====================
-        //
-        // TODO:
-        // 当前先保护整个 /api/reports，避免报表接口裸奔。
-        // 后续应在 cuba-reporting routes 明确后拆分：
-        // - 查询接口：report:read
-        // - 刷新接口：report:refresh
-        // - 导出接口：report:export
+        // ==================== reporting 模块 ====================
         .nest("/api/reports", {
             let public_routes = Router::new()
                 .route("/health", axum::routing::get(cuba_reporting::interface::handlers::health));
@@ -242,9 +240,9 @@ pub fn build_router(state: AppState) -> Router {
                 )
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
-        .layer(axum::middleware::from_fn(
-            middleware::trace::trace_id_middleware,
-        ))
+        // x-request-id 由 SetRequestIdLayer 生成,PropagateRequestIdLayer 透传到响应头。
+        // 之前自己写的 trace_id_middleware 只是把 trace_id 塞 response extensions、没人读,
+        // 已删除。
         .layer(SetRequestIdLayer::new(request_id_header, MakeRequestUuid))
         .layer(CatchPanicLayer::new())
 }
