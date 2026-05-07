@@ -35,7 +35,7 @@ pub enum AppError {
     Business { code: &'static str, message: String },
 
     #[error("database error: {0}")]
-    Database(sqlx::Error),
+    Database(#[from] sqlx::Error),
 
     #[error("internal error: {0}")]
     Internal(String),

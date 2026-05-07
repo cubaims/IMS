@@ -13,6 +13,7 @@ use tower_http::{
     catch_panic::CatchPanicLayer,
     cors::{AllowOrigin, CorsLayer},
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
+    services::ServeDir,
     timeout::TimeoutLayer,
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
 };
@@ -245,6 +246,8 @@ pub fn build_router(state: AppState) -> Router {
         // 已删除。
         .layer(SetRequestIdLayer::new(request_id_header, MakeRequestUuid))
         .layer(CatchPanicLayer::new())
+        // 静态文件服务（fallback）
+        .fallback_service(ServeDir::new("static"))
 }
 
 fn build_cors() -> CorsLayer {
