@@ -372,6 +372,8 @@ pub struct UpdateDefectCodeCommand {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MasterDataQuery {
     pub keyword: Option<String>,
+    pub material_type: Option<String>,
+    pub zone: Option<String>,
     pub status: Option<String>,
     pub is_active: Option<bool>,
     pub page: Option<u32>,

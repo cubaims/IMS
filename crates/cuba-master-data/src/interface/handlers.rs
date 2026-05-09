@@ -139,6 +139,16 @@ pub async fn deactivate_bin(
     Ok(Json(ApiResponse::ok(data)))
 }
 
+pub async fn get_bin_capacity_utilization(
+    State(state): State<AppState>,
+    Path(bin_code): Path<String>,
+) -> AppResult<Json<ApiResponse<Value>>> {
+    let data = service(&state)
+        .get_bin_capacity_utilization(&bin_code)
+        .await?;
+    Ok(Json(ApiResponse::ok(data)))
+}
+
 pub async fn list_suppliers(
     State(state): State<AppState>,
     Query(query): Query<MasterDataQuery>,

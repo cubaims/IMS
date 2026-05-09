@@ -9,6 +9,7 @@ Cargo.lock
 .vscode/
 *.swp
 *.swo
+.agents/
 *~
 
 # Environment
@@ -31,8 +32,11 @@ Thumbs.db
 # Docker
 docker-compose.override.yml
 
+AGENTS.md
+
 # Temporary
 *.tmp
 *.temp
 
+/ddd-guideline-codex
 /Todo

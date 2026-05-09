@@ -114,6 +114,50 @@ impl AppError {
                 | "DATA_CONSISTENCY_FAILED"
                 | "MATERIALIZED_VIEW_REFRESH_FAILED" => StatusCode::INTERNAL_SERVER_ERROR,
 
+                // 把这一段加到 Self::Business { code, .. } => match *code { ... } 里
+                // 位置随便,但建议放在最末尾"_ => StatusCode::CONFLICT" 之前
+
+                // ===== Master Data: NotFound =====
+                "MATERIAL_NOT_FOUND"
+                | "BIN_NOT_FOUND"
+                | "SUPPLIER_NOT_FOUND"
+                | "CUSTOMER_NOT_FOUND"
+                | "VARIANT_NOT_FOUND"
+                | "BOM_NOT_FOUND"
+                | "BOM_COMPONENT_NOT_FOUND"
+                | "WORK_CENTER_NOT_FOUND"
+                | "INSPECTION_CHAR_NOT_FOUND"
+                | "DEFECT_CODE_NOT_FOUND" => StatusCode::NOT_FOUND,
+
+                // ===== Master Data: Bad Request(字段非法,但走了业务码路径) =====
+                "BIN_CAPACITY_INVALID"
+                | "INSPECTION_LIMIT_INVALID" => StatusCode::BAD_REQUEST,
+
+                // ===== Master Data: Conflict =====
+                "MATERIAL_ALREADY_EXISTS"
+                | "MATERIAL_INACTIVE"
+                | "MATERIAL_HAS_STOCK"
+                | "BIN_ALREADY_EXISTS"
+                | "BIN_INACTIVE"
+                | "BIN_HAS_STOCK"
+                | "SUPPLIER_ALREADY_EXISTS"
+                | "SUPPLIER_INACTIVE"
+                | "PRIMARY_SUPPLIER_ALREADY_EXISTS"
+                | "CUSTOMER_ALREADY_EXISTS"
+                | "CUSTOMER_INACTIVE"
+                | "VARIANT_ALREADY_EXISTS"
+                | "VARIANT_INACTIVE"
+                | "BOM_ALREADY_EXISTS"
+                | "BOM_COMPONENT_DUPLICATED"
+                | "BOM_SELF_REFERENCE"
+                | "BOM_CYCLE_DETECTED"
+                | "BOM_NO_COMPONENTS"
+                | "WORK_CENTER_ALREADY_EXISTS"
+                | "WORK_CENTER_INACTIVE"
+                | "INSPECTION_CHAR_ALREADY_EXISTS"
+                | "DEFECT_CODE_ALREADY_EXISTS"
+                | "DEFECT_CODE_INACTIVE" => StatusCode::CONFLICT,
+                
                 _ => StatusCode::CONFLICT,
             },
             Self::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
