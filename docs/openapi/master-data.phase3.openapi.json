@@ -40,6 +40,15 @@
       "get": {
         "tags": ["MasterData"],
         "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "keyword", "in": "query", "schema": {"type": "string"}},
+          {"name": "material_type", "in": "query", "schema": {"type": "string", "enum": ["原材料", "半成品", "成品", "RAW", "SEMI", "FINISHED"]}},
+          {"name": "status", "in": "query", "schema": {"type": "string", "enum": ["正常", "停用", "冻结"]}},
+          {"name": "sort_by", "in": "query", "schema": {"type": "string", "enum": ["material_id", "material_name", "material_type", "status", "current_stock", "created_at", "updated_at"]}},
+          {"name": "sort_order", "in": "query", "schema": {"type": "string", "enum": ["asc", "desc"]}},
+          {"name": "page", "in": "query", "schema": {"type": "integer", "minimum": 1}},
+          {"name": "page_size", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 200}}
+        ],
         "responses": {
           "200": {"$ref": "#/components/responses/Success"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
@@ -49,6 +58,29 @@
       "post": {
         "tags": ["MasterData"],
         "security": [{"bearerAuth": []}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["material_id", "material_name", "material_type", "base_unit", "default_zone", "safety_stock", "reorder_point", "standard_price", "map_price"],
+                "properties": {
+                  "material_id": {"type": "string", "maxLength": 20},
+                  "material_name": {"type": "string", "maxLength": 100},
+                  "material_type": {"type": "string", "enum": ["原材料", "半成品", "成品", "RAW", "SEMI", "FINISHED"]},
+                  "base_unit": {"type": "string", "maxLength": 10},
+                  "default_zone": {"type": "string", "maxLength": 10},
+                  "safety_stock": {"type": "integer", "minimum": 0},
+                  "reorder_point": {"type": "integer", "minimum": 0},
+                  "standard_price": {"type": "number", "minimum": 0},
+                  "map_price": {"type": "number", "minimum": 0},
+                  "quality_status": {"type": "string", "default": "合格", "enum": ["待检", "合格", "冻结", "报废", "放行", "PENDING", "QUALIFIED", "FROZEN", "SCRAPPED", "RELEASED"]}
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {"$ref": "#/components/responses/Success"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
@@ -69,6 +101,26 @@
       "patch": {
         "tags": ["MasterData"],
         "security": [{"bearerAuth": []}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "material_name": {"type": "string", "maxLength": 100},
+                  "base_unit": {"type": "string", "maxLength": 10},
+                  "default_zone": {"type": "string", "maxLength": 10},
+                  "safety_stock": {"type": "integer", "minimum": 0},
+                  "reorder_point": {"type": "integer", "minimum": 0},
+                  "standard_price": {"type": "number", "minimum": 0},
+                  "quality_status": {"type": "string", "enum": ["待检", "合格", "冻结", "报废", "放行", "PENDING", "QUALIFIED", "FROZEN", "SCRAPPED", "RELEASED"]},
+                  "status": {"type": "string", "enum": ["正常", "停用", "冻结"]}
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {"$ref": "#/components/responses/Success"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
@@ -140,6 +192,15 @@
     },
     "/api/master-data/materials/{material_id}/suppliers/{supplier_id}/primary": {
       "post": {
+        "tags": ["MasterData"],
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {"$ref": "#/components/responses/Success"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      },
+      "delete": {
         "tags": ["MasterData"],
         "security": [{"bearerAuth": []}],
         "responses": {

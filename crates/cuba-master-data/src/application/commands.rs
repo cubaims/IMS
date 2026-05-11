@@ -28,6 +28,8 @@ pub struct CreateMaterialCommand {
     pub standard_price: Decimal,
 
     pub map_price: Decimal,
+
+    pub quality_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Validate)]
@@ -48,6 +50,8 @@ pub struct UpdateMaterialCommand {
     pub reorder_point: Option<i32>,
 
     pub standard_price: Option<Decimal>,
+
+    pub quality_status: Option<String>,
 
     pub status: Option<String>,
 }
@@ -376,6 +380,8 @@ pub struct MasterDataQuery {
     pub zone: Option<String>,
     pub status: Option<String>,
     pub is_active: Option<bool>,
+    pub sort_by: Option<String>,
+    pub sort_order: Option<String>,
     pub page: Option<u32>,
     pub page_size: Option<u32>,
 }

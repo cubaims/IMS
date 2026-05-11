@@ -17,11 +17,36 @@ use sqlx::Error as SqlxError;
 /// 我们按 SQLSTATE 把常见约束转成对前端友好的 `Validation`(可在 UI 上提示用户修正),
 /// 其余的(连接错、解码错等)走通用 `Database`,进 INTERNAL_SERVER_ERROR 并落日志。
 pub fn map_master_data_db_error(err: SqlxError) -> AppError {
+    if let Some(mapped) = map_master_data_specific_db_error(&err) {
+        return mapped;
+    }
+
     if let Some(mapped) = map_common_db_error(&err) {
         return mapped;
     }
 
     AppError::raw_database(err)
+}
+
+fn map_master_data_specific_db_error(err: &SqlxError) -> Option<AppError> {
+    let SqlxError::Database(db_err) = err else {
+        return None;
+    };
+
+    let code = db_err.code();
+    let message = db_err.message();
+    let primary_supplier_unique_index =
+        code.as_deref() == Some("23505") && message.contains("ux_material_one_primary_supplier");
+
+    if primary_supplier_unique_index || message.contains("已存在主供应商") {
+        tracing::warn!(error = %message, "primary supplier constraint violated");
+        return Some(AppError::business(
+            "PRIMARY_SUPPLIER_ALREADY_EXISTS",
+            "已存在主供应商,不能重复设置",
+        ));
+    }
+
+    None
 }
 
 pub fn map_auth_db_error(err: SqlxError) -> AppError {
@@ -395,6 +420,42 @@ mod tests {
             err,
             AppError::Business {
                 code: "DUPLICATE_RECORD",
+                ..
+            }
+        ));
+        assert_eq!(err.http_status(), axum::http::StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn primary_supplier_unique_constraint_maps_to_specific_business_code() {
+        let err = map_master_data_db_error(db_error(
+            Some("23505"),
+            "duplicate key value violates unique constraint \"ux_material_one_primary_supplier\"",
+            ErrorKind::UniqueViolation,
+        ));
+
+        assert!(matches!(
+            err,
+            AppError::Business {
+                code: "PRIMARY_SUPPLIER_ALREADY_EXISTS",
+                ..
+            }
+        ));
+        assert_eq!(err.http_status(), axum::http::StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn primary_supplier_trigger_message_maps_to_specific_business_code() {
+        let err = map_master_data_db_error(db_error(
+            Some("P0001"),
+            "物料 RM001 已存在主供应商，不能再设置第二个主供应商",
+            ErrorKind::Other,
+        ));
+
+        assert!(matches!(
+            err,
+            AppError::Business {
+                code: "PRIMARY_SUPPLIER_ALREADY_EXISTS",
                 ..
             }
         ));

@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     BinCode, BomId, BomStatus, CustomerId, DefectCode, DefectSeverity, InspectionCharId,
-    MasterDataDomainError, MaterialId, MaterialType, SupplierId, VariantCode, WorkCenterId,
+    MasterDataDomainError, MaterialId, MaterialQualityStatus, MaterialType, SupplierId,
+    VariantCode, WorkCenterId,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +19,7 @@ pub struct Material {
     pub standard_price: Decimal,
     pub map_price: Decimal,
     pub current_stock: i32,
+    pub quality_status: MaterialQualityStatus,
     pub status: String,
 }
 
@@ -65,8 +67,13 @@ impl Material {
             standard_price,
             map_price,
             current_stock: 0,
+            quality_status: MaterialQualityStatus::default(),
             status: "正常".to_string(),
         })
+    }
+
+    pub fn change_quality_status(&mut self, quality_status: MaterialQualityStatus) {
+        self.quality_status = quality_status;
     }
 
     pub fn rename(
@@ -893,7 +900,28 @@ mod tests {
         assert_eq!(m.material_id.value(), "M001");
         assert_eq!(m.material_name, "Steel Bar");
         assert_eq!(m.current_stock, 0); // 新物料库存初始 0
+        assert_eq!(m.quality_status, MaterialQualityStatus::Qualified);
         assert_eq!(m.status, "正常");
+    }
+
+    #[test]
+    fn material_can_change_default_quality_status() {
+        let mut m = Material::new(
+            mid("M001"),
+            "Steel Bar",
+            MaterialType::RawMaterial,
+            "EA",
+            "RM",
+            10,
+            5,
+            d("100"),
+            d("95.5"),
+        )
+        .expect("test fixture should be valid");
+
+        m.change_quality_status(MaterialQualityStatus::Pending);
+
+        assert_eq!(m.quality_status, MaterialQualityStatus::Pending);
     }
 
     // -------------------- StorageBin --------------------

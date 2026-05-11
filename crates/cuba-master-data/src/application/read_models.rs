@@ -26,6 +26,7 @@ pub struct MaterialReadModel {
     pub standard_price: Decimal,
     pub map_price: Decimal,
     pub current_stock: i32,
+    pub quality_status: String,
     pub status: Option<String>,
     pub created_at: Option<OffsetDateTime>,
     pub updated_at: Option<OffsetDateTime>,

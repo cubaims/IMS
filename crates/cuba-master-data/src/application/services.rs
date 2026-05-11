@@ -18,8 +18,8 @@ use super::{
 use crate::domain::{
     BinCode, BomComponent, BomHeader, BomId, BomStatus, Customer, CustomerId, DefectCode,
     DefectCodeMaster, DefectSeverity, InspectionCharId, InspectionCharacteristic, Material,
-    MaterialId, MaterialSupplier, MaterialType, ProductVariant, StorageBin, Supplier, SupplierId,
-    VariantCode, WorkCenter, WorkCenterId,
+    MaterialId, MaterialQualityStatus, MaterialSupplier, MaterialType, ProductVariant, StorageBin,
+    Supplier, SupplierId, VariantCode, WorkCenter, WorkCenterId,
 };
 use cuba_shared::{AppError, AppResult, Page};
 
@@ -83,6 +83,16 @@ impl MasterDataService {
 
     fn parse_optional_material_type(value: Option<&str>) -> AppResult<Option<MaterialType>> {
         value.map(Self::parse_material_type).transpose()
+    }
+
+    fn parse_material_quality_status(value: &str) -> AppResult<MaterialQualityStatus> {
+        MaterialQualityStatus::parse(value).map_err(AppError::from)
+    }
+
+    fn parse_optional_material_quality_status(
+        value: Option<&str>,
+    ) -> AppResult<Option<MaterialQualityStatus>> {
+        value.map(Self::parse_material_quality_status).transpose()
     }
 
     fn parse_defect_severity(value: &str) -> AppResult<DefectSeverity> {
@@ -234,6 +244,7 @@ impl MasterDataService {
             command.standard_price,
             command.map_price,
         )?;
+        Self::parse_optional_material_quality_status(command.quality_status.as_deref())?;
 
         self.material_repo.create_material(command).await
     }
@@ -273,6 +284,11 @@ impl MasterDataService {
         )?;
         if let Some(standard_price) = command.standard_price {
             entity.change_standard_price(standard_price)?;
+        }
+        if let Some(quality_status) =
+            Self::parse_optional_material_quality_status(command.quality_status.as_deref())?
+        {
+            entity.change_quality_status(quality_status);
         }
         if let Some(status) = command.status.as_deref() {
             match status {
@@ -559,6 +575,18 @@ impl MasterDataService {
         // 在事务内检查,避免 TOCTOU 与并发竞争。
         self.material_supplier_repo
             .set_primary_supplier(material_id, supplier_id)
+            .await
+    }
+
+    pub async fn cancel_primary_supplier(
+        &self,
+        material_id: &str,
+        supplier_id: &str,
+    ) -> AppResult<MaterialSupplierReadModel> {
+        let _mid = MaterialId::new(material_id)?;
+        let _sid = SupplierId::new(supplier_id)?;
+        self.material_supplier_repo
+            .cancel_primary_supplier(material_id, supplier_id)
             .await
     }
 

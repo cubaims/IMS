@@ -104,6 +104,10 @@ pub fn write_routes() -> Router<AppState> {
             "/materials/{material_id}/suppliers/{supplier_id}/primary",
             post(handlers::set_primary_supplier),
         )
+        .route(
+            "/materials/{material_id}/suppliers/{supplier_id}/primary",
+            delete(handlers::cancel_primary_supplier),
+        )
         // bins
         .route("/bins", post(handlers::create_bin))
         .route("/bins/{bin_code}", patch(handlers::update_bin))

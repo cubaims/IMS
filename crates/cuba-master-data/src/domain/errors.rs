@@ -86,6 +86,9 @@ pub enum MasterDataDomainError {
     #[error("检验特性上下限不合法(上限不能小于下限)")]
     InspectionLimitInvalid,
 
+    #[error("质量状态不合法: {0}")]
+    InvalidQualityStatus(String),
+
     // ============================================================
     // 业务规则违反(→ AppError::Business { code })
     // 一一对应 Phase 3 §十一 错误码清单
@@ -263,6 +266,10 @@ mod tests {
         );
         assert_eq!(
             MasterDataDomainError::CapacityCannotBeNegative.business_code(),
+            None
+        );
+        assert_eq!(
+            MasterDataDomainError::InvalidQualityStatus("bad".to_string()).business_code(),
             None
         );
     }

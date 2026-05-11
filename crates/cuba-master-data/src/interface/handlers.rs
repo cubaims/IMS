@@ -532,6 +532,28 @@ pub async fn set_primary_supplier(
     Ok(Json(ApiResponse::ok(data)))
 }
 
+pub async fn cancel_primary_supplier(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Path((material_id, supplier_id)): Path<(String, String)>,
+) -> AppResult<impl IntoResponse> {
+    let record_id = format!("{material_id}:{supplier_id}");
+    let data = service(&state)
+        .cancel_primary_supplier(&material_id, &supplier_id)
+        .await?;
+    audit_master_data_change(
+        &state,
+        &user,
+        "MASTER_DATA_CANCEL_PRIMARY",
+        "mdm.mdm_material_suppliers",
+        &record_id,
+        data.clone(),
+    )
+    .await;
+
+    Ok(Json(ApiResponse::ok(data)))
+}
+
 pub async fn remove_material_supplier(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,

@@ -101,6 +101,11 @@ pub trait MaterialSupplierRepository: Send + Sync {
         material_id: &str,
         supplier_id: &str,
     ) -> AppResult<MaterialSupplierReadModel>;
+    async fn cancel_primary_supplier(
+        &self,
+        material_id: &str,
+        supplier_id: &str,
+    ) -> AppResult<MaterialSupplierReadModel>;
     async fn remove_material_supplier(
         &self,
         material_id: &str,

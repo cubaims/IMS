@@ -6,7 +6,8 @@ use cuba_shared::{AppError, AppResult, Page};
 use std::collections::HashSet;
 
 use crate::domain::{
-    BinCode, DefectSeverity, InspectionCharId, InspectionCharacteristic, MaterialType, StorageBin,
+    BinCode, DefectSeverity, InspectionCharId, InspectionCharacteristic, MaterialQualityStatus,
+    MaterialType, StorageBin,
 };
 use crate::domain::{Bom, BomComponent, BomHeader, BomId, BomStatus, MaterialId, VariantCode};
 
@@ -104,6 +105,58 @@ impl PostgresMasterDataRepository {
         value.map(Self::normalize_material_type).transpose()
     }
 
+    fn normalize_material_quality_status(value: &str) -> AppResult<&'static str> {
+        MaterialQualityStatus::parse(value)
+            .map(|status| status.as_db_value())
+            .map_err(AppError::from)
+    }
+
+    fn normalize_optional_material_quality_status(
+        value: Option<&str>,
+    ) -> AppResult<Option<&'static str>> {
+        value
+            .map(Self::normalize_material_quality_status)
+            .transpose()
+    }
+
+    fn material_sort_clause(query: &MasterDataQuery) -> AppResult<&'static str> {
+        let sort_by = query
+            .sort_by
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("material_id");
+        let sort_order = query
+            .sort_order
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("asc");
+
+        match (sort_by, sort_order.to_ascii_lowercase().as_str()) {
+            ("material_id", "asc") => Ok("material_id ASC"),
+            ("material_id", "desc") => Ok("material_id DESC"),
+            ("material_name", "asc") => Ok("material_name ASC, material_id ASC"),
+            ("material_name", "desc") => Ok("material_name DESC, material_id ASC"),
+            ("material_type", "asc") => Ok("material_type ASC, material_id ASC"),
+            ("material_type", "desc") => Ok("material_type DESC, material_id ASC"),
+            ("status", "asc") => Ok("status ASC, material_id ASC"),
+            ("status", "desc") => Ok("status DESC, material_id ASC"),
+            ("current_stock", "asc") => Ok("current_stock ASC, material_id ASC"),
+            ("current_stock", "desc") => Ok("current_stock DESC, material_id ASC"),
+            ("created_at", "asc") => Ok("created_at ASC, material_id ASC"),
+            ("created_at", "desc") => Ok("created_at DESC, material_id ASC"),
+            ("updated_at", "asc") => Ok("updated_at ASC, material_id ASC"),
+            ("updated_at", "desc") => Ok("updated_at DESC, material_id ASC"),
+            (_, "asc" | "desc") => Err(AppError::Validation(format!(
+                "未知的物料排序字段 '{sort_by}',应为 material_id/material_name/material_type/status/current_stock/created_at/updated_at"
+            ))),
+            (_, other) => Err(AppError::Validation(format!(
+                "未知的排序方向 '{other}',应为 asc/desc"
+            ))),
+        }
+    }
+
     fn normalize_bom_status(value: &str) -> AppResult<&'static str> {
         BomStatus::from_db_value(value)
             .map(|status| status.as_db_value())
@@ -179,6 +232,7 @@ impl PostgresMasterDataRepository {
             standard_price: Self::column(row, "standard_price")?,
             map_price: Self::column(row, "map_price")?,
             current_stock: Self::column(row, "current_stock")?,
+            quality_status: Self::column(row, "quality_status")?,
             status: Self::column(row, "status")?,
             created_at: Self::column(row, "created_at")?,
             updated_at: Self::column(row, "updated_at")?,
@@ -452,6 +506,70 @@ impl PostgresMasterDataRepository {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use cuba_shared::AppError;
+
+    use super::*;
+
+    fn query(sort_by: Option<&str>, sort_order: Option<&str>) -> MasterDataQuery {
+        MasterDataQuery {
+            keyword: None,
+            material_type: None,
+            zone: None,
+            status: None,
+            is_active: None,
+            sort_by: sort_by.map(ToOwned::to_owned),
+            sort_order: sort_order.map(ToOwned::to_owned),
+            page: None,
+            page_size: None,
+        }
+    }
+
+    #[test]
+    fn material_sort_clause_defaults_to_material_id_asc() {
+        assert_eq!(
+            PostgresMasterDataRepository::material_sort_clause(&query(None, None))
+                .expect("default sort should be valid"),
+            "material_id ASC"
+        );
+    }
+
+    #[test]
+    fn material_sort_clause_accepts_allowed_columns_and_direction() {
+        assert_eq!(
+            PostgresMasterDataRepository::material_sort_clause(&query(
+                Some("created_at"),
+                Some("DESC")
+            ))
+            .expect("allowed sort should be valid"),
+            "created_at DESC, material_id ASC"
+        );
+    }
+
+    #[test]
+    fn material_sort_clause_rejects_unknown_column() {
+        let err = PostgresMasterDataRepository::material_sort_clause(&query(
+            Some("1; DROP TABLE mdm.mdm_materials"),
+            Some("asc"),
+        ))
+        .expect_err("unknown sort column should fail validation");
+
+        assert!(matches!(err, AppError::Validation(message) if message.contains("排序字段")));
+    }
+
+    #[test]
+    fn material_sort_clause_rejects_unknown_direction() {
+        let err = PostgresMasterDataRepository::material_sort_clause(&query(
+            Some("material_id"),
+            Some("sideways"),
+        ))
+        .expect_err("unknown sort direction should fail validation");
+
+        assert!(matches!(err, AppError::Validation(message) if message.contains("排序方向")));
+    }
+}
+
 #[async_trait]
 impl MaterialRepository for PostgresMasterDataRepository {
     async fn list_materials(&self, query: MasterDataQuery) -> AppResult<Page<MaterialReadModel>> {
@@ -459,8 +577,9 @@ impl MaterialRepository for PostgresMasterDataRepository {
         let (page, page_size, limit, offset) = Self::pagination(&query);
         let keyword_pattern = query.keyword.as_ref().map(|k| format!("%{}%", k));
         let material_type = Self::normalize_optional_material_type(query.material_type.as_deref())?;
+        let order_by = Self::material_sort_clause(&query)?;
 
-        let rows = sqlx::query(
+        let sql = format!(
             r#"
             SELECT
                 COUNT(*) OVER() AS total,
@@ -474,6 +593,7 @@ impl MaterialRepository for PostgresMasterDataRepository {
                 standard_price,
                 map_price,
                 current_stock,
+                quality_status::text AS quality_status,
                 status,
                 created_at,
                 updated_at
@@ -482,18 +602,20 @@ impl MaterialRepository for PostgresMasterDataRepository {
                 ($3::text IS NULL OR material_id ILIKE $3 OR material_name ILIKE $3)
                 AND ($4::text IS NULL OR material_type::text = $4)
                 AND ($5::text IS NULL OR status = $5)
-            ORDER BY material_id
+            ORDER BY {order_by}
             LIMIT $1 OFFSET $2
-            "#,
-        )
-        .bind(limit)
-        .bind(offset)
-        .bind(keyword_pattern.as_deref())
-        .bind(material_type)
-        .bind(query.status.as_deref())
-        .fetch_all(&self.pool)
-        .await
-        .map_err(cuba_shared::map_master_data_db_error)?;
+            "#
+        );
+
+        let rows = sqlx::query(&sql)
+            .bind(limit)
+            .bind(offset)
+            .bind(keyword_pattern.as_deref())
+            .bind(material_type)
+            .bind(query.status.as_deref())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(cuba_shared::map_master_data_db_error)?;
 
         Self::page_from_rows(rows, page, page_size, Self::parse_material)
     }
@@ -512,6 +634,7 @@ impl MaterialRepository for PostgresMasterDataRepository {
                 standard_price,
                 map_price,
                 current_stock,
+                quality_status::text AS quality_status,
                 status,
                 created_at,
                 updated_at
@@ -531,6 +654,9 @@ impl MaterialRepository for PostgresMasterDataRepository {
         command: CreateMaterialCommand,
     ) -> AppResult<MaterialReadModel> {
         let material_type = Self::normalize_material_type(&command.material_type)?;
+        let quality_status =
+            Self::normalize_optional_material_quality_status(command.quality_status.as_deref())?
+                .unwrap_or(MaterialQualityStatus::Qualified.as_db_value());
 
         let row = sqlx::query(
             r#"
@@ -545,6 +671,7 @@ impl MaterialRepository for PostgresMasterDataRepository {
                 standard_price,
                 map_price,
                 current_stock,
+                quality_status,
                 status
             )
             VALUES (
@@ -558,6 +685,7 @@ impl MaterialRepository for PostgresMasterDataRepository {
                 $8,
                 $9,
                 0,
+                $10::mdm.quality_status,
                 '正常'
             )
             RETURNING
@@ -571,6 +699,7 @@ impl MaterialRepository for PostgresMasterDataRepository {
                 standard_price,
                 map_price,
                 current_stock,
+                quality_status::text AS quality_status,
                 status,
                 created_at,
                 updated_at
@@ -585,6 +714,7 @@ impl MaterialRepository for PostgresMasterDataRepository {
         .bind(command.reorder_point)
         .bind(command.standard_price)
         .bind(command.map_price)
+        .bind(quality_status)
         .fetch_one(&self.pool)
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
@@ -597,6 +727,9 @@ impl MaterialRepository for PostgresMasterDataRepository {
         material_id: &str,
         command: UpdateMaterialCommand,
     ) -> AppResult<MaterialReadModel> {
+        let quality_status =
+            Self::normalize_optional_material_quality_status(command.quality_status.as_deref())?;
+
         let row = sqlx::query(
             r#"
             UPDATE mdm.mdm_materials
@@ -607,7 +740,8 @@ impl MaterialRepository for PostgresMasterDataRepository {
                 safety_stock = COALESCE($5, safety_stock),
                 reorder_point = COALESCE($6, reorder_point),
                 standard_price = COALESCE($7, standard_price),
-                status = COALESCE($8, status),
+                quality_status = COALESCE($8::mdm.quality_status, quality_status),
+                status = COALESCE($9, status),
                 updated_at = NOW()
             WHERE material_id = $1
             RETURNING
@@ -621,6 +755,7 @@ impl MaterialRepository for PostgresMasterDataRepository {
                 standard_price,
                 map_price,
                 current_stock,
+                quality_status::text AS quality_status,
                 status,
                 created_at,
                 updated_at
@@ -633,6 +768,7 @@ impl MaterialRepository for PostgresMasterDataRepository {
         .bind(command.safety_stock)
         .bind(command.reorder_point)
         .bind(command.standard_price)
+        .bind(quality_status)
         .bind(command.status)
         .fetch_optional(&self.pool)
         .await
@@ -1082,6 +1218,13 @@ impl SupplierRepository for PostgresMasterDataRepository {
         supplier_id: &str,
         command: UpdateSupplierCommand,
     ) -> AppResult<SupplierReadModel> {
+        let deactivate = command.is_active == Some(false);
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(cuba_shared::map_master_data_db_error)?;
+
         let row = sqlx::query(
             r#"
             UPDATE mdm.mdm_suppliers
@@ -1116,7 +1259,7 @@ impl SupplierRepository for PostgresMasterDataRepository {
         .bind(command.address)
         .bind(command.quality_rating)
         .bind(command.is_active)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
@@ -1126,6 +1269,24 @@ impl SupplierRepository for PostgresMasterDataRepository {
                 format!("供应商不存在: {supplier_id}"),
             ));
         };
+
+        if deactivate {
+            sqlx::query(
+                r#"
+                UPDATE mdm.mdm_material_suppliers
+                SET is_primary = FALSE, updated_at = NOW()
+                WHERE supplier_id = $1 AND is_primary IS TRUE
+                "#,
+            )
+            .bind(supplier_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(cuba_shared::map_master_data_db_error)?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(cuba_shared::map_master_data_db_error)?;
 
         Self::parse_supplier(&row)
     }
@@ -1152,6 +1313,12 @@ impl SupplierRepository for PostgresMasterDataRepository {
     }
 
     async fn deactivate_supplier(&self, supplier_id: &str) -> AppResult<MutationAck> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(cuba_shared::map_master_data_db_error)?;
+
         let result = sqlx::query(
             r#"
             UPDATE mdm.mdm_suppliers
@@ -1160,16 +1327,37 @@ impl SupplierRepository for PostgresMasterDataRepository {
             "#,
         )
         .bind(supplier_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        Self::affected_to_ack(
-            result,
-            supplier_id,
-            "SUPPLIER_NOT_FOUND",
-            format!("供应商不存在: {supplier_id}"),
+        if result.rows_affected() == 0 {
+            return Err(AppError::business(
+                "SUPPLIER_NOT_FOUND",
+                format!("供应商不存在: {supplier_id}"),
+            ));
+        }
+
+        sqlx::query(
+            r#"
+            UPDATE mdm.mdm_material_suppliers
+            SET is_primary = FALSE, updated_at = NOW()
+            WHERE supplier_id = $1 AND is_primary IS TRUE
+            "#,
         )
+        .bind(supplier_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+
+        tx.commit()
+            .await
+            .map_err(cuba_shared::map_master_data_db_error)?;
+
+        Ok(MutationAck {
+            resource_id: supplier_id.to_string(),
+            affected: result.rows_affected(),
+        })
     }
 }
 
@@ -1782,6 +1970,53 @@ impl MaterialSupplierRepository for PostgresMasterDataRepository {
         tx.commit()
             .await
             .map_err(cuba_shared::map_master_data_db_error)?;
+
+        Self::parse_material_supplier(&row)
+    }
+
+    async fn cancel_primary_supplier(
+        &self,
+        material_id: &str,
+        supplier_id: &str,
+    ) -> AppResult<MaterialSupplierReadModel> {
+        let row = sqlx::query(
+            r#"
+            WITH updated AS (
+                UPDATE mdm.mdm_material_suppliers
+                SET is_primary = FALSE, updated_at = NOW()
+                WHERE material_id = $1 AND supplier_id = $2
+                RETURNING *
+            )
+            SELECT
+                updated.id,
+                updated.material_id,
+                updated.supplier_id,
+                s.supplier_name,
+                updated.is_primary,
+                updated.supplier_material_code,
+                updated.purchase_price,
+                updated.currency,
+                updated.lead_time_days,
+                updated.moq,
+                updated.quality_rating,
+                updated.is_active,
+                updated.created_at,
+                updated.updated_at
+            FROM updated
+            LEFT JOIN mdm.mdm_suppliers s ON s.supplier_id = updated.supplier_id
+            "#,
+        )
+        .bind(material_id)
+        .bind(supplier_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+
+        let Some(row) = row else {
+            return Err(AppError::NotFound(format!(
+                "material supplier not found: material_id={material_id}, supplier_id={supplier_id}"
+            )));
+        };
 
         Self::parse_material_supplier(&row)
     }

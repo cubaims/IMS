@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::MasterDataDomainError;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MaterialType {
     RawMaterial,
@@ -26,6 +28,44 @@ impl MaterialType {
             "成品" | "FINISHED" | "FINISHED_GOODS" => Some(Self::FinishedGoods),
             _ => None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum MaterialQualityStatus {
+    Pending,
+    #[default]
+    Qualified,
+    Frozen,
+    Scrapped,
+    Released,
+}
+
+impl MaterialQualityStatus {
+    pub fn as_db_value(self) -> &'static str {
+        match self {
+            Self::Pending => "待检",
+            Self::Qualified => "合格",
+            Self::Frozen => "冻结",
+            Self::Scrapped => "报废",
+            Self::Released => "放行",
+        }
+    }
+
+    pub fn from_db_value(value: &str) -> Option<Self> {
+        match value.trim() {
+            "待检" | "PENDING" | "pending" => Some(Self::Pending),
+            "合格" | "QUALIFIED" | "qualified" => Some(Self::Qualified),
+            "冻结" | "FROZEN" | "frozen" => Some(Self::Frozen),
+            "报废" | "SCRAPPED" | "scrapped" => Some(Self::Scrapped),
+            "放行" | "RELEASED" | "released" => Some(Self::Released),
+            _ => None,
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, MasterDataDomainError> {
+        Self::from_db_value(value)
+            .ok_or_else(|| MasterDataDomainError::InvalidQualityStatus(value.to_string()))
     }
 }
 
@@ -169,6 +209,26 @@ mod tests {
     fn material_type_unknown_returns_none() {
         assert_eq!(MaterialType::from_db_value(""), None);
         assert_eq!(MaterialType::from_db_value("废料"), None);
+    }
+
+    #[test]
+    fn material_quality_status_accepts_db_values_and_aliases() {
+        for (value, status) in [
+            ("待检", MaterialQualityStatus::Pending),
+            ("合格", MaterialQualityStatus::Qualified),
+            ("冻结", MaterialQualityStatus::Frozen),
+            ("报废", MaterialQualityStatus::Scrapped),
+            ("放行", MaterialQualityStatus::Released),
+            ("QUALIFIED", MaterialQualityStatus::Qualified),
+            ("released", MaterialQualityStatus::Released),
+        ] {
+            assert_eq!(MaterialQualityStatus::from_db_value(value), Some(status));
+        }
+    }
+
+    #[test]
+    fn material_quality_status_defaults_to_qualified() {
+        assert_eq!(MaterialQualityStatus::default().as_db_value(), "合格");
     }
 
     #[test]
