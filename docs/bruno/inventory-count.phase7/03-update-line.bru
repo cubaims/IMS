@@ -1,0 +1,23 @@
+meta {
+  name: 03 Update Line
+  type: http
+  seq: 3
+}
+
+patch {
+  url: {{base_url}}/api/inventory/counts/{{count_doc_id}}/lines/{{line_no}}
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "counted_qty": {{counted_qty}},
+    "difference_reason": "{{difference_reason}}",
+    "remark": "phase 7 Bruno counted"
+  }
+}

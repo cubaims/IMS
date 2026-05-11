@@ -4,4 +4,5 @@ pub struct AppState {
     pub jwt_secret: String,
     pub jwt_issuer: String,
     pub jwt_expires_seconds: i64,
+    pub jwt_refresh_expires_seconds: i64,
 }

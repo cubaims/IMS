@@ -1,0 +1,25 @@
+meta {
+  name: 05 Create Finished Bin
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{base_url}}/api/master-data/bins
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "bin_code": "{{fg_bin}}",
+    "zone": "FG",
+    "bin_type": "普通货位",
+    "capacity": 10000,
+    "notes": "Bruno finished bin"
+  }
+}

@@ -1,0 +1,29 @@
+meta {
+  name: 02 Create Raw Material
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{base_url}}/api/master-data/materials
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "material_id": "{{material_id}}",
+    "material_name": "Bruno Raw Material",
+    "material_type": "原材料",
+    "base_unit": "PCS",
+    "default_zone": "RM",
+    "safety_stock": 100,
+    "reorder_point": 50,
+    "standard_price": "10.00",
+    "map_price": "10.00"
+  }
+}

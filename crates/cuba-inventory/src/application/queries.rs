@@ -8,13 +8,20 @@ pub struct PageQuery {
 }
 
 impl PageQuery {
+    pub fn page_number(&self) -> u64 {
+        u64::from(self.page.unwrap_or(1).max(1))
+    }
+
+    pub fn page_size_value(&self) -> u64 {
+        u64::from(self.page_size.unwrap_or(20).clamp(1, 200))
+    }
+
     pub fn limit(&self) -> i64 {
-        self.page_size.unwrap_or(20).clamp(1, 200) as i64
+        self.page_size_value() as i64
     }
 
     pub fn offset(&self) -> i64 {
-        let page = self.page.unwrap_or(1).max(1);
-        (page as i64 - 1) * self.limit()
+        ((self.page_number() - 1) * self.page_size_value()) as i64
     }
 }
 
@@ -35,6 +42,7 @@ pub struct CurrentStockQuery {
     pub zone: Option<String>,
     pub quality_status: Option<String>,
     pub only_available: Option<bool>,
+    pub only_low_stock: Option<bool>,
     pub page: Option<u32>,
     pub page_size: Option<u32>,
 }

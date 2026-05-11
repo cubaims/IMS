@@ -1,0 +1,137 @@
+{
+  "info": {
+    "name": "IMS Phase 7 Inventory Count",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Create BIN count",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/inventory/counts",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"count_type\": \"CYCLE\",\n  \"count_scope\": \"BIN\",\n  \"bin_code\": \"{{count_bin}}\",\n  \"remark\": \"phase 7 Postman count\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Generate lines",
+      "request": {
+        "method": "POST",
+        "url": "{{base_url}}/api/inventory/counts/{{count_doc_id}}/generate-lines"
+      }
+    },
+    {
+      "name": "Update line counted quantity",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/inventory/counts/{{count_doc_id}}/lines/{{line_no}}",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"counted_qty\": {{counted_qty}},\n  \"difference_reason\": \"{{difference_reason}}\",\n  \"remark\": \"phase 7 Postman counted\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Submit count",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/inventory/counts/{{count_doc_id}}/submit",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"remark\": \"phase 7 Postman submit\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Approve count",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/inventory/counts/{{count_doc_id}}/approve",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"approved\": true,\n  \"remark\": \"phase 7 Postman approve\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Post count",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/inventory/counts/{{count_doc_id}}/post",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"posting_date\": \"2026-05-10T00:00:00Z\",\n  \"remark\": \"phase 7 Postman post\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Close count",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/inventory/counts/{{count_doc_id}}/close",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"remark\": \"phase 7 Postman close\"\n}"
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "count_bin",
+      "value": "RM-A02"
+    }
+  ]
+}

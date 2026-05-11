@@ -17,3 +17,9 @@ pub struct BomExplosionPreviewQuery {
     pub quantity: i32,
     pub variant_code: Option<String>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BomExplosionPreviewRequest {
+    pub quantity: i32,
+    pub variant_code: Option<String>,
+}

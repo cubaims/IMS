@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "IMS Phase 7 Inventory Count",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}

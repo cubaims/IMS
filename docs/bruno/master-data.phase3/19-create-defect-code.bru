@@ -1,0 +1,25 @@
+meta {
+  name: 19 Create Defect Code
+  type: http
+  seq: 19
+}
+
+post {
+  url: {{base_url}}/api/master-data/defect-codes
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "defect_code": "{{defect_code}}",
+    "defect_name": "Bruno Scratch",
+    "category": "外观",
+    "severity": "一般",
+    "description": "Bruno defect code"
+  }
+}

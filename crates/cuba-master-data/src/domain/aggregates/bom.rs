@@ -19,9 +19,7 @@
 //! - **`parent_material_id` / `component_material_id` 在 `mdm_materials` 中存在**:
 //!   FK 类约束,留给 repository 层。
 
-use super::super::{
-    BomComponent, BomHeader, BomId, BomStatus, MasterDataDomainError, MaterialId,
-};
+use super::super::{BomComponent, BomHeader, BomId, BomStatus, MasterDataDomainError, MaterialId};
 
 #[derive(Debug, Clone)]
 pub struct Bom {
@@ -66,17 +64,17 @@ impl Bom {
     /// 添加一个组件。
     ///
     /// 不变式:
-    /// - 同一 `(parent, component)` 边不能出现两次 → `BomComponentDuplicated`
+    /// - 同一组件物料在一个 BOM 中只能出现一次 → `BomComponentDuplicated`
     ///
     /// 已经由 `BomComponent::new` 把守的不变式(此处不重复检查):
     /// - `parent_material_id != component_material_id`
     /// - `quantity > 0`
     /// - `unit` 非空
     pub fn add_component(&mut self, component: BomComponent) -> Result<(), MasterDataDomainError> {
-        let dup = self.components.iter().any(|c| {
-            c.parent_material_id == component.parent_material_id
-                && c.component_material_id == component.component_material_id
-        });
+        let dup = self
+            .components
+            .iter()
+            .any(|c| c.component_material_id == component.component_material_id);
         if dup {
             return Err(MasterDataDomainError::BomComponentDuplicated);
         }
@@ -142,30 +140,30 @@ mod tests {
     use std::str::FromStr;
 
     fn d(s: &str) -> Decimal {
-        Decimal::from_str(s).unwrap()
+        Decimal::from_str(s).expect("test fixture should be valid")
     }
     fn mid(s: &str) -> MaterialId {
-        MaterialId::new(s).unwrap()
+        MaterialId::new(s).expect("test fixture should be valid")
     }
     fn fresh_bom() -> Bom {
         let header = BomHeader::new(
-            BomId::new("BOM01").unwrap(),
+            BomId::new("BOM01").expect("test fixture should be valid"),
             "Top BOM",
             mid("M_PARENT"),
             "v1",
         )
-            .unwrap();
+        .expect("test fixture should be valid");
         Bom::new(header)
     }
     fn comp(parent: &str, child: &str, qty: &str) -> BomComponent {
         BomComponent::new(
-            BomId::new("BOM01").unwrap(),
+            BomId::new("BOM01").expect("test fixture should be valid"),
             mid(parent),
             mid(child),
             d(qty),
             "EA",
         )
-            .unwrap()
+        .expect("test fixture should be valid")
     }
 
     #[test]
@@ -190,7 +188,8 @@ mod tests {
     #[test]
     fn add_component_success() {
         let mut bom = fresh_bom();
-        bom.add_component(comp("M_PARENT", "C1", "2")).unwrap();
+        bom.add_component(comp("M_PARENT", "C1", "2"))
+            .expect("test fixture should be valid");
         assert_eq!(bom.component_count(), 1);
     }
 
@@ -198,7 +197,8 @@ mod tests {
     fn add_duplicate_edge_fails() {
         // 计划 §五.7:同一 BOM 内 (parent, component) 边不能重复
         let mut bom = fresh_bom();
-        bom.add_component(comp("M_PARENT", "C1", "2")).unwrap();
+        bom.add_component(comp("M_PARENT", "C1", "2"))
+            .expect("test fixture should be valid");
         let r = bom.add_component(comp("M_PARENT", "C1", "5"));
         assert!(matches!(
             r,
@@ -208,21 +208,28 @@ mod tests {
     }
 
     #[test]
-    fn same_component_under_different_parent_is_allowed() {
-        // 多层 BOM:C1 既是 M_PARENT 的儿子,也是 SUB 的儿子,
-        // 这是合法的(不同的边,不重复)。
+    fn same_component_under_different_parent_is_rejected() {
+        // 当前 DB 唯一约束是 (bom_id, component_material_id),没有 line_no。
+        // 因此同一组件物料不能在同一个 BOM 中重复出现,即使 parent 不同。
         let mut bom = fresh_bom();
-        bom.add_component(comp("M_PARENT", "SUB", "1")).unwrap();
-        bom.add_component(comp("SUB",      "C1",  "2")).unwrap();
-        bom.add_component(comp("M_PARENT", "C1",  "3")).unwrap();
-        assert_eq!(bom.component_count(), 3);
+        bom.add_component(comp("M_PARENT", "SUB", "1"))
+            .expect("test fixture should be valid");
+        bom.add_component(comp("SUB", "C1", "2"))
+            .expect("test fixture should be valid");
+        let r = bom.add_component(comp("M_PARENT", "C1", "3"));
+        assert!(matches!(
+            r,
+            Err(MasterDataDomainError::BomComponentDuplicated)
+        ));
+        assert_eq!(bom.component_count(), 2);
     }
 
     #[test]
     fn activate_with_components_succeeds() {
         let mut bom = fresh_bom();
-        bom.add_component(comp("M_PARENT", "C1", "2")).unwrap();
-        bom.activate().unwrap();
+        bom.add_component(comp("M_PARENT", "C1", "2"))
+            .expect("test fixture should be valid");
+        bom.activate().expect("test fixture should be valid");
         assert!(matches!(bom.header().status, BomStatus::Active));
         assert!(bom.header().is_active);
     }
@@ -230,17 +237,19 @@ mod tests {
     #[test]
     fn activate_is_idempotent() {
         let mut bom = fresh_bom();
-        bom.add_component(comp("M_PARENT", "C1", "2")).unwrap();
-        bom.activate().unwrap();
-        bom.activate().unwrap();
+        bom.add_component(comp("M_PARENT", "C1", "2"))
+            .expect("test fixture should be valid");
+        bom.activate().expect("test fixture should be valid");
+        bom.activate().expect("test fixture should be valid");
         assert!(matches!(bom.header().status, BomStatus::Active));
     }
 
     #[test]
     fn deactivate_clears_active_flags() {
         let mut bom = fresh_bom();
-        bom.add_component(comp("M_PARENT", "C1", "2")).unwrap();
-        bom.activate().unwrap();
+        bom.add_component(comp("M_PARENT", "C1", "2"))
+            .expect("test fixture should be valid");
+        bom.activate().expect("test fixture should be valid");
         bom.deactivate();
         assert!(matches!(bom.header().status, BomStatus::Inactive));
         assert!(!bom.header().is_active);
@@ -249,9 +258,12 @@ mod tests {
     #[test]
     fn remove_component_success() {
         let mut bom = fresh_bom();
-        bom.add_component(comp("M_PARENT", "C1", "2")).unwrap();
-        bom.add_component(comp("M_PARENT", "C2", "3")).unwrap();
-        bom.remove_component(&mid("C1")).unwrap();
+        bom.add_component(comp("M_PARENT", "C1", "2"))
+            .expect("test fixture should be valid");
+        bom.add_component(comp("M_PARENT", "C2", "3"))
+            .expect("test fixture should be valid");
+        bom.remove_component(&mid("C1"))
+            .expect("test fixture should be valid");
         assert_eq!(bom.component_count(), 1);
         assert_eq!(bom.components()[0].component_material_id, mid("C2"));
     }
@@ -259,7 +271,8 @@ mod tests {
     #[test]
     fn remove_unknown_component_fails() {
         let mut bom = fresh_bom();
-        bom.add_component(comp("M_PARENT", "C1", "2")).unwrap();
+        bom.add_component(comp("M_PARENT", "C1", "2"))
+            .expect("test fixture should be valid");
         let r = bom.remove_component(&mid("DOES_NOT_EXIST"));
         assert!(matches!(
             r,
@@ -278,7 +291,8 @@ mod tests {
     #[test]
     fn rename_trims_and_updates() {
         let mut bom = fresh_bom();
-        bom.rename("  New Name  ").unwrap();
+        bom.rename("  New Name  ")
+            .expect("test fixture should be valid");
         assert_eq!(bom.header().bom_name, "New Name");
     }
 
@@ -287,7 +301,7 @@ mod tests {
         // 文档化:聚合假设入参 component 已经被 BomComponent::new 把过自引用关。
         // 即聚合不重复检查,只测试入口处的把关确实在工作。
         let r = BomComponent::new(
-            BomId::new("BOM01").unwrap(),
+            BomId::new("BOM01").expect("test fixture should be valid"),
             mid("X"),
             mid("X"),
             d("1"),

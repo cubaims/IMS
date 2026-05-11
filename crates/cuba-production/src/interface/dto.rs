@@ -77,6 +77,7 @@ pub struct ProductionVarianceListQuery {
 #[derive(Debug, Clone, Serialize)]
 pub struct CreatedProductionOrderResponse {
     pub order_id: String,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -1,0 +1,180 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "IMS MRP and Reporting API",
+    "version": "phase-9",
+    "description": "Phase 9 MRP, inventory reports, materialized view refresh, export, and data consistency routes for IMS."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "tags": [
+    {
+      "name": "MRP"
+    },
+    {
+      "name": "MRP Suggestions"
+    },
+    {
+      "name": "Reports"
+    },
+    {
+      "name": "Report Export"
+    },
+    {
+      "name": "Materialized Views"
+    },
+    {
+      "name": "Data Consistency"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "responses": {
+      "Success": {
+        "description": "OK"
+      },
+      "Csv": {
+        "description": "CSV file",
+        "content": {
+          "text/csv": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Unauthorized"
+      },
+      "Forbidden": {
+        "description": "Forbidden"
+      },
+      "BadRequest": {
+        "description": "Invalid request"
+      }
+    }
+  },
+  "paths": {
+    "/api/mrp/run": {
+      "post": {
+        "tags": ["MRP"],
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {"$ref": "#/components/responses/Success"},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/api/mrp/runs": {
+      "get": {
+        "tags": ["MRP"],
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {"$ref": "#/components/responses/Success"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/api/mrp/runs/{run_id}": {
+      "get": {
+        "tags": ["MRP"],
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "run_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"$ref": "#/components/responses/Success"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/api/mrp/suggestions": {
+      "get": {
+        "tags": ["MRP Suggestions"],
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {"$ref": "#/components/responses/Success"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/api/mrp/suggestions/export": {
+      "get": {
+        "tags": ["MRP Suggestions", "Report Export"],
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {"$ref": "#/components/responses/Csv"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/api/mrp/suggestions/{suggestion_id}": {
+      "get": {
+        "tags": ["MRP Suggestions"],
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "suggestion_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"$ref": "#/components/responses/Success"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/api/mrp/suggestions/{suggestion_id}/confirm": {
+      "post": {
+        "tags": ["MRP Suggestions"],
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "suggestion_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"$ref": "#/components/responses/Success"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/api/mrp/suggestions/{suggestion_id}/cancel": {
+      "post": {
+        "tags": ["MRP Suggestions"],
+        "security": [{"bearerAuth": []}],
+        "parameters": [{"name": "suggestion_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"$ref": "#/components/responses/Success"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
+    "/api/reports/current-stock": {"get": {"tags": ["Reports"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Success"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/inventory-value": {"get": {"tags": ["Reports"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Success"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/quality-status": {"get": {"tags": ["Reports"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Success"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/mrp-shortage": {"get": {"tags": ["Reports"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Success"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/low-stock-alert": {"get": {"tags": ["Reports"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Success"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/stock-by-zone": {"get": {"tags": ["Reports"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Success"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/bin-stock-summary": {"get": {"tags": ["Reports"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Success"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/batch-stock-summary": {"get": {"tags": ["Reports"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Success"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/data-consistency": {"get": {"tags": ["Data Consistency"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Success"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/refresh": {"post": {"tags": ["Materialized Views"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Success"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/current-stock/export": {"get": {"tags": ["Report Export"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Csv"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/inventory-value/export": {"get": {"tags": ["Report Export"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Csv"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/quality-status/export": {"get": {"tags": ["Report Export"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Csv"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/mrp-shortage/export": {"get": {"tags": ["Report Export"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Csv"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/low-stock-alert/export": {"get": {"tags": ["Report Export"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Csv"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/stock-by-zone/export": {"get": {"tags": ["Report Export"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Csv"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/bin-stock-summary/export": {"get": {"tags": ["Report Export"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Csv"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/batch-stock-summary/export": {"get": {"tags": ["Report Export"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Csv"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}},
+    "/api/reports/data-consistency/export": {"get": {"tags": ["Report Export", "Data Consistency"], "security": [{"bearerAuth": []}], "responses": {"200": {"$ref": "#/components/responses/Csv"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}}}}
+  }
+}

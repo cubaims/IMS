@@ -1,0 +1,668 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "IMS Inventory Core API",
+    "version": "phase4",
+    "description": "Phase 4 inventory core endpoints for stock queries, postings, transfers, batches, MAP history, and FEFO preview."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/inventory/current": {
+      "get": {
+        "summary": "List current stock",
+        "x-permission": "inventory:read",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/material_id_query"
+          },
+          {
+            "$ref": "#/components/parameters/bin_code_query"
+          },
+          {
+            "$ref": "#/components/parameters/batch_number_query"
+          },
+          {
+            "$ref": "#/components/parameters/quality_status_query"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          },
+          {
+            "$ref": "#/components/parameters/page_size"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/PageResponse"
+          }
+        }
+      }
+    },
+    "/api/inventory/by-material/{material_id}": {
+      "get": {
+        "summary": "List stock by material",
+        "x-permission": "inventory:read",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/material_id_path"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          },
+          {
+            "$ref": "#/components/parameters/page_size"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/PageResponse"
+          }
+        }
+      }
+    },
+    "/api/inventory/by-bin/{bin_code}": {
+      "get": {
+        "summary": "List stock by bin",
+        "x-permission": "inventory:read",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/bin_code_path"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          },
+          {
+            "$ref": "#/components/parameters/page_size"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/PageResponse"
+          }
+        }
+      }
+    },
+    "/api/inventory/by-batch/{batch_number}": {
+      "get": {
+        "summary": "List stock by batch",
+        "x-permission": "inventory:read",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/batch_number_path"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          },
+          {
+            "$ref": "#/components/parameters/page_size"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/PageResponse"
+          }
+        }
+      }
+    },
+    "/api/inventory/bin-stock": {
+      "get": {
+        "summary": "List bin stock",
+        "x-permission": "inventory:read",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/PageResponse"
+          }
+        }
+      }
+    },
+    "/api/inventory/stock-by-zone": {
+      "get": {
+        "summary": "List stock by zone report",
+        "x-permission": "report:read",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ApiResponse"
+          }
+        }
+      }
+    },
+    "/api/inventory/bin-summary": {
+      "get": {
+        "summary": "List bin stock summary report",
+        "x-permission": "report:read",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ApiResponse"
+          }
+        }
+      }
+    },
+    "/api/inventory/batch-summary": {
+      "get": {
+        "summary": "List batch stock summary report",
+        "x-permission": "report:read",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ApiResponse"
+          }
+        }
+      }
+    },
+    "/api/inventory/transactions": {
+      "get": {
+        "summary": "List inventory transactions",
+        "x-permission": "inventory:history",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/PageResponse"
+          }
+        }
+      }
+    },
+    "/api/inventory/transactions/{transaction_id}": {
+      "get": {
+        "summary": "Get inventory transaction",
+        "x-permission": "inventory:history",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/transaction_id_path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ApiResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/inventory/post": {
+      "post": {
+        "summary": "Post manual inventory transaction",
+        "description": "Supports movement types 101, 261, 701, 702, and 999. Movement type 311 must use /api/inventory/transfer.",
+        "x-permission": "inventory:post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostInventoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ApiResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "409": {
+            "$ref": "#/components/responses/BusinessConflict"
+          }
+        }
+      }
+    },
+    "/api/inventory/transfer": {
+      "post": {
+        "summary": "Transfer inventory between bins",
+        "description": "Executes movement type 311.",
+        "x-permission": "inventory:transfer",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferInventoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ApiResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "409": {
+            "$ref": "#/components/responses/BusinessConflict"
+          }
+        }
+      }
+    },
+    "/api/inventory/pick-batch-fefo": {
+      "post": {
+        "summary": "Preview FEFO batch selection",
+        "x-permission": "batch:read",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PickBatchFefoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ApiResponse"
+          }
+        }
+      }
+    },
+    "/api/inventory/batches": {
+      "get": {
+        "summary": "List batches",
+        "x-permission": "batch:read",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/PageResponse"
+          }
+        }
+      }
+    },
+    "/api/inventory/batches/{batch_number}": {
+      "get": {
+        "summary": "Get batch",
+        "x-permission": "batch:read",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/batch_number_path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ApiResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/inventory/batches/{batch_number}/history": {
+      "get": {
+        "summary": "List batch history",
+        "x-permission": "batch:history",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/batch_number_path"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          },
+          {
+            "$ref": "#/components/parameters/page_size"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/PageResponse"
+          }
+        }
+      }
+    },
+    "/api/inventory/map-history": {
+      "get": {
+        "summary": "List MAP history",
+        "x-permission": "cost:map-read",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/PageResponse"
+          }
+        }
+      }
+    },
+    "/api/inventory/materials/{material_id}/map-history": {
+      "get": {
+        "summary": "List MAP history by material",
+        "x-permission": "cost:map-read",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/material_id_path"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          },
+          {
+            "$ref": "#/components/parameters/page_size"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/PageResponse"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "parameters": {
+      "material_id_path": {
+        "name": "material_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "bin_code_path": {
+        "name": "bin_code",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "batch_number_path": {
+        "name": "batch_number",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "transaction_id_path": {
+        "name": "transaction_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "material_id_query": {
+        "name": "material_id",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "bin_code_query": {
+        "name": "bin_code",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "batch_number_query": {
+        "name": "batch_number",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "quality_status_query": {
+        "name": "quality_status",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "page": {
+        "name": "page",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        }
+      },
+      "page_size": {
+        "name": "page_size",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "default": 20
+        }
+      }
+    },
+    "schemas": {
+      "ApiResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {},
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "Page": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {}
+          },
+          "page": {
+            "type": "integer"
+          },
+          "page_size": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ]
+      },
+      "PostInventoryRequest": {
+        "type": "object",
+        "properties": {
+          "material_id": {
+            "type": "string"
+          },
+          "movement_type": {
+            "type": "string",
+            "enum": [
+              "101",
+              "261",
+              "701",
+              "702",
+              "999"
+            ]
+          },
+          "quantity": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "from_bin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to_bin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "batch_number": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reference_doc": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quality_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": "合格"
+          },
+          "remark": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unit_price": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "material_id",
+          "movement_type",
+          "quantity"
+        ]
+      },
+      "TransferInventoryRequest": {
+        "type": "object",
+        "properties": {
+          "material_id": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "from_bin": {
+            "type": "string"
+          },
+          "to_bin": {
+            "type": "string"
+          },
+          "batch_number": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reference_doc": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remark": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "material_id",
+          "quantity",
+          "from_bin",
+          "to_bin"
+        ]
+      },
+      "PickBatchFefoRequest": {
+        "type": "object",
+        "properties": {
+          "material_id": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "from_zone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quality_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": "合格"
+          }
+        },
+        "required": [
+          "material_id",
+          "quantity"
+        ]
+      }
+    },
+    "responses": {
+      "ApiResponse": {
+        "description": "Standard API response",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiResponse"
+            }
+          }
+        }
+      },
+      "PageResponse": {
+        "description": "Standard paged API response",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/ApiResponse"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Page"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "ValidationError": {
+        "description": "Validation error"
+      },
+      "BusinessConflict": {
+        "description": "Business rule conflict, such as insufficient stock or bin capacity exceeded"
+      },
+      "NotFound": {
+        "description": "Resource not found"
+      }
+    }
+  }
+}

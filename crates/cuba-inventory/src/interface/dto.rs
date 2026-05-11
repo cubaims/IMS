@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::application::{
-    BatchHistoryQuery, BatchQuery, CurrentStockQuery, InventoryTransactionQuery, MapHistoryQuery,
-    PickBatchFefoCommand, PostInventoryCommand, TransferInventoryCommand,
+    BatchHistoryQuery, BatchQuery, CurrentStockQuery, InventoryTransactionQuery,
+    ListInventoryCountsInput, MapHistoryQuery, PageQuery, PickBatchFefoCommand,
+    PostInventoryCommand, TransferInventoryCommand,
 };
 
 use crate::domain::{
@@ -59,6 +60,54 @@ pub struct InventoryCountResponse {
 
     pub remark: Option<String>,
     pub lines: Vec<InventoryCountLineResponse>,
+}
+
+/// 查询盘点单列表请求
+#[derive(Debug, Clone, Deserialize)]
+pub struct ListInventoryCountsRequest {
+    pub status: Option<InventoryCountStatus>,
+    pub count_type: Option<InventoryCountType>,
+    pub count_scope: Option<InventoryCountScope>,
+
+    pub zone_code: Option<String>,
+    pub bin_code: Option<String>,
+    pub material_id: Option<String>,
+    pub batch_number: Option<String>,
+
+    pub created_by: Option<String>,
+
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub date_from: Option<OffsetDateTime>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub date_to: Option<OffsetDateTime>,
+
+    pub page: Option<u32>,
+    pub page_size: Option<u32>,
+    pub sort_by: Option<String>,
+    pub sort_order: Option<String>,
+}
+
+impl From<ListInventoryCountsRequest> for ListInventoryCountsInput {
+    fn from(value: ListInventoryCountsRequest) -> Self {
+        Self {
+            status: value.status,
+            count_type: value.count_type,
+            count_scope: value.count_scope,
+            zone_code: value.zone_code,
+            bin_code: value.bin_code,
+            material_id: value.material_id,
+            batch_number: value.batch_number,
+            created_by: value.created_by,
+            date_from: value.date_from,
+            date_to: value.date_to,
+            page: PageQuery {
+                page: value.page.map(u64::from),
+                page_size: value.page_size.map(u64::from),
+                sort_by: value.sort_by,
+                sort_order: value.sort_order,
+            },
+        }
+    }
 }
 
 impl From<InventoryCount> for InventoryCountResponse {
@@ -175,6 +224,7 @@ pub struct ApproveInventoryCountRequest {
 /// 盘点过账请求
 #[derive(Debug, Clone, Deserialize)]
 pub struct PostInventoryCountRequest {
+    #[serde(with = "time::serde::rfc3339")]
     pub posting_date: OffsetDateTime,
     pub remark: Option<String>,
 }
@@ -285,6 +335,7 @@ pub struct CurrentStockRequest {
     pub zone: Option<String>,
     pub quality_status: Option<String>,
     pub only_available: Option<bool>,
+    pub only_low_stock: Option<bool>,
     pub page: Option<u32>,
     pub page_size: Option<u32>,
 }
@@ -298,6 +349,7 @@ impl From<CurrentStockRequest> for CurrentStockQuery {
             zone: value.zone,
             quality_status: value.quality_status,
             only_available: value.only_available,
+            only_low_stock: value.only_low_stock,
             page: value.page,
             page_size: value.page_size,
         }
@@ -406,21 +458,6 @@ impl From<MapHistoryRequest> for MapHistoryQuery {
             date_to: value.date_to,
             page: value.page,
             page_size: value.page_size,
-        }
-    }
-}
-
-impl From<CreateInventoryCountRequest> for crate::application::CreateInventoryCountInput {
-    fn from(req: CreateInventoryCountRequest) -> Self {
-        Self {
-            count_type: req.count_type,
-            count_scope: req.count_scope,
-            zone_code: req.zone_code,
-            bin_code: req.bin_code,
-            material_id: req.material_id,
-            batch_number: req.batch_number,
-            remark: req.remark,
-            operator: "system".to_string(), // 默认值，后续会从 CurrentUser 自动注入
         }
     }
 }

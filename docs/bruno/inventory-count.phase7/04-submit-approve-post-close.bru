@@ -1,0 +1,28 @@
+meta {
+  name: 04 Submit Approve Post Close
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{base_url}}/api/inventory/counts/{{count_doc_id}}/submit
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "remark": "phase 7 Bruno submit"
+  }
+}
+
+docs {
+  Run approve, post, and close with:
+  POST /api/inventory/counts/{{count_doc_id}}/approve {"approved": true, "remark": "..."}
+  POST /api/inventory/counts/{{count_doc_id}}/post {"posting_date": "2026-05-10T00:00:00Z", "remark": "..."}
+  POST /api/inventory/counts/{{count_doc_id}}/close {"remark": "..."}
+}

@@ -71,4 +71,28 @@ mod tests {
             other => panic!("expected Business, got {:?}", other),
         }
     }
+
+    #[test]
+    fn inspection_limit_invalid_maps_to_business_code() {
+        let app_err: AppError = MasterDataDomainError::InspectionLimitInvalid.into();
+        match app_err {
+            AppError::Business { code, message } => {
+                assert_eq!(code, "INSPECTION_LIMIT_INVALID");
+                assert!(message.contains("上下限"));
+            }
+            other => panic!("expected Business, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bin_capacity_invalid_maps_to_business_code() {
+        let app_err: AppError = MasterDataDomainError::BinCapacityInvalid.into();
+        match app_err {
+            AppError::Business { code, message } => {
+                assert_eq!(code, "BIN_CAPACITY_INVALID");
+                assert!(message.contains("容量"));
+            }
+            other => panic!("expected Business, got {:?}", other),
+        }
+    }
 }

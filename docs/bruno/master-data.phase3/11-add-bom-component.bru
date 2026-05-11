@@ -1,0 +1,28 @@
+meta {
+  name: 11 Add BOM Component
+  type: http
+  seq: 11
+}
+
+post {
+  url: {{base_url}}/api/master-data/boms/{{bom_id}}/components
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "bom_id": "{{bom_id}}",
+    "parent_material_id": "{{finished_material_id}}",
+    "component_material_id": "{{material_id}}",
+    "quantity": "2.00",
+    "unit": "PCS",
+    "bom_level": 1,
+    "scrap_rate": "0.00",
+    "is_critical": true
+  }
+}

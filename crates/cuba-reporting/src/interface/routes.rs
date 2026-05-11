@@ -16,6 +16,10 @@ pub fn routes() -> Router<AppState> {
             get(handlers::inventory_value_export),
         )
         .route("/quality-status", get(handlers::quality_status))
+        .route(
+            "/quality-status/export",
+            get(handlers::quality_status_export),
+        )
         .route("/mrp-shortage", get(handlers::mrp_shortage))
         .route("/mrp-shortage/export", get(handlers::mrp_shortage_export))
         .route("/low-stock-alert", get(handlers::low_stock_alert))
@@ -24,7 +28,12 @@ pub fn routes() -> Router<AppState> {
             get(handlers::low_stock_alert_export),
         )
         .route("/stock-by-zone", get(handlers::stock_by_zone))
+        .route("/stock-by-zone/export", get(handlers::stock_by_zone_export))
         .route("/bin-stock-summary", get(handlers::bin_stock_summary))
+        .route(
+            "/bin-stock-summary/export",
+            get(handlers::bin_stock_summary_export),
+        )
         .route("/batch-stock-summary", get(handlers::batch_stock_summary))
         .route(
             "/batch-stock-summary/export",

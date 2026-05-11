@@ -1,0 +1,27 @@
+meta {
+  name: 06 Create Supplier
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{base_url}}/api/master-data/suppliers
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "supplier_id": "{{supplier_id}}",
+    "supplier_name": "Bruno Supplier",
+    "contact_person": "Tester",
+    "phone": "13800000000",
+    "email": "supplier@example.com",
+    "address": "Test Address",
+    "quality_rating": "A"
+  }
+}

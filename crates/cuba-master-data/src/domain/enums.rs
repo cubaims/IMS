@@ -17,12 +17,13 @@ impl MaterialType {
     }
 
     /// 反向解析 DB 值/中文枚举值。
-    /// 同时容忍英文别名(RAW_MATERIAL / SEMI_FINISHED / FINISHED_GOODS)以备前端传入。
+    /// 同时容忍英文别名(RAW / RAW_MATERIAL / SEMI / SEMI_FINISHED /
+    /// FINISHED / FINISHED_GOODS)以备前端传入。
     pub fn from_db_value(value: &str) -> Option<Self> {
         match value {
-            "原材料" | "RAW_MATERIAL" => Some(Self::RawMaterial),
-            "半成品" | "SEMI_FINISHED" => Some(Self::SemiFinished),
-            "成品" | "FINISHED_GOODS" => Some(Self::FinishedGoods),
+            "原材料" | "RAW" | "RAW_MATERIAL" => Some(Self::RawMaterial),
+            "半成品" | "SEMI" | "SEMI_FINISHED" => Some(Self::SemiFinished),
+            "成品" | "FINISHED" | "FINISHED_GOODS" => Some(Self::FinishedGoods),
             _ => None,
         }
     }
@@ -87,8 +88,8 @@ impl BomStatus {
 
     pub fn from_db_value(value: &str) -> Option<Self> {
         match value {
-            "草稿" | "DRAFT"    => Some(Self::Draft),
-            "生效" | "ACTIVE"   => Some(Self::Active),
+            "草稿" | "DRAFT" => Some(Self::Draft),
+            "生效" | "ACTIVE" => Some(Self::Active),
             "失效" | "INACTIVE" => Some(Self::Inactive),
             _ => None,
         }
@@ -108,6 +109,15 @@ impl DefectSeverity {
             Self::Minor => "一般",
             Self::Major => "严重",
             Self::Critical => "紧急",
+        }
+    }
+
+    pub fn from_db_value(value: &str) -> Option<Self> {
+        match value {
+            "一般" | "MINOR" => Some(Self::Minor),
+            "严重" | "MAJOR" => Some(Self::Major),
+            "紧急" | "CRITICAL" => Some(Self::Critical),
+            _ => None,
         }
     }
 }
@@ -138,7 +148,19 @@ mod tests {
             Some(MaterialType::RawMaterial)
         );
         assert_eq!(
+            MaterialType::from_db_value("RAW"),
+            Some(MaterialType::RawMaterial)
+        );
+        assert_eq!(
+            MaterialType::from_db_value("SEMI"),
+            Some(MaterialType::SemiFinished)
+        );
+        assert_eq!(
             MaterialType::from_db_value("FINISHED_GOODS"),
+            Some(MaterialType::FinishedGoods)
+        );
+        assert_eq!(
+            MaterialType::from_db_value("FINISHED"),
             Some(MaterialType::FinishedGoods)
         );
     }
@@ -159,5 +181,31 @@ mod tests {
         ] {
             assert_eq!(BinStatus::from_db_value(s.as_db_value()), Some(s));
         }
+    }
+
+    #[test]
+    fn bom_status_accepts_english_alias() {
+        assert_eq!(BomStatus::from_db_value("DRAFT"), Some(BomStatus::Draft));
+        assert_eq!(BomStatus::from_db_value("ACTIVE"), Some(BomStatus::Active));
+        assert_eq!(
+            BomStatus::from_db_value("INACTIVE"),
+            Some(BomStatus::Inactive)
+        );
+    }
+
+    #[test]
+    fn defect_severity_accepts_english_alias() {
+        assert_eq!(
+            DefectSeverity::from_db_value("MINOR"),
+            Some(DefectSeverity::Minor)
+        );
+        assert_eq!(
+            DefectSeverity::from_db_value("MAJOR"),
+            Some(DefectSeverity::Major)
+        );
+        assert_eq!(
+            DefectSeverity::from_db_value("CRITICAL"),
+            Some(DefectSeverity::Critical)
+        );
     }
 }

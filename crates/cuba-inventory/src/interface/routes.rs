@@ -14,7 +14,22 @@ pub fn routes() -> Router<AppState> {
         .route("/transfer", post(handlers::transfer_inventory))
         .route("/pick-batch-fefo", post(handlers::pick_batch_fefo))
         .route("/current", get(handlers::list_current_stock))
+        .route(
+            "/by-material/{material_id}",
+            get(handlers::list_current_stock_by_material),
+        )
+        .route(
+            "/by-bin/{bin_code}",
+            get(handlers::list_current_stock_by_bin),
+        )
+        .route(
+            "/by-batch/{batch_number}",
+            get(handlers::list_current_stock_by_batch),
+        )
         .route("/bin-stock", get(handlers::list_bin_stock))
+        .route("/stock-by-zone", get(handlers::stock_by_zone))
+        .route("/bin-summary", get(handlers::bin_summary))
+        .route("/batch-summary", get(handlers::batch_summary))
         .route("/transactions", get(handlers::list_transactions))
         .route(
             "/transactions/{transaction_id}",

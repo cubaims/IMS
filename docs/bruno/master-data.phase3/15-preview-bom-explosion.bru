@@ -1,0 +1,21 @@
+meta {
+  name: 15 Preview BOM Explosion
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{base_url}}/api/master-data/boms/{{bom_id}}/explode-preview
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "quantity": 5
+  }
+}

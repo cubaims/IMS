@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn material_id_trims_whitespace() {
-        let id = MaterialId::new("  M001  ").unwrap();
+        let id = MaterialId::new("  M001  ").expect("test fixture should be valid");
         assert_eq!(id.value(), "M001");
     }
 

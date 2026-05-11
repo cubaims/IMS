@@ -15,21 +15,11 @@ use crate::{
     },
     domain::{
         BatchGenealogy, BatchNumber, BinCode, BomExplosionComponent, BomExplosionResult, BomId,
-        MaterialId, ProductionCompleteResult, ProductionCompleteTransaction, ProductionOrder,
-        ProductionOrderId, ProductionOrderLine, ProductionOrderStatus, ProductionVariance,
-        VariantCode, WorkCenterId,
+        MaterialId, ProductionCompleteResult, ProductionCompleteTransaction, ProductionDomainError,
+        ProductionOrder, ProductionOrderId, ProductionOrderLine, ProductionOrderStatus,
+        ProductionVariance, VariantCode, WorkCenterId,
     },
 };
-
-fn map_sqlx_error(err: sqlx::Error) -> AppError {
-    match err {
-        sqlx::Error::Database(db_err) => {
-            let message = db_err.message().to_string();
-            crate::interface::error_mapping::map_db_error_text(&message)
-        }
-        other => AppError::Database(other),
-    }
-}
 
 #[derive(Clone)]
 pub struct PostgresProductionRepository {
@@ -53,6 +43,25 @@ impl PostgresProductionRepository {
     fn page_offset(page: Option<u32>, page_size: Option<u32>) -> i64 {
         let page = page.unwrap_or(1).max(1);
         ((page - 1) as i64) * Self::page_limit(page_size)
+    }
+
+    fn map_domain_error(error: ProductionDomainError) -> AppError {
+        match error {
+            ProductionDomainError::ProductionQuantityInvalid
+            | ProductionDomainError::ProductionQuantityExceeded => {
+                AppError::Validation(error.to_string())
+            }
+            ProductionDomainError::BomNoComponents => {
+                AppError::Validation("生产订单没有组件行，不能下达".to_string())
+            }
+            ProductionDomainError::ProductionOrderStatusInvalid => {
+                AppError::business("PRODUCTION_ORDER_STATUS_INVALID", error.to_string())
+            }
+            ProductionDomainError::FinishedBatchAlreadyExists => {
+                AppError::business("FINISHED_BATCH_ALREADY_EXISTS", error.to_string())
+            }
+            _ => AppError::business("PRODUCTION_BUSINESS_RULE_VIOLATION", error.to_string()),
+        }
     }
 
     fn row_to_order(row: &sqlx::postgres::PgRow) -> ProductionOrder {
@@ -135,13 +144,13 @@ impl ProductionOrderRepository for PostgresProductionRepository {
         &self,
         command: CreateProductionOrderCommand,
     ) -> AppResult<ProductionOrderId> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin().await.map_err(map_production_db_error)?;
 
         let order_id = Self::new_order_id();
 
-        let variant_exists: Option<(String,)> = sqlx::query_as(
+        let variant: Option<(String, Option<String>)> = sqlx::query_as(
             r#"
-            SELECT variant_code
+            SELECT base_material_id, bom_id
             FROM mdm.mdm_product_variants
             WHERE variant_code = $1
               AND is_active = true
@@ -149,26 +158,52 @@ impl ProductionOrderRepository for PostgresProductionRepository {
         )
         .bind(&command.variant_code)
         .fetch_optional(&mut *tx)
-        .await?;
+        .await
+        .map_err(map_production_db_error)?;
 
-        if variant_exists.is_none() {
+        let Some((variant_material_id, variant_bom_id)) = variant else {
             return Err(AppError::Validation("产品变体不存在或未启用".to_string()));
+        };
+
+        if variant_material_id != command.finished_material_id {
+            return Err(AppError::Validation("产品变体与成品物料不匹配".to_string()));
         }
 
-        let bom_exists: Option<(String,)> = sqlx::query_as(
+        if variant_bom_id.as_deref() != Some(command.bom_id.as_str()) {
+            return Err(AppError::Validation(
+                "产品变体绑定的 BOM 与请求 BOM 不匹配".to_string(),
+            ));
+        }
+
+        let bom: Option<(String, Option<String>)> = sqlx::query_as(
             r#"
-            SELECT bom_id
+            SELECT parent_material_id, variant_code
             FROM mdm.mdm_bom_headers
             WHERE bom_id = $1
               AND status = '生效'
+              AND is_active = true
+              AND valid_from <= CURRENT_DATE
+              AND (valid_to IS NULL OR valid_to >= CURRENT_DATE)
             "#,
         )
         .bind(&command.bom_id)
         .fetch_optional(&mut *tx)
-        .await?;
+        .await
+        .map_err(map_production_db_error)?;
 
-        if bom_exists.is_none() {
+        let Some((bom_material_id, bom_variant_code)) = bom else {
             return Err(AppError::Validation("BOM 不存在或未生效".to_string()));
+        };
+
+        if bom_material_id != command.finished_material_id {
+            return Err(AppError::Validation("BOM 与成品物料不匹配".to_string()));
+        }
+
+        if bom_variant_code
+            .as_deref()
+            .is_some_and(|value| value != command.variant_code)
+        {
+            return Err(AppError::Validation("BOM 与产品变体不匹配".to_string()));
         }
 
         let wc_exists: Option<(String,)> = sqlx::query_as(
@@ -181,7 +216,8 @@ impl ProductionOrderRepository for PostgresProductionRepository {
         )
         .bind(&command.work_center_id)
         .fetch_optional(&mut *tx)
-        .await?;
+        .await
+        .map_err(map_production_db_error)?;
 
         if wc_exists.is_none() {
             return Err(AppError::Validation("工作中心不存在或未启用".to_string()));
@@ -215,12 +251,14 @@ impl ProductionOrderRepository for PostgresProductionRepository {
         .bind(command.planned_end_date)
         .bind(command.created_by.clone())
         .execute(&mut *tx)
-        .await?;
+        .await
+        .map_err(map_production_db_error)?;
 
         let components = sqlx::query(
             r#"
             SELECT *
             FROM wms.fn_bom_explosion($1, $2, $3)
+            WHERE bom_level = 1
             "#,
         )
         .bind(&command.finished_material_id)
@@ -264,10 +302,11 @@ impl ProductionOrderRepository for PostgresProductionRepository {
             .bind(material_id)
             .bind(planned_qty)
             .execute(&mut *tx)
-            .await?;
+            .await
+            .map_err(map_production_db_error)?;
         }
 
-        tx.commit().await?;
+        tx.commit().await.map_err(map_production_db_error)?;
 
         Ok(ProductionOrderId(order_id))
     }
@@ -282,7 +321,8 @@ impl ProductionOrderRepository for PostgresProductionRepository {
         )
         .bind(order_id)
         .fetch_optional(&self.pool)
-        .await?
+        .await
+        .map_err(map_production_db_error)?
         .ok_or_else(|| AppError::NotFound("生产订单不存在".to_string()))?;
 
         Ok(Self::row_to_order(&row))
@@ -322,7 +362,11 @@ impl ProductionOrderRepository for PostgresProductionRepository {
         builder.push(" OFFSET ");
         builder.push_bind(Self::page_offset(query.page, query.page_size));
 
-        let rows = builder.build().fetch_all(&self.pool).await?;
+        let rows = builder
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_production_db_error)?;
 
         Ok(rows.iter().map(Self::row_to_order).collect())
     }
@@ -338,13 +382,14 @@ impl ProductionOrderRepository for PostgresProductionRepository {
         )
         .bind(order_id)
         .fetch_all(&self.pool)
-        .await?;
+        .await
+        .map_err(map_production_db_error)?;
 
         Ok(rows.iter().map(Self::row_to_line).collect())
     }
 
     async fn release(&self, command: ReleaseProductionOrderCommand) -> AppResult<ProductionOrder> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin().await.map_err(map_production_db_error)?;
 
         let row = sqlx::query(
             r#"
@@ -356,17 +401,11 @@ impl ProductionOrderRepository for PostgresProductionRepository {
         )
         .bind(&command.order_id)
         .fetch_optional(&mut *tx)
-        .await?
+        .await
+        .map_err(map_production_db_error)?
         .ok_or_else(|| AppError::NotFound("生产订单不存在".to_string()))?;
 
-        let status_text: String = row.get("status");
-        let status = ProductionOrderStatus::from_db_text(&status_text);
-
-        if !status.can_release() {
-            return Err(AppError::Validation(
-                "只有计划中生产订单可以下达".to_string(),
-            ));
-        }
+        let mut order = Self::row_to_order(&row);
 
         let component_count: i64 = sqlx::query_scalar(
             r#"
@@ -377,28 +416,29 @@ impl ProductionOrderRepository for PostgresProductionRepository {
         )
         .bind(&command.order_id)
         .fetch_one(&mut *tx)
-        .await?;
+        .await
+        .map_err(map_production_db_error)?;
 
-        if component_count == 0 {
-            return Err(AppError::Validation(
-                "生产订单没有组件行，不能下达".to_string(),
-            ));
-        }
+        order
+            .release(component_count as usize)
+            .map_err(Self::map_domain_error)?;
 
         sqlx::query(
             r#"
             UPDATE wms.wms_production_orders_h
-            SET status = '已下达',
+            SET status = $2,
                 actual_start_date = COALESCE(actual_start_date, CURRENT_DATE),
                 updated_at = NOW()
             WHERE order_id = $1
             "#,
         )
         .bind(&command.order_id)
+        .bind(order.status.as_db_text())
         .execute(&mut *tx)
-        .await?;
+        .await
+        .map_err(map_production_db_error)?;
 
-        tx.commit().await?;
+        tx.commit().await.map_err(map_production_db_error)?;
 
         self.find_by_id(&command.order_id).await
     }
@@ -408,36 +448,80 @@ impl ProductionOrderRepository for PostgresProductionRepository {
         order_id: &str,
         _operator: Option<String>,
     ) -> AppResult<ProductionOrder> {
-        sqlx::query(
+        let mut tx = self.pool.begin().await.map_err(map_production_db_error)?;
+
+        let row = sqlx::query(
             r#"
-            UPDATE wms.wms_production_orders_h
-            SET status = '取消',
-                updated_at = NOW()
+            SELECT *
+            FROM wms.wms_production_orders_h
             WHERE order_id = $1
-              AND status IN ('计划中','已下达')
+            FOR UPDATE
             "#,
         )
         .bind(order_id)
-        .execute(&self.pool)
-        .await?;
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_production_db_error)?
+        .ok_or_else(|| AppError::NotFound("生产订单不存在".to_string()))?;
+
+        let mut order = Self::row_to_order(&row);
+        order.cancel().map_err(Self::map_domain_error)?;
+
+        sqlx::query(
+            r#"
+            UPDATE wms.wms_production_orders_h
+            SET status = $2,
+                updated_at = NOW()
+            WHERE order_id = $1
+            "#,
+        )
+        .bind(order_id)
+        .bind(order.status.as_db_text())
+        .execute(&mut *tx)
+        .await
+        .map_err(map_production_db_error)?;
+
+        tx.commit().await.map_err(map_production_db_error)?;
 
         self.find_by_id(order_id).await
     }
 
     async fn close(&self, order_id: &str, _operator: Option<String>) -> AppResult<ProductionOrder> {
-        sqlx::query(
+        let mut tx = self.pool.begin().await.map_err(map_production_db_error)?;
+
+        let row = sqlx::query(
             r#"
-            UPDATE wms.wms_production_orders_h
-            SET status = '完成',
-                actual_finish_date = COALESCE(actual_finish_date, CURRENT_DATE),
-                updated_at = NOW()
+            SELECT *
+            FROM wms.wms_production_orders_h
             WHERE order_id = $1
-              AND status = '完成'
+            FOR UPDATE
             "#,
         )
         .bind(order_id)
-        .execute(&self.pool)
-        .await?;
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_production_db_error)?
+        .ok_or_else(|| AppError::NotFound("生产订单不存在".to_string()))?;
+
+        let mut order = Self::row_to_order(&row);
+        order.close().map_err(Self::map_domain_error)?;
+
+        sqlx::query(
+            r#"
+            UPDATE wms.wms_production_orders_h
+            SET status = $2,
+                actual_finish_date = COALESCE(actual_finish_date, CURRENT_DATE),
+                updated_at = NOW()
+            WHERE order_id = $1
+            "#,
+        )
+        .bind(order_id)
+        .bind(order.status.as_db_text())
+        .execute(&mut *tx)
+        .await
+        .map_err(map_production_db_error)?;
+
+        tx.commit().await.map_err(map_production_db_error)?;
 
         self.find_by_id(order_id).await
     }
@@ -456,7 +540,8 @@ impl BomExplosionRepository for PostgresProductionRepository {
         .bind(Decimal::from(command.quantity))
         .bind(&command.variant_code)
         .fetch_all(&self.pool)
-        .await?;
+        .await
+        .map_err(map_production_db_error)?;
 
         let merge = command.merge_components.unwrap_or(true);
 
@@ -513,7 +598,7 @@ impl ProductionPostingRepository for PostgresProductionRepository {
         &self,
         command: CompleteProductionOrderCommand,
     ) -> AppResult<ProductionCompleteResult> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin().await.map_err(map_production_db_error)?;
 
         let order_row = sqlx::query(
             r#"
@@ -525,27 +610,56 @@ impl ProductionPostingRepository for PostgresProductionRepository {
         )
         .bind(&command.order_id)
         .fetch_optional(&mut *tx)
-        .await?
+        .await
+        .map_err(map_production_db_error)?
         .ok_or_else(|| AppError::NotFound("生产订单不存在".to_string()))?;
 
-        let status_text: String = order_row.get("status");
-        let status = ProductionOrderStatus::from_db_text(&status_text);
+        let mut order = Self::row_to_order(&order_row);
+        let completion = order
+            .start_or_complete(command.completed_qty)
+            .map_err(Self::map_domain_error)?;
 
-        if !status.can_complete() {
+        let output_batch_exists: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM wms.wms_batches
+                WHERE batch_number = $1
+            )
+            "#,
+        )
+        .bind(&command.finished_batch_number)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_production_db_error)?;
+
+        if output_batch_exists {
             return Err(AppError::Validation(
-                "只有已下达或生产中的订单可以完工".to_string(),
+                "成品批次号已存在，不能重复完工".to_string(),
             ));
         }
 
-        let planned_qty: i32 = order_row.get("planned_quantity");
-        let actual_qty: i32 = order_row.get("actual_quantity");
+        let output_bin_valid: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM mdm.mdm_storage_bins
+                WHERE bin_code = $1
+                  AND status IN ('正常','占用')
+                  AND available_capacity >= $2
+            )
+            "#,
+        )
+        .bind(&command.finished_to_bin)
+        .bind(command.completed_qty)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_production_db_error)?;
 
-        if command.completed_qty <= 0 {
-            return Err(AppError::Validation("完工数量必须大于 0".to_string()));
-        }
-
-        if actual_qty + command.completed_qty > planned_qty {
-            return Err(AppError::Validation("完工数量超过计划剩余数量".to_string()));
+        if !output_bin_valid {
+            return Err(AppError::Validation(
+                "成品入库货位不存在、不可用或容量不足".to_string(),
+            ));
         }
 
         let posting_time = command.posting_date.unwrap_or_else(OffsetDateTime::now_utc);
@@ -616,7 +730,8 @@ impl ProductionPostingRepository for PostgresProductionRepository {
         )
         .bind(&command.order_id)
         .fetch_one(&mut *tx)
-        .await?;
+        .await
+        .map_err(map_production_db_error)?;
 
         let variance_id: Option<i64> = sqlx::query_scalar(
             r#"
@@ -627,38 +742,35 @@ impl ProductionPostingRepository for PostgresProductionRepository {
         )
         .bind(&command.order_id)
         .fetch_optional(&mut *tx)
-        .await?;
-
-        let updated_status = if actual_qty + command.completed_qty >= planned_qty {
-            ProductionOrderStatus::Completed
-        } else {
-            ProductionOrderStatus::InProduction
-        };
+        .await
+        .map_err(map_production_db_error)?;
 
         sqlx::query(
             r#"
     UPDATE wms.wms_production_orders_h
     SET status = $2,
-        actual_quantity = LEAST(planned_quantity, actual_quantity + $3),
+        actual_quantity = $3,
         actual_finish_date = CASE
-            WHEN actual_quantity + $3 >= planned_quantity THEN COALESCE(actual_finish_date, CURRENT_DATE)
+            WHEN $4 THEN COALESCE(actual_finish_date, CURRENT_DATE)
             ELSE actual_finish_date
         END,
         updated_at = NOW()
     WHERE order_id = $1
     "#,
         )
-            .bind(&command.order_id)
-            .bind(updated_status.as_db_text())
-            .bind(command.completed_qty)
-            .execute(&mut *tx)
-            .await?;
+        .bind(&command.order_id)
+        .bind(completion.status.as_db_text())
+        .bind(completion.new_completed_qty)
+        .bind(completion.is_fully_completed)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_production_db_error)?;
 
-        tx.commit().await?;
+        tx.commit().await.map_err(map_production_db_error)?;
 
         Ok(ProductionCompleteResult {
             order_id: ProductionOrderId(command.order_id),
-            status: updated_status,
+            status: completion.status,
             completed_qty: command.completed_qty,
             finished_transaction,
             component_transactions,
@@ -682,7 +794,8 @@ impl BatchGenealogyRepository for PostgresProductionRepository {
         )
         .bind(order_id)
         .fetch_all(&self.pool)
-        .await?;
+        .await
+        .map_err(map_production_db_error)?;
 
         Ok(rows.iter().map(Self::row_to_genealogy).collect())
     }
@@ -701,7 +814,8 @@ impl BatchGenealogyRepository for PostgresProductionRepository {
         )
         .bind(batch_number)
         .fetch_all(&self.pool)
-        .await?;
+        .await
+        .map_err(map_production_db_error)?;
 
         Ok(rows.iter().map(Self::row_to_genealogy).collect())
     }
@@ -720,7 +834,8 @@ impl BatchGenealogyRepository for PostgresProductionRepository {
         )
         .bind(batch_number)
         .fetch_all(&self.pool)
-        .await?;
+        .await
+        .map_err(map_production_db_error)?;
 
         Ok(rows.iter().map(Self::row_to_genealogy).collect())
     }
@@ -738,7 +853,8 @@ impl ProductionVarianceRepository for PostgresProductionRepository {
         )
         .bind(order_id)
         .fetch_optional(&self.pool)
-        .await?
+        .await
+        .map_err(map_production_db_error)?
         .ok_or_else(|| AppError::NotFound("生产成本差异不存在".to_string()))?;
 
         Ok(Self::row_to_variance(&row))
@@ -772,7 +888,11 @@ impl ProductionVarianceRepository for PostgresProductionRepository {
         builder.push(" OFFSET ");
         builder.push_bind(Self::page_offset(query.page, query.page_size));
 
-        let rows = builder.build().fetch_all(&self.pool).await?;
+        let rows = builder
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_production_db_error)?;
 
         Ok(rows.iter().map(Self::row_to_variance).collect())
     }

@@ -1,13 +1,16 @@
 //! JWT 认证中间件。
 //!
 //! 解析 Authorization Bearer token，将 cuba_shared::CurrentUser 注入 request extensions。
+//! 该中间件不按请求查库确认用户状态或权限版本。当前认证模型是短期自包含
+//! access token:这里校验签名、issuer、exp、token_type 后信任 claims 内的
+//! roles/permissions,禁用用户和权限撤销在 refresh/login 重新查库时生效。
 
 use axum::{
     extract::{Request, State},
     middleware::Next,
     response::Response,
 };
-use cuba_auth::{verify_access_token, VerifyError};
+use cuba_auth::{VerifyError, verify_access_token};
 use cuba_shared::{AppError, AppState, CurrentUser};
 
 const BEARER: &str = "Bearer ";

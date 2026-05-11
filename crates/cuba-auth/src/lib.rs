@@ -13,9 +13,16 @@ pub mod interface;
 
 // 显式 re-export,避免 `pub use ::*` 的撞名风险。
 pub use application::{
-    verify_access_token, AuthorizeUseCase, GetCurrentUserUseCase, LoginUseCase, VerifyError,
+    ACCESS_TOKEN_INVALIDATION_POLICY, AccessTokenInvalidationPolicy, AuthorizeUseCase,
+    DEFAULT_ACCESS_TOKEN_EXPIRES_SECONDS, GetCurrentUserUseCase, IssuedRefreshToken, LoginUseCase,
+    ParsedRefreshToken, VerifyError, current_user_from_fresh_grants, ensure_refresh_token_usable,
+    ensure_refresh_user_enabled, issue_refresh_token, parse_refresh_token, verify_access_token,
+    verify_refresh_secret,
 };
 pub use domain::{JwtClaims, Role, User};
 pub use infrastructure::PostgresAuthRepository;
-pub use interface::dto::{AuthResponse, LoginRequest, LoginResponse, UserInfoDto};
+pub use interface::dto::{
+    AuthResponse, CurrentUserPermissionsDto, CurrentUserRolesDto, LoginRequest, LoginResponse,
+    RefreshTokenRequest, UserInfoDto,
+};
 pub use interface::{handlers, routes};

@@ -1,10 +1,10 @@
 use std::{fmt, str::FromStr};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 use super::InventoryDomainError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MovementType {
     Receipt101,
     Issue261,
@@ -12,6 +12,25 @@ pub enum MovementType {
     CountGain701,
     CountLoss702,
     Scrap999,
+}
+
+impl Serialize for MovementType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_code())
+    }
+}
+
+impl<'de> Deserialize<'de> for MovementType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::from_str(&value).map_err(de::Error::custom)
+    }
 }
 
 impl MovementType {
@@ -36,6 +55,10 @@ impl MovementType {
 
     pub fn is_transfer(self) -> bool {
         matches!(self, Self::Transfer311)
+    }
+
+    pub fn is_manual_posting(self) -> bool {
+        !self.is_transfer()
     }
 
     pub fn requires_from_bin(self) -> bool {

@@ -1,0 +1,25 @@
+meta {
+  name: 16 Create Product Variant
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{base_url}}/api/master-data/product-variants
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "variant_code": "{{variant_code}}",
+    "variant_name": "Bruno Variant",
+    "base_material_id": "{{finished_material_id}}",
+    "bom_id": "{{bom_id}}",
+    "standard_cost": "120.00"
+  }
+}

@@ -1,0 +1,14 @@
+meta {
+  name: 12 Activate BOM
+  type: http
+  seq: 12
+}
+
+post {
+  url: {{base_url}}/api/master-data/boms/{{bom_id}}/activate
+  body: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

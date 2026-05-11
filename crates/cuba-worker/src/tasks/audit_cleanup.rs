@@ -1,5 +1,6 @@
+use cuba_shared::map_worker_db_error;
 use sqlx::PgPool;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tracing::{error, info};
 
 /// 审计日志清理任务
@@ -24,15 +25,16 @@ pub async fn audit_log_cleanup_task(pool: PgPool, retain_days: u32) {
 }
 
 async fn cleanup_old_logs(pool: &PgPool, retain_days: u32) -> anyhow::Result<u64> {
-    let result = sqlx::query!(
+    let result = sqlx::query(
         r#"
         DELETE FROM sys.sys_audit_log
         WHERE created_at < NOW() - INTERVAL '1 day' * $1
         "#,
-        retain_days as i32
     )
-        .execute(pool)
-        .await?;
+    .bind(retain_days as i32)
+    .execute(pool)
+    .await
+    .map_err(|err| anyhow::anyhow!(map_worker_db_error(err)))?;
 
     Ok(result.rows_affected())
 }

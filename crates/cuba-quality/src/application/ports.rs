@@ -1,9 +1,8 @@
 use crate::domain::{
-    BatchNumber, BatchQuality, BatchQualityHistory, BatchQualityStatus,
-    DefectCode, InspectionCharId, InspectionDecision, InspectionLot,
-    InspectionLotId, InspectionLotStatus, InspectionLotType, InspectionResult,
-    InspectionResultId, MaterialId, QualityNotification, QualityNotificationId,
-    QualityNotificationSeverity, QualityNotificationStatus, QualityResult,
+    BatchNumber, BatchQuality, BatchQualityHistory, BatchQualityStatus, DefectCode,
+    InspectionCharId, InspectionDecision, InspectionLot, InspectionLotId, InspectionLotStatus,
+    InspectionLotType, InspectionResult, InspectionResultId, MaterialId, QualityNotification,
+    QualityNotificationId, QualityNotificationSeverity, QualityNotificationStatus, QualityResult,
 };
 use async_trait::async_trait;
 use cuba_shared::{Page, PageQuery};
@@ -206,10 +205,7 @@ pub trait BatchQualityRepository: Send + Sync {
     ) -> QualityResult<()>;
 
     /// 写入批次质量历史。
-    async fn write_batch_history(
-        &self,
-        history: &BatchQualityHistory,
-    ) -> QualityResult<()>;
+    async fn write_batch_history(&self, history: &BatchQualityHistory) -> QualityResult<()>;
 
     /// 查询批次质量状态。
     async fn get_batch_status(
@@ -257,10 +253,7 @@ pub struct DefectCodeSnapshot {
 #[async_trait]
 pub trait QualityMasterRepository: Send + Sync {
     /// 物料是否存在且启用。
-    async fn material_exists_and_active(
-        &self,
-        material_id: &MaterialId,
-    ) -> QualityResult<bool>;
+    async fn material_exists_and_active(&self, material_id: &MaterialId) -> QualityResult<bool>;
 
     /// 查询检验特性。
     async fn find_inspection_char(

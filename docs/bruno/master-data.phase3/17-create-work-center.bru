@@ -1,0 +1,25 @@
+meta {
+  name: 17 Create Work Center
+  type: http
+  seq: 17
+}
+
+post {
+  url: {{base_url}}/api/master-data/work-centers
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "work_center_id": "{{work_center_id}}",
+    "work_center_name": "Bruno Work Center",
+    "location": "Workshop A",
+    "capacity_per_day": 1000,
+    "efficiency": "100.00"
+  }
+}

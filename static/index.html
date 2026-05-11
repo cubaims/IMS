@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>IMS Workspace 管理后台交互原型</title>
+  <title>IMS Workspace 管理后台</title>
   <style>
     :root {
       --bg: #f5f7fb;
@@ -28,6 +28,12 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
       background: var(--bg);
       color: var(--text);
+    }
+
+    body.auth-pending > .app,
+    body.auth-pending > .modal-mask,
+    body.auth-pending > .toast {
+      visibility: hidden;
     }
 
     .app {
@@ -317,6 +323,42 @@
 
     .form-field.full { grid-column: 1 / -1; }
 
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .detail-field {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: #f8fafc;
+      min-width: 0;
+    }
+
+    .detail-field label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .detail-field span {
+      display: block;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .detail-section {
+      margin-top: 12px;
+    }
+
+    .detail-section table {
+      box-shadow: none;
+    }
+
     .modal-footer {
       display: flex;
       justify-content: flex-end;
@@ -361,12 +403,13 @@
       .top-actions { width: 100%; flex-wrap: wrap; }
       .search-global { min-width: 100%; }
       .grid { grid-template-columns: 1fr; }
+      .detail-grid { grid-template-columns: 1fr; }
       .form-grid { grid-template-columns: 1fr; }
       table { display: block; overflow-x: auto; white-space: nowrap; }
     }
   </style>
 </head>
-<body>
+<body class="auth-pending">
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
@@ -428,8 +471,8 @@
         </div>
         <div class="top-actions">
           <input class="search-global" id="globalSearch" placeholder="全局搜索：物料 / 批次 / 单据 / 用户" />
-          <button class="btn ghost" onclick="refreshPage()">刷新</button>
-          <button class="btn primary" onclick="openModal('快速操作', 'quick')">快速操作</button>
+          <button class="btn ghost" type="button" onclick="refreshPage()">刷新</button>
+          <button class="btn primary" type="button" onclick="openModal('快速操作', 'quick')">快速操作</button>
         </div>
       </div>
 
@@ -437,21 +480,21 @@
     </main>
   </div>
 
-  <div class="modal-mask" id="modalMask">
-    <div class="modal">
+  <div class="modal-mask" id="modalMask" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" tabindex="-1">
       <div class="modal-header">
         <h3 id="modalTitle">操作</h3>
-        <button class="btn ghost small" onclick="closeModal()">关闭</button>
+        <button class="btn ghost small" type="button" onclick="closeModal()">关闭</button>
       </div>
       <div id="modalBody"></div>
       <div class="modal-footer">
-        <button class="btn ghost" onclick="closeModal()">取消</button>
-        <button class="btn primary" onclick="submitModal()">确认</button>
+        <button class="btn ghost" type="button" onclick="closeModal()">取消</button>
+        <button class="btn primary" type="button" onclick="submitModal()">确认</button>
       </div>
     </div>
   </div>
 
-  <div class="toast" id="toast">操作成功</div>
+  <div class="toast" id="toast" role="status" aria-live="polite">操作成功</div>
 
   <script>
     // ==================== API 配置 ====================
@@ -460,73 +503,11 @@
     // ==================== 认证管理 ====================
     let authToken = localStorage.getItem('authToken');
     let currentUser = null;
-
-    async function apiCall(endpoint, options = {}) {
-      const headers = {
-        'Content-Type': 'application/json',
-        ...options.headers
-      };
-      
-      if (authToken) {
-        headers['Authorization'] = `Bearer ${authToken}`;
-      } else {
-        console.error('No authToken available!');
-      }
-
-      console.log('API Call:', endpoint, 'Token:', authToken ? authToken.substring(0, 20) + '...' : 'null');
-
-      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-        ...options,
-        headers
-      });
-
-      // 401 未授权 或 403 禁止访问 都应该重新登录
-      if (response.status === 401 || response.status === 403) {
-        logout();
-        throw new Error('登录已过期，请重新登录');
-      }
-
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data.message || data.error_code || '请求失败');
-      }
-
-      return data;
-    }
-
-    async function login(username, password) {
-      try {
-        const response = await apiCall('/api/auth/login', {
-          method: 'POST',
-          body: JSON.stringify({ username, password })
-        });
-
-        if (response.success && response.data) {
-          authToken = response.data.access_token;
-          currentUser = response.data.user;
-          localStorage.setItem('authToken', authToken);
-          localStorage.setItem('currentUser', JSON.stringify(currentUser));
-          showMainApp();
-          showToast(`欢迎回来，${currentUser.display_name || currentUser.username}！`);
-        } else {
-          throw new Error(response.message || '登录失败');
-        }
-      } catch (error) {
-        showToast(`登录失败: ${error.message}`);
-        console.error('Login error:', error);
-      }
-    }
-
-    function logout() {
-      authToken = null;
-      currentUser = null;
-      localStorage.removeItem('authToken');
-      localStorage.removeItem('currentUser');
-      showLoginPage();
-    }
+    let toastTimer = null;
+    let lastFocusedElement = null;
 
     function showLoginPage() {
+      document.body.className = '';
       document.body.innerHTML = `
         <div style="min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg);">
           <div class="card" style="width: min(420px, 90%); padding: 32px;">
@@ -537,21 +518,21 @@
             </div>
             <form id="loginForm" onsubmit="handleLogin(event)">
               <div class="form-field" style="margin-bottom: 16px;">
-                <label>用户名</label>
+                <label for="username">用户名</label>
                 <input id="username" type="text" placeholder="请输入用户名" required autofocus />
               </div>
               <div class="form-field" style="margin-bottom: 20px;">
-                <label>密码</label>
+                <label for="password">密码</label>
                 <input id="password" type="password" placeholder="请输入密码" required />
               </div>
               <button type="submit" class="btn primary" style="width: 100%;">登录</button>
             </form>
             <div style="margin-top: 16px; text-align: center; font-size: 13px; color: var(--muted);">
-              默认账号: admin / admin123
+              请使用已分配账号登录
             </div>
           </div>
         </div>
-        <div class="toast" id="toast">操作成功</div>
+        <div class="toast" id="toast" role="status" aria-live="polite">操作成功</div>
       `;
     }
 
@@ -563,6 +544,7 @@
     }
 
     function showMainApp() {
+      document.body.className = '';
       document.body.innerHTML = `
   <div class="app">
     <aside class="sidebar">
@@ -625,9 +607,9 @@
         </div>
         <div class="top-actions">
           <input class="search-global" id="globalSearch" placeholder="全局搜索：物料 / 批次 / 单据 / 用户" />
-          <button class="btn ghost" onclick="refreshPage()">刷新</button>
-          <button class="btn primary" onclick="openModal('快速操作', 'quick')">快速操作</button>
-          <button class="btn ghost" onclick="logout()" style="margin-left: 8px;">退出</button>
+          <button class="btn ghost" type="button" onclick="refreshPage()">刷新</button>
+          <button class="btn primary" type="button" onclick="openModal('快速操作', 'quick')">快速操作</button>
+          <button class="btn ghost" type="button" onclick="logout()" style="margin-left: 8px;">退出</button>
         </div>
       </div>
 
@@ -635,21 +617,21 @@
     </main>
   </div>
 
-  <div class="modal-mask" id="modalMask">
-    <div class="modal">
+  <div class="modal-mask" id="modalMask" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" tabindex="-1">
       <div class="modal-header">
         <h3 id="modalTitle">操作</h3>
-        <button class="btn ghost small" onclick="closeModal()">关闭</button>
+        <button class="btn ghost small" type="button" onclick="closeModal()">关闭</button>
       </div>
       <div id="modalBody"></div>
       <div class="modal-footer">
-        <button class="btn ghost" onclick="closeModal()">取消</button>
-        <button class="btn primary" onclick="submitModal()">确认</button>
+        <button class="btn ghost" type="button" onclick="closeModal()">取消</button>
+        <button class="btn primary" type="button" onclick="submitModal()">确认</button>
       </div>
     </div>
   </div>
 
-  <div class="toast" id="toast">操作成功</div>
+  <div class="toast" id="toast" role="status" aria-live="polite">操作成功</div>
       `;
       
       // 重新绑定事件监听器
@@ -662,238 +644,11 @@
       });
 
       document.getElementById('globalSearch').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') showToast(`搜索：${e.target.value}`);
+        if (e.key !== 'Enter') return;
+        runGlobalSearch(e.target.value);
       });
 
       renderPage('dashboard');
-    }
-
-    // ==================== 物料主数据 API ====================
-    let materialsCache = { items: [], page: 1, page_size: 20 };
-    let materialsFilters = { keyword: '', page: 1 };
-
-    async function loadMaterials(page = 1, keyword = '') {
-      try {
-        const params = new URLSearchParams({
-          page: page.toString(),
-          page_size: '20'
-        });
-        if (keyword) params.append('keyword', keyword);
-        
-        const response = await apiCall(`/api/master-data/materials?${params}`);
-        if (response.success && response.data) {
-          materialsCache = response.data;
-          return response.data;
-        }
-        return { items: [], page: 1, page_size: 20 };
-      } catch (error) {
-        showToast(`加载物料失败: ${error.message}`);
-        return { items: [], page: 1, page_size: 20 };
-      }
-    }
-
-    async function getMaterial(materialId) {
-      try {
-        const response = await apiCall(`/api/master-data/materials/${materialId}`);
-        return response.data;
-      } catch (error) {
-        showToast(`加载物料详情失败: ${error.message}`);
-        return null;
-      }
-    }
-
-    async function createMaterial(formData) {
-      try {
-        const response = await apiCall('/api/master-data/materials', {
-          method: 'POST',
-          body: JSON.stringify(formData)
-        });
-        showToast('物料创建成功');
-        return response.data;
-      } catch (error) {
-        showToast(`创建失败: ${error.message}`);
-        throw error;
-      }
-    }
-
-    async function updateMaterial(materialId, formData) {
-      try {
-        const response = await apiCall(`/api/master-data/materials/${materialId}`, {
-          method: 'PATCH',
-          body: JSON.stringify(formData)
-        });
-        showToast('物料更新成功');
-        return response.data;
-      } catch (error) {
-        showToast(`更新失败: ${error.message}`);
-        throw error;
-      }
-    }
-
-    async function renderMaterialsPage() {
-      const data = await loadMaterials(materialsFilters.page, materialsFilters.keyword);
-      
-      const rows = data.items.map(m => [
-        m.material_id,
-        m.material_name,
-        m.material_type || '-',
-        m.base_unit || 'PCS',
-        m.current_stock || 0,
-        m.safety_stock || 0,
-        m.status || '正常'
-      ]);
-
-      const toolbar = `
-        <div class="toolbar">
-          <div class="toolbar-left">
-            <input id="materialSearch" placeholder="搜索物料编码或名称" value="${materialsFilters.keyword}" />
-            <button class="btn ghost" onclick="searchMaterials()">搜索</button>
-          </div>
-          <div class="toolbar-right">
-            <button class="btn ghost" onclick="exportCsv()">导出 CSV</button>
-            <button class="btn primary" onclick="openMaterialModal('create')">新增物料</button>
-          </div>
-        </div>
-      `;
-
-      const pagination = `
-        <div style="display: flex; justify-content: center; align-items: center; gap: 10px; margin-top: 16px;">
-          <button class="btn ghost small" onclick="goToMaterialPage(${data.page - 1})" ${data.page === 1 ? 'disabled' : ''}>上一页</button>
-          <span>第 ${data.page} 页</span>
-          <button class="btn ghost small" onclick="goToMaterialPage(${data.page + 1})" ${data.items.length < data.page_size ? 'disabled' : ''}>下一页</button>
-        </div>
-      `;
-
-      return toolbar + renderTable(
-        ['物料编码','物料名称','类型','单位','当前库存','安全库存','状态'],
-        rows,
-        true,
-        'material'
-      ) + pagination;
-    }
-
-    function searchMaterials() {
-      const keyword = document.getElementById('materialSearch')?.value || '';
-      materialsFilters.keyword = keyword;
-      materialsFilters.page = 1;
-      renderPage('materials');
-    }
-
-    function goToMaterialPage(page) {
-      if (page < 1) return;
-      materialsFilters.page = page;
-      renderPage('materials');
-    }
-
-    async function openMaterialModal(mode, materialId = null) {
-      let material = null;
-      if (mode === 'edit' && materialId) {
-        material = await getMaterial(materialId);
-        if (!material) return;
-      }
-
-      const title = mode === 'create' ? '新增物料' : mode === 'edit' ? '编辑物料' : '物料详情';
-      const isReadonly = mode === 'view';
-      
-      const form = `
-        <div class="form-grid">
-          <div class="form-field">
-            <label>物料编码 *</label>
-            <input id="mat_material_id" value="${material?.material_id || ''}" ${mode === 'edit' || isReadonly ? 'readonly' : ''} required />
-          </div>
-          <div class="form-field">
-            <label>物料名称 *</label>
-            <input id="mat_material_name" value="${material?.material_name || ''}" ${isReadonly ? 'readonly' : ''} required />
-          </div>
-          <div class="form-field">
-            <label>物料类型</label>
-            <select id="mat_material_type" ${isReadonly ? 'disabled' : ''}>
-              <option value="原材料" ${material?.material_type === '原材料' ? 'selected' : ''}>原材料</option>
-              <option value="半成品" ${material?.material_type === '半成品' ? 'selected' : ''}>半成品</option>
-              <option value="成品" ${material?.material_type === '成品' ? 'selected' : ''}>成品</option>
-            </select>
-          </div>
-          <div class="form-field">
-            <label>基础单位</label>
-            <input id="mat_base_unit" value="${material?.base_unit || 'PCS'}" ${isReadonly ? 'readonly' : ''} />
-          </div>
-          <div class="form-field">
-            <label>安全库存</label>
-            <input id="mat_safety_stock" type="number" value="${material?.safety_stock || 0}" ${isReadonly ? 'readonly' : ''} />
-          </div>
-          <div class="form-field">
-            <label>再订购点</label>
-            <input id="mat_reorder_point" type="number" value="${material?.reorder_point || 0}" ${isReadonly ? 'readonly' : ''} />
-          </div>
-          <div class="form-field">
-            <label>标准成本</label>
-            <input id="mat_standard_price" type="number" step="0.01" value="${material?.standard_price || 0}" ${isReadonly ? 'readonly' : ''} />
-          </div>
-          <div class="form-field">
-            <label>移动平均价</label>
-            <input id="mat_map_price" type="number" step="0.01" value="${material?.map_price || 0}" ${isReadonly ? 'readonly' : ''} />
-          </div>
-          <div class="form-field">
-            <label>默认区域</label>
-            <select id="mat_default_zone" ${isReadonly ? 'disabled' : ''}>
-              <option value="RM" ${material?.default_zone === 'RM' ? 'selected' : ''}>RM - 原材料区</option>
-              <option value="SF" ${material?.default_zone === 'SF' ? 'selected' : ''}>SF - 半成品区</option>
-              <option value="FG" ${material?.default_zone === 'FG' ? 'selected' : ''}>FG - 成品区</option>
-              <option value="QC" ${material?.default_zone === 'QC' ? 'selected' : ''}>QC - 质检区</option>
-            </select>
-          </div>
-          <div class="form-field">
-            <label>状态</label>
-            <input value="${material?.status || '正常'}" readonly />
-          </div>
-          <div class="form-field full">
-            <label>描述</label>
-            <textarea id="mat_description" ${isReadonly ? 'readonly' : ''}>${material?.description || ''}</textarea>
-          </div>
-        </div>
-      `;
-
-      document.getElementById('modalTitle').textContent = title;
-      document.getElementById('modalBody').innerHTML = form;
-      
-      const footer = document.querySelector('.modal-footer');
-      if (isReadonly) {
-        footer.innerHTML = '<button class="btn ghost" onclick="closeModal()">关闭</button>';
-      } else {
-        footer.innerHTML = `
-          <button class="btn ghost" onclick="closeModal()">取消</button>
-          <button class="btn primary" onclick="submitMaterialForm('${mode}', '${materialId || ''}')">确认</button>
-        `;
-      }
-      
-      document.getElementById('modalMask').classList.add('show');
-    }
-
-    async function submitMaterialForm(mode, materialId) {
-      const formData = {
-        material_id: document.getElementById('mat_material_id').value,
-        material_name: document.getElementById('mat_material_name').value,
-        material_type: document.getElementById('mat_material_type').value,
-        base_unit: document.getElementById('mat_base_unit').value,
-        safety_stock: parseInt(document.getElementById('mat_safety_stock').value) || 0,
-        reorder_point: parseInt(document.getElementById('mat_reorder_point').value) || 0,
-        standard_price: parseFloat(document.getElementById('mat_standard_price').value) || 0,
-        map_price: parseFloat(document.getElementById('mat_map_price').value) || 0,
-        default_zone: document.getElementById('mat_default_zone').value,
-        description: document.getElementById('mat_description').value
-      };
-
-      try {
-        if (mode === 'create') {
-          await createMaterial(formData);
-        } else if (mode === 'edit') {
-          await updateMaterial(materialId, formData);
-        }
-        closeModal();
-        renderPage('materials');
-      } catch (error) {
-        // 错误已在函数内部处理
-      }
     }
 
     // ==================== 页面元数据 ====================
@@ -924,91 +679,831 @@
       inventoryReports: ['库存报表', '查看当前库存、库存价值、区域库存矩阵和批次汇总。'],
       lowStock: ['低库存预警', '展示低于安全库存的物料和补货建议。'],
       consistency: ['数据一致性检查', '校验物料库存、货位库存、批次库存三方一致。'],
-      users: ['用户管理', '维护用户、状态、角色和登录信息。'],
-      roles: ['角色权限', '维护角色、权限点和用户授权。'],
+      users: ['用户管理', '查看用户、状态、角色和权限数量。'],
+      roles: ['角色权限', '查看角色、权限数量和关联用户数。'],
       audit: ['审计日志', '查看关键数据变更、登录、过账和质量判定记录。'],
       params: ['系统参数', '维护业务参数、质量规则、报表刷新策略和安全配置。']
     };
 
-    const samples = {
-      materials: [
-        ['RM001', 'Raw Material A', 'RAW', 'PCS', '1,280', '100', '合格'],
-        ['TP001', 'Touch Panel', 'SEMI', 'PCS', '420', '50', '合格'],
-        ['FIN001', 'Finished Product A', 'FIN', 'PCS', '86', '20', '合格']
-      ],
-      orders: [
-        ['PO-20260504-0001', 'SUP001', 'RM001', '100', 'OPEN'],
-        ['PO-20260504-0002', 'SUP002', 'TP001', '60', 'RECEIVED'],
-        ['PO-20260504-0003', 'SUP001', 'CG001', '40', 'PARTIAL']
-      ],
-      sales: [
-        ['SO-20260504-0001', 'CUST001', 'FIN001', '20', 'OPEN'],
-        ['SO-20260504-0002', 'CUST002', 'TP001', '12', 'SHIPPED'],
-        ['SO-20260504-0003', 'CUST003', 'FIN001', '30', 'PARTIAL']
-      ],
-      stock: [
-        ['RM001', 'RM-A01', 'BATCH-RM001-001', '合格', '1,000'],
-        ['RM001', 'RM-A02', 'BATCH-RM001-002', '冻结', '280'],
-        ['FIN001', 'FG-A01', 'BATCH-FIN001-001', '合格', '86']
-      ],
-      batches: [
-        ['BATCH-RM001-001', 'RM001', '1,000', '合格', '2026-08-31'],
-        ['BATCH-RM001-002', 'RM001', '280', '冻结', '2026-07-15'],
-        ['BATCH-FIN001-001', 'FIN001', '86', '合格', '2027-01-01']
-      ]
-    };
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      if (!toast) return;
+      toast.textContent = message;
+      toast.classList.add('show');
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 2200);
+    }
+
+    // ==================== 真实 API 页面接入层 ====================
+    let refreshToken = localStorage.getItem('refreshToken');
+    let currentPage = 'dashboard';
+    let modalContext = null;
+    let renderSequence = 0;
+    const pageState = {};
+    const DEFAULT_PAGE_SIZE = 20;
+    const TRUSTED_HTML = Symbol('trustedHtml');
+
+    function html(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function trustedHtml(markup) {
+      const value = String(markup ?? '');
+      return {
+        [TRUSTED_HTML]: true,
+        value,
+        toString() {
+          return value;
+        }
+      };
+    }
+
+    function renderOutput(value) {
+      if (value && typeof value === 'object' && value[TRUSTED_HTML]) return value.value;
+      return html(displayValue(value));
+    }
+
+    function errorMessage(error, fallback = '未知错误') {
+      const raw = typeof error === 'string'
+        ? error
+        : error?.message || error?.error_code || error?.statusText || '';
+      const message = String(raw ?? '').trim();
+      if (message === 'Failed to fetch') {
+        return '无法连接 API 服务，请确认页面来自 cuba-api 服务地址并且后端正在运行。';
+      }
+      if (message) return message;
+      if (error?.status) return `${error.status} ${fallback}`.trim();
+      return fallback;
+    }
+
+    function encodedId(value) {
+      return encodeURIComponent(String(value ?? ''));
+    }
+
+    function decodedId(value) {
+      return decodeURIComponent(value || '');
+    }
+
+    function normalizeDateTime(value) {
+      if (!value) return null;
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
+    }
+
+    function stripEmpty(value) {
+      if (Array.isArray(value)) return value.map(stripEmpty);
+      if (!value || typeof value !== 'object') return value;
+      return Object.fromEntries(
+        Object.entries(value)
+          .filter(([, v]) => v !== '' && v !== undefined)
+          .map(([k, v]) => [k, stripEmpty(v)])
+      );
+    }
+
+    function queryString(params) {
+      const search = new URLSearchParams();
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') search.set(key, value);
+      });
+      const text = search.toString();
+      return text ? `?${text}` : '';
+    }
+
+    function resourceUrl(base, id) {
+      return `${base.replace(/\/$/, '')}/${encodedId(id)}`;
+    }
+
+    function pick(record, keys, fallback = '-') {
+      const keyList = Array.isArray(keys) ? keys : [keys];
+      for (const key of keyList) {
+        if (!key) continue;
+        const value = String(key).split('.').reduce((acc, part) => acc == null ? undefined : acc[part], record);
+        if (value !== undefined && value !== null && value !== '') return value;
+      }
+      return fallback;
+    }
+
+    function displayValue(value) {
+      if (value === null || value === undefined || value === '') return '-';
+      if (typeof value === 'boolean') return value ? '是' : '否';
+      if (typeof value === 'object') return JSON.stringify(value);
+      return String(value);
+    }
+
+    function shortDate(value) {
+      if (!value) return '-';
+      return String(value).replace('T', ' ').replace(/\.\d+Z?$/, '').replace('Z', '');
+    }
+
+    function selectedValue(id) {
+      return document.getElementById(id)?.value || '';
+    }
 
     function statusClass(value) {
-      if (['合格','OPEN','RECEIVED','SHIPPED','COMPLETED','ACTIVE','正常','一致'].includes(value)) return 'green';
-      if (['PARTIAL','PARTIALLY_RECEIVED','PARTIALLY_SHIPPED','RUNNING','COUNTING'].includes(value)) return 'blue';
-      if (['待检','LOW','WARNING','DRAFT','PLANNED','SUBMITTED'].includes(value)) return 'yellow';
-      if (['冻结','报废','FAILED','CANCELLED','异常','不一致'].includes(value)) return 'red';
+      const text = String(value ?? '').toUpperCase();
+      if (['合格','正常','一致','完成','ACTIVE','OPEN','RECEIVED','SHIPPED','COMPLETED','POSTED','CLOSED','QUALIFIED','ACCEPT','CONFIRMED'].includes(String(value)) || ['ACTIVE','OPEN','RECEIVED','SHIPPED','COMPLETED','POSTED','CLOSED','QUALIFIED','ACCEPT','CONFIRMED'].includes(text)) return 'green';
+      if (['部分到货','部分发货','已审批','已下达'].includes(String(value)) || ['PARTIAL','PARTIALLY_RECEIVED','PARTIALLY_SHIPPED','RUNNING','COUNTING','RELEASED','IN_PROGRESS','RESULT_ENTERED','APPROVED'].includes(text)) return 'blue';
+      if (['待检','待到货','草稿','LOW','WARNING','DRAFT','PLANNED','SUBMITTED','CREATED','PENDING','MANUAL'].includes(String(value)) || ['LOW','WARNING','DRAFT','PLANNED','SUBMITTED','CREATED','PENDING','MANUAL'].includes(text)) return 'yellow';
+      if (['冻结','报废','取消','FAILED','CANCELLED','异常','不一致','FROZEN','SCRAPPED','FAIL','CRITICAL','HIGH'].includes(String(value)) || ['FAILED','CANCELLED','FROZEN','SCRAPPED','FAIL','CRITICAL','HIGH'].includes(text)) return 'red';
       return 'gray';
     }
 
     function badge(value) {
-      return `<span class="status ${statusClass(value)}">${value}</span>`;
+      return trustedHtml(`<span class="status ${statusClass(value)}">${html(displayValue(value))}</span>`);
     }
 
-    function toolbar(buttonText = '新增', modalType = 'generic') {
+    async function refreshAccessToken() {
+      if (!refreshToken) return false;
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: refreshToken })
+        });
+        if (!response.ok) return false;
+        const payload = await response.json();
+        if (!payload.success || !payload.data) return false;
+        authToken = payload.data.access_token;
+        refreshToken = payload.data.refresh_token;
+        currentUser = payload.data.user;
+        localStorage.setItem('authToken', authToken);
+        localStorage.setItem('refreshToken', refreshToken);
+        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        return true;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    async function apiCall(endpoint, options = {}) {
+      const headers = {
+        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(options.headers || {})
+      };
+      if (authToken && !options.skipAuth) headers.Authorization = `Bearer ${authToken}`;
+
+      const ignoreForbidden = Boolean(options.ignoreForbidden);
+      const responseType = options.responseType;
+      const requestOptions = { ...options, headers };
+      delete requestOptions.skipAuth;
+      delete requestOptions.skipRefresh;
+      delete requestOptions.ignoreForbidden;
+      delete requestOptions.responseType;
+
+      let response = await fetch(`${API_BASE_URL}${endpoint}`, requestOptions);
+      if ((response.status === 401 || response.status === 403) && !options.skipRefresh && refreshToken) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          headers.Authorization = `Bearer ${authToken}`;
+          response = await fetch(`${API_BASE_URL}${endpoint}`, requestOptions);
+        }
+      }
+
+      if (!response.ok) {
+        const contentType = response.headers.get('content-type') || '';
+        let data = '';
+        try {
+          data = contentType.includes('application/json') ? await response.json() : await response.text();
+        } catch (error) {
+          data = '';
+        }
+        const fallback = `${response.status} ${response.statusText || '请求失败'}`.trim();
+        const message = typeof data === 'string'
+          ? (data.trim() || fallback)
+          : errorMessage(data, fallback || '请求失败');
+        if (response.status === 401 || (response.status === 403 && !ignoreForbidden)) logout();
+        const error = new Error(message);
+        error.status = response.status;
+        error.endpoint = endpoint;
+        throw error;
+      }
+      if (responseType === 'blob') return await response.blob();
+      if (responseType === 'text') return await response.text();
+
+      const contentType = response.headers.get('content-type') || '';
+      let data = '';
+      try {
+        data = contentType.includes('application/json') ? await response.json() : await response.text();
+      } catch (error) {
+        data = '';
+      }
+      return data;
+    }
+
+    async function apiData(endpoint, options = {}) {
+      const payload = await apiCall(endpoint, options);
+      return payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload;
+    }
+
+    async function login(username, password) {
+      try {
+        const response = await apiCall('/api/auth/login', {
+          method: 'POST',
+          skipAuth: true,
+          skipRefresh: true,
+          body: JSON.stringify({ username, password })
+        });
+        if (!response.success || !response.data) throw new Error(response.message || '登录失败');
+        authToken = response.data.access_token;
+        refreshToken = response.data.refresh_token;
+        currentUser = response.data.user;
+        localStorage.setItem('authToken', authToken);
+        localStorage.setItem('refreshToken', refreshToken);
+        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        showMainApp();
+        showToast(`欢迎回来，${currentUser.display_name || currentUser.username}！`);
+      } catch (error) {
+        showToast(`登录失败: ${errorMessage(error)}`);
+      }
+    }
+
+    function logout() {
+      authToken = null;
+      refreshToken = null;
+      currentUser = null;
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('refreshToken');
+      localStorage.removeItem('currentUser');
+      showLoginPage();
+    }
+
+    function poBody(form) {
+      return stripEmpty({
+        supplier_id: form.supplier_id,
+        expected_date: form.expected_date || null,
+        remark: form.remark,
+        lines: [{
+          line_no: 1,
+          material_id: form.material_id,
+          ordered_qty: form.ordered_qty,
+          unit_price: form.unit_price,
+          expected_bin: form.expected_bin
+        }]
+      });
+    }
+
+    function soBody(form) {
+      return stripEmpty({
+        customer_id: form.customer_id,
+        required_date: form.required_date || null,
+        remark: form.remark,
+        lines: [{
+          line_no: 1,
+          material_id: form.material_id,
+          ordered_qty: form.ordered_qty,
+          unit_price: form.unit_price,
+          from_bin: form.from_bin
+        }]
+      });
+    }
+
+    function linesSummary(lines, qtyKey = 'ordered_qty', doneKey = 'received_qty') {
+      if (!Array.isArray(lines) || lines.length === 0) return '-';
+      return lines.map(line => `${line.material_id || '-'} ${line[doneKey] ?? 0}/${line[qtyKey] ?? 0}`).join('<br>');
+    }
+
+    function detailField(label, value, formatter) {
+      const rendered = formatter ? renderOutput(formatter(value)) : html(displayValue(value));
+      return `<div class="detail-field"><label>${html(label)}</label><span>${rendered}</span></div>`;
+    }
+
+    function renderPurchaseOrderDetail(record) {
+      const lines = Array.isArray(record.lines) ? record.lines : [];
+      const totals = lines.reduce((acc, line) => {
+        acc.ordered += Number(line.ordered_qty || 0);
+        acc.received += Number(line.received_qty || 0);
+        acc.open += Number(line.open_qty || 0);
+        return acc;
+      }, { ordered: 0, received: 0, open: 0 });
+      const progress = lines.length ? `${totals.received}/${totals.ordered}` : '-';
+
+      return `
+        <div class="detail-grid">
+          ${detailField('PO 编号', record.po_id)}
+          ${detailField('供应商', record.supplier_id)}
+          ${detailField('状态', record.status, badge)}
+          ${detailField('单据日期', record.po_date)}
+          ${detailField('预计到货', record.expected_date)}
+          ${detailField('收货进度', progress)}
+          ${detailField('金额', record.total_amount)}
+          ${detailField('币种', record.currency)}
+          ${detailField('创建人', record.created_by)}
+        </div>
+        <div class="detail-section">
+          <div class="panel-title"><h2>明细与收货状态</h2><span class="status ${statusClass(totals.open > 0 ? 'PARTIAL' : record.status)}">未收 ${html(totals.open)}</span></div>
+          ${lines.length ? `
+            <table>
+              <thead>
+                <tr>
+                  <th>行号</th>
+                  <th>物料</th>
+                  <th>采购数量</th>
+                  <th>已收</th>
+                  <th>未收</th>
+                  <th>单价</th>
+                  <th>金额</th>
+                  <th>目标货位</th>
+                  <th>行状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${lines.map(line => `
+                  <tr>
+                    <td>${html(displayValue(line.line_no))}</td>
+                    <td>${html(displayValue(line.material_id))}</td>
+                    <td>${html(displayValue(line.ordered_qty))}</td>
+                    <td>${html(displayValue(line.received_qty))}</td>
+                    <td>${html(displayValue(line.open_qty))}</td>
+                    <td>${html(displayValue(line.unit_price))}</td>
+                    <td>${html(displayValue(line.line_amount))}</td>
+                    <td>${html(displayValue(line.expected_bin))}</td>
+                    <td>${badge(line.line_status)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          ` : '<div class="empty">详情接口未返回采购明细，请检查后端响应或当前账号权限。</div>'}
+        </div>
+      `;
+    }
+
+    const pageConfigs = {
+      materials: {
+        endpoint: '/api/master-data/materials',
+        idField: 'material_id',
+        searchParam: 'keyword',
+        columns: [
+          ['物料编码', 'material_id'],
+          ['物料名称', 'material_name'],
+          ['类型', 'material_type'],
+          ['单位', 'base_unit'],
+          ['当前库存', 'current_stock'],
+          ['安全库存', 'safety_stock'],
+          ['状态', 'status', badge]
+        ],
+        fields: [
+          { name: 'material_id', label: '物料编码', required: true, createOnly: true },
+          { name: 'material_name', label: '物料名称', required: true },
+          { name: 'material_type', label: '物料类型', type: 'select', required: true, options: ['原材料', '半成品', '成品'] },
+          { name: 'base_unit', label: '基础单位', defaultValue: 'PCS', required: true },
+          { name: 'default_zone', label: '默认区域', type: 'select', options: ['RM', 'SF', 'FG', 'QC'], defaultValue: 'RM' },
+          { name: 'safety_stock', label: '安全库存', type: 'number', cast: 'int', defaultValue: 0 },
+          { name: 'reorder_point', label: '再订购点', type: 'number', cast: 'int', defaultValue: 0 },
+          { name: 'standard_price', label: '标准成本', type: 'number', cast: 'decimal', defaultValue: 0 },
+          { name: 'map_price', label: '移动平均价', type: 'number', cast: 'decimal', defaultValue: 0, createOnly: true },
+          { name: 'status', label: '状态', type: 'select', options: ['正常', '停用', '冻结'], editOnly: true }
+        ],
+        updateBody: form => stripEmpty({
+          material_name: form.material_name,
+          base_unit: form.base_unit,
+          default_zone: form.default_zone,
+          safety_stock: form.safety_stock,
+          reorder_point: form.reorder_point,
+          standard_price: form.standard_price,
+          status: form.status
+        })
+      },
+      bins: {
+        endpoint: '/api/master-data/bins',
+        idField: 'bin_code',
+        searchParam: 'keyword',
+        columns: [['货位编码','bin_code'], ['区域','zone'], ['类型','bin_type'], ['容量','capacity'], ['已占用','current_occupied'], ['状态','status', badge]],
+        fields: [
+          { name: 'bin_code', label: '货位编码', required: true, createOnly: true },
+          { name: 'zone', label: '区域', type: 'select', options: ['RM', 'SF', 'FG', 'QC'], defaultValue: 'RM' },
+          { name: 'bin_type', label: '类型', type: 'select', options: ['NORMAL', 'HOLD', 'SCRAP'], defaultValue: 'NORMAL' },
+          { name: 'capacity', label: '容量', type: 'number', cast: 'int', defaultValue: 0 },
+          { name: 'status', label: '状态', type: 'select', options: ['正常', '冻结'], editOnly: true },
+          { name: 'notes', label: '备注', type: 'textarea', full: true }
+        ]
+      },
+      suppliers: {
+        endpoint: '/api/master-data/suppliers',
+        idField: 'supplier_id',
+        searchParam: 'keyword',
+        columns: [['供应商编码','supplier_id'], ['名称','supplier_name'], ['联系人','contact_person'], ['电话','phone'], ['邮箱','email'], ['启用', 'is_active', v => badge(v ? 'ACTIVE' : 'INACTIVE')]],
+        fields: [
+          { name: 'supplier_id', label: '供应商编码', required: true, createOnly: true },
+          { name: 'supplier_name', label: '供应商名称', required: true },
+          { name: 'contact_person', label: '联系人' },
+          { name: 'phone', label: '电话' },
+          { name: 'email', label: '邮箱' },
+          { name: 'quality_rating', label: '质量评级' },
+          { name: 'address', label: '地址', type: 'textarea', full: true }
+        ]
+      },
+      customers: {
+        endpoint: '/api/master-data/customers',
+        idField: 'customer_id',
+        searchParam: 'keyword',
+        columns: [['客户编码','customer_id'], ['名称','customer_name'], ['联系人','contact_person'], ['电话','phone'], ['邮箱','email'], ['启用', 'is_active', v => badge(v ? 'ACTIVE' : 'INACTIVE')]],
+        fields: [
+          { name: 'customer_id', label: '客户编码', required: true, createOnly: true },
+          { name: 'customer_name', label: '客户名称', required: true },
+          { name: 'contact_person', label: '联系人' },
+          { name: 'phone', label: '电话' },
+          { name: 'email', label: '邮箱' },
+          { name: 'credit_limit', label: '信用额度', type: 'number', cast: 'decimal' },
+          { name: 'address', label: '地址', type: 'textarea', full: true }
+        ]
+      },
+      bom: {
+        endpoint: '/api/master-data/boms',
+        idField: 'bom_id',
+        searchParam: 'keyword',
+        columns: [['BOM 编码','bom_id'], ['名称','bom_name'], ['成品物料','parent_material_id'], ['变体','variant_code'], ['版本','version'], ['状态','status', badge]],
+        fields: [
+          { name: 'bom_id', label: 'BOM 编码', required: true, createOnly: true },
+          { name: 'bom_name', label: 'BOM 名称', required: true },
+          { name: 'parent_material_id', label: '成品物料', required: true },
+          { name: 'variant_code', label: '产品变体' },
+          { name: 'version', label: '版本', defaultValue: '1.0' },
+          { name: 'base_quantity', label: '基准数量', type: 'number', cast: 'decimal', defaultValue: 1 },
+          { name: 'valid_from', label: '有效起始', type: 'date' },
+          { name: 'valid_to', label: '有效截止', type: 'date' },
+          { name: 'status', label: '状态', type: 'select', options: ['草稿', '生效', '失效'], defaultValue: '草稿' },
+          { name: 'notes', label: '备注', type: 'textarea', full: true }
+        ],
+        actions: [
+          { label: '校验', method: 'POST', endpoint: id => `/api/master-data/boms/${encodedId(id)}/validate`, success: 'BOM 校验完成' }
+        ]
+      },
+      purchaseOrders: {
+        endpoint: '/api/purchase-orders',
+        idField: 'po_id',
+        searchParam: 'material_id',
+        searchPlaceholder: '按物料编码筛选',
+        emptyMessage: '暂无采购订单。若数据库已有采购订单，请确认账号包含 purchase:read，并从 cuba-api 服务地址打开页面。',
+        noEdit: true,
+        forceDetailLoad: true,
+        detailRenderer: renderPurchaseOrderDetail,
+        columns: [['PO 编号','po_id'], ['供应商','supplier_id'], ['供应商名称','supplier_name'], ['单据日期','po_date'], ['预计到货','expected_date'], ['金额','total_amount'], ['状态','status', badge]],
+        fields: [
+          { name: 'supplier_id', label: '供应商', required: true },
+          { name: 'expected_date', label: '预计到货日期', type: 'date' },
+          { name: 'material_id', label: '物料', required: true },
+          { name: 'ordered_qty', label: '采购数量', type: 'number', cast: 'int', defaultValue: 1 },
+          { name: 'unit_price', label: '单价', type: 'number', cast: 'decimal', defaultValue: 0 },
+          { name: 'expected_bin', label: '目标货位' },
+          { name: 'remark', label: '备注', type: 'textarea', full: true }
+        ],
+        createBody: poBody,
+        actions: [
+          { label: '收货', method: 'POST', endpoint: id => `/api/purchase-orders/${encodedId(id)}/receipt`, success: '采购收货完成', fields: [
+            { name: 'line_no', label: '行号', type: 'number', cast: 'int', defaultValue: 1 },
+            { name: 'receipt_qty', label: '收货数量', type: 'number', cast: 'int', defaultValue: 1 },
+            { name: 'batch_number', label: '批次号', required: true },
+            { name: 'to_bin', label: '目标货位' },
+            { name: 'posting_date', label: '过账时间', type: 'datetime-local', cast: 'datetime' },
+            { name: 'remark', label: '备注', type: 'textarea', full: true }
+          ], body: form => stripEmpty({ posting_date: normalizeDateTime(form.posting_date), remark: form.remark, lines: [{ line_no: form.line_no, receipt_qty: form.receipt_qty, batch_number: form.batch_number, to_bin: form.to_bin }] }) },
+          { label: '关闭', method: 'POST', endpoint: id => `/api/purchase-orders/${encodedId(id)}/close`, success: '采购订单已关闭' }
+        ]
+      },
+      purchaseReceipt: null,
+      salesOrders: {
+        endpoint: '/api/sales-orders',
+        idField: 'so_id',
+        searchParam: 'material_id',
+        searchPlaceholder: '按物料编码筛选',
+        columns: [['SO 编号','so_id'], ['客户','customer_id'], ['客户名称','customer_name'], ['单据日期','so_date'], ['需求日期',['required_date','delivery_date']], ['金额','total_amount'], ['状态','status', badge]],
+        fields: [
+          { name: 'customer_id', label: '客户', required: true },
+          { name: 'required_date', label: '需求日期', type: 'date' },
+          { name: 'material_id', label: '物料', required: true },
+          { name: 'ordered_qty', label: '销售数量', type: 'number', cast: 'int', defaultValue: 1 },
+          { name: 'unit_price', label: '单价', type: 'number', cast: 'decimal', defaultValue: 0 },
+          { name: 'from_bin', label: '来源货位' },
+          { name: 'remark', label: '备注', type: 'textarea', full: true }
+        ],
+        createBody: soBody,
+        actions: [
+          { label: '发货', method: 'POST', endpoint: id => `/api/sales-orders/${encodedId(id)}/shipment`, success: '销售发货完成', fields: [
+            { name: 'line_no', label: '行号', type: 'number', cast: 'int', defaultValue: 1 },
+            { name: 'shipment_qty', label: '发货数量', type: 'number', cast: 'int', defaultValue: 1 },
+            { name: 'batch_number', label: '批次号' },
+            { name: 'from_bin', label: '来源货位' },
+            { name: 'pick_strategy', label: '拣配策略', type: 'select', options: ['FEFO', 'MANUAL'], defaultValue: 'FEFO' },
+            { name: 'posting_date', label: '过账时间', type: 'datetime-local', cast: 'datetime' },
+            { name: 'remark', label: '备注', type: 'textarea', full: true }
+          ], body: form => stripEmpty({ posting_date: normalizeDateTime(form.posting_date), pick_strategy: form.pick_strategy, remark: form.remark, lines: [{ line_no: form.line_no, shipment_qty: form.shipment_qty, batch_number: form.batch_number, from_bin: form.from_bin }] }) },
+          { label: '关闭', method: 'POST', endpoint: id => `/api/sales-orders/${encodedId(id)}/close`, success: '销售订单已关闭' }
+        ]
+      },
+      salesShipment: null,
+      productionOrders: {
+        endpoint: '/api/production-orders',
+        idField: 'order_id',
+        searchParam: 'finished_material_id',
+        searchPlaceholder: '按成品物料编码筛选',
+        columns: [['订单号','order_id'], ['变体','variant_code'], ['成品','finished_material_id'], ['计划数量','planned_qty'], ['已完工','completed_qty'], ['工作中心','work_center_id'], ['状态','status', badge]],
+        fields: [
+          { name: 'variant_code', label: '产品变体', required: true },
+          { name: 'finished_material_id', label: '成品物料', required: true },
+          { name: 'bom_id', label: 'BOM', required: true },
+          { name: 'planned_qty', label: '计划数量', type: 'number', cast: 'int', defaultValue: 1 },
+          { name: 'work_center_id', label: '工作中心', required: true },
+          { name: 'planned_start_date', label: '计划开始', type: 'date' },
+          { name: 'planned_end_date', label: '计划结束', type: 'date' },
+          { name: 'remark', label: '备注', type: 'textarea', full: true }
+        ],
+        actions: [
+          { label: '下达', method: 'POST', endpoint: id => `/api/production-orders/${encodedId(id)}/release`, success: '生产订单已下达' },
+          { label: '完工', method: 'POST', endpoint: id => `/api/production-orders/${encodedId(id)}/complete`, success: '生产完工完成', fields: [
+            { name: 'completed_qty', label: '完工数量', type: 'number', cast: 'int', defaultValue: 1 },
+            { name: 'finished_batch_number', label: '成品批次', required: true },
+            { name: 'finished_to_bin', label: '入库货位', required: true },
+            { name: 'pick_strategy', label: '领料策略', type: 'select', options: ['FEFO', 'MANUAL'], defaultValue: 'FEFO' },
+            { name: 'posting_date', label: '过账时间', type: 'datetime-local', cast: 'datetime' },
+            { name: 'remark', label: '备注', type: 'textarea', full: true }
+          ], body: form => stripEmpty({ ...form, posting_date: normalizeDateTime(form.posting_date) }) },
+          { label: '关闭', method: 'POST', endpoint: id => `/api/production-orders/${encodedId(id)}/close`, success: '生产订单已关闭' }
+        ]
+      },
+      productionComplete: null,
+      inventoryCurrent: {
+        endpoint: '/api/inventory/current',
+        idField: ['material_id', 'bin_code', 'batch_number'],
+        searchParam: 'material_id',
+        columns: [['物料','material_id'], ['名称','material_name'], ['货位','bin_code'], ['区域','zone'], ['批次','batch_number'], ['质量状态','quality_status', badge], ['数量','qty']],
+        noRecordActions: true,
+        globalActions: [
+          { label: '手工过账', method: 'POST', endpoint: '/api/inventory/post', success: '库存过账完成', fields: [
+            { name: 'material_id', label: '物料', required: true },
+            { name: 'movement_type', label: '移动类型', type: 'select', options: ['101', '261', '311', '701', '702', '999'], defaultValue: '101' },
+            { name: 'quantity', label: '数量', type: 'number', cast: 'decimal', defaultValue: 1 },
+            { name: 'from_bin', label: '来源货位' },
+            { name: 'to_bin', label: '目标货位' },
+            { name: 'batch_number', label: '批次' },
+            { name: 'quality_status', label: '质量状态', type: 'select', options: ['合格', '待检', '冻结', '报废'], defaultValue: '合格' },
+            { name: 'reference_doc', label: '参考单据' },
+            { name: 'unit_price', label: '单价', type: 'number', cast: 'decimal' },
+            { name: 'posting_date', label: '过账时间', type: 'datetime-local', cast: 'datetime' },
+            { name: 'remark', label: '备注', type: 'textarea', full: true }
+          ], body: form => stripEmpty({ ...form, posting_date: normalizeDateTime(form.posting_date) }) }
+        ]
+      },
+      inventoryLedger: {
+        endpoint: '/api/inventory/transactions',
+        idField: 'transaction_id',
+        searchParam: 'material_id',
+        columns: [['事务号','transaction_id'], ['移动类型','movement_type', badge], ['物料','material_id'], ['数量','quantity'], ['来源货位','from_bin'], ['目标货位','to_bin'], ['批次','batch_number'], ['时间','transaction_date', shortDate]],
+        noCreate: true
+      },
+      binStock: {
+        endpoint: '/api/inventory/bin-stock',
+        idField: ['material_id', 'bin_code', 'batch_number'],
+        searchParam: 'material_id',
+        columns: [['物料','material_id'], ['货位','bin_code'], ['批次','batch_number'], ['质量状态','quality_status', badge], ['数量','qty'], ['更新时间','updated_at', shortDate]],
+        noRecordActions: true
+      },
+      batchStock: {
+        endpoint: '/api/inventory/batches',
+        idField: 'batch_number',
+        searchParam: 'material_id',
+        columns: [['批次','batch_number'], ['物料','material_id'], ['库存','current_stock'], ['当前货位','current_bin'], ['质量状态','quality_status', badge], ['过期日期','expiry_date']],
+        actions: [
+          { label: '冻结', method: 'POST', endpoint: id => `/api/quality/batches/${encodedId(id)}/freeze`, success: '批次已冻结', fields: [{ name: 'reason', label: '冻结原因', required: true }, { name: 'reference_doc', label: '参考单据' }, { name: 'remark', label: '备注', type: 'textarea', full: true }] },
+          { label: '解冻', method: 'POST', endpoint: id => `/api/quality/batches/${encodedId(id)}/unfreeze`, success: '批次已解冻', fields: [{ name: 'target_status', label: '目标状态', type: 'select', options: ['合格', '待检'], defaultValue: '合格' }, { name: 'reason', label: '解冻原因', required: true }, { name: 'reference_doc', label: '参考单据' }, { name: 'remark', label: '备注', type: 'textarea', full: true }] },
+          { label: '报废', method: 'POST', endpoint: id => `/api/quality/batches/${encodedId(id)}/scrap`, success: '批次已报废', fields: [{ name: 'reason', label: '报废原因', required: true }, { name: 'defect_code', label: '不良代码' }, { name: 'reference_doc', label: '参考单据' }, { name: 'remark', label: '备注', type: 'textarea', full: true }] }
+        ]
+      },
+      inventoryCount: {
+        endpoint: '/api/inventory/counts',
+        idField: 'count_doc_id',
+        searchParam: 'material_id',
+        searchPlaceholder: '按物料编码筛选',
+        columns: [['盘点单号','count_doc_id'], ['类型','count_type'], ['范围','count_scope'], ['区域','zone_code'], ['货位','bin_code'], ['物料','material_id'], ['状态','status', badge], ['差异行','difference_line_count']],
+        fields: [
+          { name: 'count_type', label: '盘点类型', type: 'select', options: ['REGULAR', 'CYCLE', 'ADJUSTMENT', 'YEAR_END'], defaultValue: 'REGULAR' },
+          { name: 'count_scope', label: '盘点范围', type: 'select', options: ['BIN', 'MATERIAL', 'ZONE'], defaultValue: 'BIN' },
+          { name: 'zone_code', label: '区域' },
+          { name: 'bin_code', label: '货位' },
+          { name: 'material_id', label: '物料' },
+          { name: 'batch_number', label: '批次' },
+          { name: 'remark', label: '备注', type: 'textarea', full: true }
+        ],
+        actions: [
+          { label: '生成明细', method: 'POST', endpoint: id => `/api/inventory/counts/${encodedId(id)}/generate-lines`, success: '盘点明细已生成' },
+          { label: '录入', method: 'PATCH', endpoint: (id, form) => `/api/inventory/counts/${encodedId(id)}/lines/${encodedId(form.line_no || 1)}`, success: '实盘数量已录入', fields: [
+            { name: 'line_no', label: '行号', type: 'number', cast: 'int', defaultValue: 1 },
+            { name: 'counted_qty', label: '实盘数量', type: 'number', cast: 'decimal', defaultValue: 0 },
+            { name: 'difference_reason', label: '差异原因' },
+            { name: 'remark', label: '备注', type: 'textarea', full: true }
+          ], body: form => stripEmpty({ counted_qty: form.counted_qty, difference_reason: form.difference_reason, remark: form.remark }) },
+          { label: '提交', method: 'POST', endpoint: id => `/api/inventory/counts/${encodedId(id)}/submit`, success: '盘点单已提交', fields: [{ name: 'remark', label: '备注', type: 'textarea', full: true }] },
+          { label: '审核', method: 'POST', endpoint: id => `/api/inventory/counts/${encodedId(id)}/approve`, success: '盘点单已审核', fields: [{ name: 'approved', label: '审核结果', type: 'select', options: ['true', 'false'], defaultValue: 'true' }, { name: 'remark', label: '备注', type: 'textarea', full: true }], body: form => ({ approved: form.approved === 'true', remark: form.remark || null }) },
+          { label: '过账', method: 'POST', endpoint: id => `/api/inventory/counts/${encodedId(id)}/post`, success: '盘点差异已过账', fields: [{ name: 'posting_date', label: '过账时间', type: 'datetime-local', cast: 'datetime', required: true }, { name: 'remark', label: '备注', type: 'textarea', full: true }], body: form => stripEmpty({ posting_date: normalizeDateTime(form.posting_date), remark: form.remark }) },
+          { label: '关闭', method: 'POST', endpoint: id => `/api/inventory/counts/${encodedId(id)}/close`, success: '盘点单已关闭', fields: [{ name: 'remark', label: '备注', type: 'textarea', full: true }] },
+          { label: '取消', method: 'POST', endpoint: id => `/api/inventory/counts/${encodedId(id)}/cancel`, success: '盘点单已取消', fields: [{ name: 'remark', label: '备注', type: 'textarea', full: true }] }
+        ]
+      },
+      qualityInspection: {
+        endpoint: '/api/quality/inspection-lots',
+        idField: 'id',
+        searchParam: 'material_id',
+        columns: [['检验批','id'], ['类型','lot_type'], ['物料','material_id'], ['批次','batch_number'], ['数量','quantity'], ['样本数','sample_qty'], ['状态','status', badge], ['判定','decision', badge]],
+        fields: [
+          { name: 'lot_type', label: '检验类型', type: 'select', options: ['PURCHASE_RECEIPT', 'PRODUCTION_RECEIPT', 'MANUAL'], defaultValue: 'MANUAL' },
+          { name: 'material_id', label: '物料', required: true },
+          { name: 'batch_number', label: '批次', required: true },
+          { name: 'source_transaction_id', label: '来源事务' },
+          { name: 'source_doc', label: '来源单据' },
+          { name: 'quantity', label: '数量', type: 'number', cast: 'decimal', defaultValue: 1 },
+          { name: 'sample_qty', label: '样本数', type: 'number', cast: 'decimal', defaultValue: 1 },
+          { name: 'mark_batch_pending_inspection', label: '批次转待检', type: 'select', options: ['true', 'false'], defaultValue: 'true' },
+          { name: 'remark', label: '备注', type: 'textarea', full: true }
+        ],
+        createBody: form => stripEmpty({ ...form, mark_batch_pending_inspection: form.mark_batch_pending_inspection === 'true' }),
+        actions: [
+          { label: '录结果', method: 'POST', endpoint: id => `/api/quality/inspection-lots/${encodedId(id)}/results`, success: '检验结果已录入', fields: [
+            { name: 'char_id', label: '检验特性', required: true },
+            { name: 'measured_value', label: '测量值', type: 'number', cast: 'decimal' },
+            { name: 'qualitative_result', label: '定性结果', type: 'select', options: ['PASS', 'FAIL', 'NOT_APPLICABLE'], defaultValue: 'PASS' },
+            { name: 'defect_code', label: '不良代码' },
+            { name: 'defect_qty', label: '不良数量', type: 'number', cast: 'decimal' },
+            { name: 'remark', label: '备注', type: 'textarea', full: true }
+          ] },
+          { label: '判定', method: 'POST', endpoint: id => `/api/quality/inspection-lots/${encodedId(id)}/decision`, success: '质量判定完成', fields: [
+            { name: 'decision', label: '判定', type: 'select', options: ['ACCEPT', 'FREEZE', 'SCRAP'], defaultValue: 'ACCEPT' },
+            { name: 'reason', label: '原因', required: true },
+            { name: 'defect_code', label: '不良代码' },
+            { name: 'create_notification', label: '创建通知', type: 'select', options: ['false', 'true'], defaultValue: 'false' },
+            { name: 'notification_severity', label: '严重等级', type: 'select', options: ['', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] },
+            { name: 'remark', label: '备注', type: 'textarea', full: true }
+          ], body: form => stripEmpty({ ...form, create_notification: form.create_notification === 'true' }) }
+        ]
+      },
+      qualityNotification: {
+        endpoint: '/api/quality/notifications',
+        idField: 'id',
+        searchParam: 'material_id',
+        columns: [['通知单','id'], ['物料','material_id'], ['批次','batch_number'], ['严重等级','severity', badge], ['状态','status', badge], ['描述','description'], ['创建时间','created_at', shortDate]],
+        noCreate: true
+      },
+      mrpSuggestions: {
+        endpoint: '/api/mrp/suggestions',
+        exportEndpoint: '/api/mrp/suggestions/export',
+        idField: 'id',
+        searchParam: 'material_id',
+        columns: [['建议号','id'], ['运行号','run_id'], ['物料','material_id'], ['类型','suggestion_type', badge], ['净需求','net_requirement_qty'], ['建议数量','suggested_qty'], ['状态','status', badge], ['需求日期','required_date', shortDate]],
+        noCreate: true,
+        actions: [
+          { label: '确认', method: 'POST', endpoint: id => `/api/mrp/suggestions/${encodedId(id)}/confirm`, success: 'MRP 建议已确认', fields: [{ name: 'remark', label: '备注', type: 'textarea', full: true }] },
+          { label: '取消', method: 'POST', endpoint: id => `/api/mrp/suggestions/${encodedId(id)}/cancel`, success: 'MRP 建议已取消', fields: [{ name: 'reason', label: '取消原因', required: true }] }
+        ]
+      },
+      inventoryReports: {
+        endpoint: '/api/reports/current-stock',
+        exportEndpoint: '/api/reports/current-stock/export',
+        searchParam: 'material_id',
+        columns: [['物料','material_id'], ['名称','material_name'], ['货位','bin_code'], ['批次','batch_number'], ['质量状态','quality_status', badge], ['数量','qty']],
+        noRecordActions: true
+      },
+      lowStock: {
+        endpoint: '/api/reports/low-stock-alert',
+        exportEndpoint: '/api/reports/low-stock-alert/export',
+        searchParam: 'material_id',
+        columns: [['物料','material_id'], ['名称','material_name'], ['类型','material_type'], ['当前库存','current_stock'], ['安全库存','safety_stock'], ['再订购点','reorder_point'], ['预警等级','alert_level', badge]],
+        noRecordActions: true
+      },
+      consistency: {
+        endpoint: '/api/reports/data-consistency',
+        exportEndpoint: '/api/reports/data-consistency/export',
+        searchParam: 'material_id',
+        columns: [['物料','material_id'], ['名称','material_name'], ['物料库存','material_stock'], ['货位库存','bin_stock'], ['批次库存','batch_stock'], ['事务库存','transaction_stock'], ['物料/货位差异','diff_material_vs_bin'], ['物料/批次差异','diff_material_vs_batch'], ['状态','check_status', badge]],
+        noRecordActions: true
+      },
+      users: {
+        endpoint: '/api/system/users',
+        idField: 'user_id',
+        searchParam: 'keyword',
+        columns: [
+          ['用户','username'],
+          ['姓名','full_name'],
+          ['邮箱','email'],
+          ['主角色','role_id', badge],
+          ['全部角色', record => (record.roles || []).join(', ')],
+          ['权限数','permissions_count'],
+          ['状态','is_active', v => badge(v ? 'ACTIVE' : 'INACTIVE')],
+          ['更新时间','updated_at', shortDate]
+        ],
+        noCreate: true,
+        noRecordActions: true
+      },
+      roles: {
+        endpoint: '/api/system/roles',
+        idField: 'role_id',
+        searchParam: 'keyword',
+        columns: [
+          ['角色','role_id'],
+          ['名称','role_name'],
+          ['说明','description'],
+          ['用户数','user_count'],
+          ['权限数','permission_count'],
+          ['创建时间','created_at', shortDate]
+        ],
+        noCreate: true,
+        noRecordActions: true
+      },
+      params: {
+        endpoint: '/api/system/params',
+        idField: 'param_key',
+        searchParam: 'keyword',
+        columns: [['参数键','param_key'], ['参数值','param_value'], ['类型','param_type', badge], ['说明','description'], ['更新人','updated_by'], ['更新时间','updated_at', shortDate]],
+        fields: [
+          { name: 'param_key', label: '参数键', required: true, createOnly: true },
+          { name: 'param_value', label: '参数值', required: true, type: 'textarea', full: true },
+          { name: 'param_type', label: '参数类型', type: 'select', options: ['string', 'number', 'boolean', 'json'], defaultValue: 'string' },
+          { name: 'description', label: '说明', type: 'textarea', full: true }
+        ],
+        createBody: form => stripEmpty(form),
+        updateBody: form => stripEmpty({ param_value: form.param_value, param_type: form.param_type, description: form.description })
+      }
+    };
+
+    pageConfigs.purchaseReceipt = { ...pageConfigs.purchaseOrders, noCreate: true };
+    pageConfigs.salesShipment = { ...pageConfigs.salesOrders, noCreate: true };
+    pageConfigs.productionComplete = { ...pageConfigs.productionOrders, noCreate: true };
+    pageConfigs.inventoryLedger.globalActions = pageConfigs.inventoryCurrent.globalActions;
+
+    function normalizeItems(data, fallbackPage = 1, fallbackPageSize = DEFAULT_PAGE_SIZE) {
+      if (Array.isArray(data)) return { items: data, page: fallbackPage, page_size: fallbackPageSize, total: null };
+      if (data && Array.isArray(data.items)) return { ...data, page: data.page || fallbackPage, page_size: data.page_size || fallbackPageSize };
+      if (data && typeof data === 'object') return { items: [data], page: fallbackPage, page_size: 1, total: 1 };
+      return { items: [], page: fallbackPage, page_size: fallbackPageSize, total: 0 };
+    }
+
+    function renderToolbarFor(page, config) {
+      const state = pageState[page] || {};
+      const createButton = config.noCreate || !config.fields ? '' : `<button class="btn primary" type="button" onclick="openRecordModal('${page}', 'create')">新增</button>`;
+      const globalButtons = (config.globalActions || []).map((action, index) =>
+        `<button class="btn primary" type="button" onclick="openGlobalAction('${page}', ${index})">${html(action.label)}</button>`
+      ).join('');
+      const exportButton = config.exportEndpoint ? `<button class="btn ghost" type="button" onclick="exportCsv()">导出 CSV</button>` : '';
       return `
         <div class="toolbar">
           <div class="toolbar-left">
-            <input placeholder="关键词搜索" oninput="filterTable(this.value)" />
-            <select><option>全部状态</option><option>启用</option><option>停用</option><option>冻结</option></select>
-            <select><option>全部区域</option><option>RM</option><option>SF</option><option>FG</option><option>QC</option></select>
+            <input id="${page}Search" placeholder="${html(config.searchPlaceholder || '输入筛选值')}" value="${html(state.keyword || '')}" onkeydown="if(event.key==='Enter') searchPage('${page}')" />
+            <button class="btn ghost" type="button" onclick="searchPage('${page}')">搜索</button>
           </div>
           <div class="toolbar-right">
-            <button class="btn ghost" onclick="showToast('筛选已应用')">筛选</button>
-            <button class="btn ghost" onclick="exportCsv()">导出 CSV</button>
-            <button class="btn primary" onclick="openModal('${buttonText}', '${modalType}')">${buttonText}</button>
+            <button class="btn ghost" type="button" onclick="refreshPage()">刷新</button>
+            ${exportButton}
+            ${globalButtons}
+            ${createButton}
           </div>
         </div>
       `;
     }
 
-    function renderTable(headers, rows, actions = true, entityType = 'generic') {
-      const actionButtons = {
-        material: (row) => `
-          <button class="btn small ghost" onclick="openMaterialModal('view', '${row[0]}')">详情</button>
-          <button class="btn small primary" onclick="openMaterialModal('edit', '${row[0]}')">编辑</button>
-        `,
-        generic: () => `
-          <button class="btn small ghost" onclick="openModal('查看详情', 'detail')">详情</button>
-          <button class="btn small primary" onclick="showToast('操作已提交')">处理</button>
-        `
-      };
+    function recordId(record, config) {
+      const idField = config.idField;
+      if (Array.isArray(idField)) return idField.map(key => pick(record, key, '')).filter(Boolean).join('|');
+      return pick(record, idField, '');
+    }
 
-      const getActionButtons = actionButtons[entityType] || actionButtons.generic;
+    function renderCell(record, column) {
+      const [, key, formatter] = column;
+      const raw = typeof key === 'function' ? key(record) : pick(record, key);
+      if (formatter) return renderOutput(formatter(raw, record));
+      return html(displayValue(raw));
+    }
 
+    function renderRecordActions(page, config, record) {
+      if (config.noRecordActions) return '';
+      const id = recordId(record, config);
+      const detail = id ? `<button class="btn small ghost" type="button" onclick="openRecordModal('${page}', 'view', '${encodedId(id)}')">详情</button>` : '';
+      const edit = id && config.fields && !config.noCreate && !config.noEdit ? `<button class="btn small primary" type="button" onclick="openRecordModal('${page}', 'edit', '${encodedId(id)}')">编辑</button>` : '';
+      const extra = (config.actions || []).map((action, index) =>
+        `<button class="btn small ghost" type="button" onclick="openRecordAction('${page}', '${encodedId(id)}', ${index})">${html(action.label)}</button>`
+      ).join(' ');
+      return `<td>${detail} ${edit} ${extra}</td>`;
+    }
+
+    function emptyStateMessage(page, config) {
+      const state = pageState[page] || {};
+      if (state.keyword && config.searchParam) {
+        return `当前筛选没有结果：${state.keyword}`;
+      }
+      return config.emptyMessage || '暂无数据。若确认数据库已有记录，请检查当前账号权限和 API 服务地址。';
+    }
+
+    function renderRecordTable(page, config, items) {
+      if (!items.length) return `<div class="empty">${html(emptyStateMessage(page, config))}</div>`;
       return `
         <table id="dataTable">
-          <thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}${actions ? '<th>操作</th>' : ''}</tr></thead>
+          <thead><tr>${config.columns.map(([label]) => `<th>${html(label)}</th>`).join('')}${config.noRecordActions ? '' : '<th>操作</th>'}</tr></thead>
           <tbody>
-            ${rows.map(row => `
+            ${items.map(record => `
               <tr>
-                ${row.map(cell => `<td>${String(cell).match(/OPEN|RECEIVED|SHIPPED|PARTIAL|合格|冻结|报废|待检|ACTIVE|异常|一致|不一致|正常/) ? badge(cell) : cell}</td>`).join('')}
-                ${actions ? `<td>${getActionButtons(row)}</td>` : ''}
+                ${config.columns.map(column => `<td>${renderCell(record, column)}</td>`).join('')}
+                ${renderRecordActions(page, config, record)}
               </tr>
             `).join('')}
           </tbody>
@@ -1016,313 +1511,696 @@
       `;
     }
 
-    function dashboard() {
+    function renderPagination(page, data) {
+      const pageNo = Number(data.page || pageState[page]?.page || 1);
+      const pageSize = Number(data.page_size || DEFAULT_PAGE_SIZE);
+      const total = Number(data.total || 0);
+      const hasTotal = Number.isFinite(total) && total > 0;
+      const hasNext = hasTotal ? pageNo * pageSize < total : (data.items || []).length >= pageSize;
+      return `
+        <div style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:16px;">
+          <button class="btn ghost small" type="button" onclick="goToDataPage('${page}', ${pageNo - 1})" ${pageNo <= 1 ? 'disabled' : ''}>上一页</button>
+          <span>第 ${pageNo} 页${hasTotal ? ` / 共 ${total} 条` : ''}</span>
+          <button class="btn ghost small" type="button" onclick="goToDataPage('${page}', ${pageNo + 1})" ${hasNext ? '' : 'disabled'}>下一页</button>
+        </div>
+      `;
+    }
+
+    async function renderResourcePage(page) {
+      const config = pageConfigs[page];
+      const state = pageState[page] || { page: 1, keyword: '' };
+      pageState[page] = state;
+      const params = { page: state.page || 1, page_size: DEFAULT_PAGE_SIZE };
+      if (state.keyword && config.searchParam) params[config.searchParam] = state.keyword;
+      let data;
+      try {
+        data = normalizeItems(await apiData(`${config.endpoint}${queryString(params)}`), params.page, params.page_size);
+      } catch (error) {
+        throw error;
+      }
+      state.items = data.items;
+      return renderToolbarFor(page, config) + renderRecordTable(page, config, data.items) + renderPagination(page, data);
+    }
+
+    function searchPage(page) {
+      const input = document.getElementById(`${page}Search`);
+      const nextState = { ...(pageState[page] || {}), keyword: input?.value || '', page: 1 };
+      if (page === 'audit') {
+        nextState.category = selectedValue('auditCategory');
+        nextState.module = selectedValue('auditModule');
+      }
+      pageState[page] = nextState;
+      renderPage(page);
+    }
+
+    function runGlobalSearch(rawKeyword) {
+      const keyword = String(rawKeyword || '').trim();
+      if (!keyword) {
+        showToast('请输入搜索关键词');
+        return;
+      }
+
+      const config = pageConfigs[currentPage];
+      if (config?.searchParam) {
+        pageState[currentPage] = { ...(pageState[currentPage] || {}), keyword, page: 1 };
+        renderPage(currentPage);
+        return;
+      }
+
+      if (currentPage === 'batchTrace' || currentPage === 'serialTrace') {
+        const input = document.getElementById('traceValue');
+        if (input) input.value = keyword;
+        runTrace(currentPage === 'batchTrace' ? 'batch' : 'serial');
+        return;
+      }
+
+      pageState.inventoryCurrent = { ...(pageState.inventoryCurrent || {}), keyword, page: 1 };
+      renderPage('inventoryCurrent');
+    }
+
+    function goToDataPage(page, pageNo) {
+      if (pageNo < 1) return;
+      pageState[page] = { ...(pageState[page] || {}), page: pageNo };
+      renderPage(page);
+    }
+
+    function findCachedRecord(page, id) {
+      const config = pageConfigs[page];
+      return (pageState[page]?.items || []).find(item => recordId(item, config) === id);
+    }
+
+    async function loadRecord(page, id, options = {}) {
+      const config = pageConfigs[page];
+      const shouldUseCache = !(options.mode === 'view' && config.forceDetailLoad);
+      const cached = shouldUseCache ? findCachedRecord(page, id) : null;
+      if (cached) return cached;
+      return await apiData(resourceUrl(config.endpoint, id));
+    }
+
+    function fieldsForMode(config, mode) {
+      return (config.fields || []).filter(field => {
+        if (field.createOnly && mode !== 'create') return false;
+        if (field.editOnly && mode === 'create') return false;
+        return true;
+      });
+    }
+
+    function renderFormFields(fields, record = {}, readonly = false) {
+      return `<div class="form-grid">${fields.map(field => {
+        const value = record[field.name] ?? field.defaultValue ?? '';
+        const id = `field_${field.name}`;
+        const label = `${html(field.label)}${field.required ? ' *' : ''}`;
+        const disabled = readonly || field.readonly ? 'disabled' : '';
+        const common = `id="${id}" name="${html(field.name)}" ${disabled} ${field.required ? 'required' : ''}`;
+        let input = '';
+        if (field.type === 'select') {
+          input = `<select ${common}>${(field.options || []).map(option => `<option value="${html(option)}" ${String(value) === String(option) ? 'selected' : ''}>${html(option || '空')}</option>`).join('')}</select>`;
+        } else if (field.type === 'textarea') {
+          input = `<textarea ${common}>${html(value)}</textarea>`;
+        } else {
+          input = `<input type="${field.type || 'text'}" value="${html(value)}" ${common} />`;
+        }
+        return `<div class="form-field ${field.full ? 'full' : ''}"><label for="${id}">${label}</label>${input}</div>`;
+      }).join('')}</div>`;
+    }
+
+    function renderModalForm(fields, record = {}, readonly = false) {
+      return `<form id="modalForm" onsubmit="event.preventDefault(); submitModal();">${renderFormFields(fields, record, readonly)}</form>`;
+    }
+
+    function validateModalForm() {
+      const form = document.getElementById('modalForm');
+      if (!form) return true;
+      if (form.checkValidity()) return true;
+      form.reportValidity();
+      return false;
+    }
+
+    function castField(value, field) {
+      if (value === '') return '';
+      if (field.cast === 'int') return parseInt(value, 10) || 0;
+      if (field.cast === 'decimal') return Number(value);
+      if (field.cast === 'datetime') return normalizeDateTime(value);
+      return value;
+    }
+
+    function collectFields(fields) {
+      const form = {};
+      fields.forEach(field => {
+        const element = document.getElementById(`field_${field.name}`);
+        if (!element) return;
+        form[field.name] = castField(element.value, field);
+      });
+      return stripEmpty(form);
+    }
+
+    function setModalFooter(htmlText) {
+      const footer = document.querySelector('.modal-footer');
+      if (footer) footer.innerHTML = htmlText;
+    }
+
+    function openModalMask() {
+      const mask = document.getElementById('modalMask');
+      const dialog = mask?.querySelector('.modal');
+      if (!mask || !dialog) return;
+      lastFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      mask.classList.add('show');
+      mask.setAttribute('aria-hidden', 'false');
+      requestAnimationFrame(() => {
+        const firstFocusable = dialog.querySelector('input, select, textarea, button, [href], [tabindex]:not([tabindex="-1"])');
+        (firstFocusable || dialog).focus();
+      });
+    }
+
+    async function openRecordModal(page, mode, encoded) {
+      const config = pageConfigs[page];
+      const id = decodedId(encoded);
+      const record = mode === 'create' ? {} : await loadRecord(page, id, { mode });
+      const fields = fieldsForMode(config, mode);
+      const title = mode === 'create' ? pageMeta[page][0].replace('管理', '') + '新增' : mode === 'edit' ? '编辑记录' : '记录详情';
+      modalContext = { kind: 'record', page, mode, id, fields };
+      document.getElementById('modalTitle').textContent = title;
+      document.getElementById('modalBody').innerHTML = mode === 'view' && config.detailRenderer
+        ? config.detailRenderer(record)
+        : renderModalForm(fields, record, mode === 'view');
+      setModalFooter(mode === 'view'
+        ? '<button class="btn ghost" type="button" onclick="closeModal()">关闭</button>'
+        : '<button class="btn ghost" type="button" onclick="closeModal()">取消</button><button class="btn primary" type="submit" form="modalForm">确认</button>'
+      );
+      openModalMask();
+    }
+
+    function openGlobalAction(page, index) {
+      const action = pageConfigs[page].globalActions[index];
+      openActionModal({ kind: 'globalAction', page, action, id: null });
+    }
+
+    function openRecordAction(page, encoded, index) {
+      const action = pageConfigs[page].actions[index];
+      openActionModal({ kind: 'recordAction', page, action, id: decodedId(encoded) });
+    }
+
+    function openActionModal(context) {
+      const fields = context.action.fields || [];
+      modalContext = { ...context, fields };
+      document.getElementById('modalTitle').textContent = context.action.label;
+      document.getElementById('modalBody').innerHTML = fields.length
+        ? renderModalForm(fields)
+        : `<div class="empty">确认执行：${html(context.action.label)}</div>`;
+      setModalFooter(fields.length
+        ? '<button class="btn ghost" type="button" onclick="closeModal()">取消</button><button class="btn primary" type="submit" form="modalForm">确认</button>'
+        : '<button class="btn ghost" type="button" onclick="closeModal()">取消</button><button class="btn primary" type="button" onclick="submitModal()">确认</button>'
+      );
+      openModalMask();
+    }
+
+    async function submitModal() {
+      if (!modalContext) {
+        closeModal();
+        showToast('提交成功');
+        return;
+      }
+
+      if (!validateModalForm()) return;
+
+      try {
+        if (modalContext.kind === 'record') {
+          const config = pageConfigs[modalContext.page];
+          const form = collectFields(modalContext.fields);
+          const isCreate = modalContext.mode === 'create';
+          const endpoint = isCreate ? config.endpoint : resourceUrl(config.endpoint, modalContext.id);
+          const method = isCreate ? 'POST' : 'PATCH';
+          if (!isCreate && config.noEdit) throw new Error('当前页面未提供更新接口');
+          const bodyBuilder = isCreate ? config.createBody : config.updateBody;
+          const body = bodyBuilder ? bodyBuilder(form) : form;
+          await apiData(endpoint, { method, body: JSON.stringify(body) });
+          showToast(isCreate ? '创建成功' : '更新成功');
+        } else {
+          const action = modalContext.action;
+          const form = collectFields(modalContext.fields);
+          const endpoint = typeof action.endpoint === 'function' ? action.endpoint(modalContext.id, form) : action.endpoint;
+          const body = action.body ? action.body(form) : form;
+          await apiData(endpoint, { method: action.method || 'POST', body: JSON.stringify(body || {}) });
+          showToast(action.success || '操作完成');
+        }
+        closeModal();
+        renderPage(currentPage);
+      } catch (error) {
+        showToast(`操作失败: ${errorMessage(error)}`);
+      }
+    }
+
+    function closeModal() {
+      modalContext = null;
+      const mask = document.getElementById('modalMask');
+      if (mask) {
+        mask.classList.remove('show');
+        mask.setAttribute('aria-hidden', 'true');
+      }
+      if (lastFocusedElement?.isConnected) lastFocusedElement.focus();
+      lastFocusedElement = null;
+    }
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && document.getElementById('modalMask')?.classList.contains('show')) {
+        closeModal();
+      }
+    });
+
+    function openModal(title, type) {
+      modalContext = null;
+      document.getElementById('modalTitle').textContent = title;
+      if (type === 'quick') {
+        document.getElementById('modalBody').innerHTML = `<div class="grid">
+          <button class="btn success" type="button" onclick="renderPage('purchaseReceipt'); closeModal()">采购收货 101</button>
+          <button class="btn warning" type="button" onclick="renderPage('salesShipment'); closeModal()">销售发货 261</button>
+          <button class="btn primary" type="button" onclick="renderPage('productionComplete'); closeModal()">生产完工</button>
+          <button class="btn danger" type="button" onclick="renderPage('batchStock'); closeModal()">批次处理</button>
+        </div>`;
+      } else {
+        document.getElementById('modalBody').innerHTML = '<div class="empty">该操作已迁移到当前页面的真实接口按钮。</div>';
+      }
+      setModalFooter('<button class="btn ghost" type="button" onclick="closeModal()">关闭</button>');
+      openModalMask();
+    }
+
+    async function refreshPage() {
+      await renderPage(currentPage);
+      showToast('页面数据已刷新');
+    }
+
+    async function exportCsv() {
+      const config = pageConfigs[currentPage];
+      if (!config?.exportEndpoint) {
+        showToast('当前页面未提供导出接口');
+        return;
+      }
+      try {
+        const state = pageState[currentPage] || {};
+        const params = { format: 'csv', include_headers: true };
+        if (state.keyword && config.searchParam) params[config.searchParam] = state.keyword;
+        const blob = await apiCall(`${config.exportEndpoint}${queryString(params)}`, { responseType: 'blob' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${currentPage}.csv`;
+        link.click();
+        URL.revokeObjectURL(url);
+        showToast('CSV 已导出');
+      } catch (error) {
+        showToast(`导出失败: ${errorMessage(error)}`);
+      }
+    }
+
+    async function refreshReports() {
+      await apiData('/api/reports/refresh', { method: 'POST', body: JSON.stringify({ mode: 'all', concurrently: true }) });
+      showToast('报表物化视图已刷新');
+      renderPage(currentPage);
+    }
+
+    async function renderDashboard() {
+      const emptyPage = () => ({ items: [], page: 1, page_size: DEFAULT_PAGE_SIZE, total: 0 });
+      const safePage = async (endpoint) => {
+        try {
+          return { ...normalizeItems(await apiData(endpoint, { ignoreForbidden: true })), ok: true };
+        } catch (error) {
+          return { ...emptyPage(), ok: false, error: error.message };
+        }
+      };
+      const countOf = (page) => Number(page.total || 0) || (page.items || []).length;
+      const [stockPage, lowPage, poPage, soPage, lotsPage] = await Promise.all([
+        safePage('/api/reports/current-stock?page=1&page_size=1'),
+        safePage('/api/reports/low-stock-alert?page=1&page_size=20'),
+        safePage('/api/purchase-orders?page=1&page_size=5'),
+        safePage('/api/sales-orders?page=1&page_size=5'),
+        safePage('/api/quality/inspection-lots?page=1&page_size=5')
+      ]);
+      const tasks = [
+        ...poPage.items.map(item => ({ task_type: '采购订单', doc_id: item.po_id, target: item.supplier_id, status: item.status })),
+        ...soPage.items.map(item => ({ task_type: '销售订单', doc_id: item.so_id, target: item.customer_id, status: item.status })),
+        ...lotsPage.items.map(item => ({ task_type: '质量检验', doc_id: item.id, target: item.batch_number, status: item.status }))
+      ].slice(0, 8);
+      const failedCount = [stockPage, lowPage, poPage, soPage, lotsPage].filter(page => !page.ok).length;
+      const dashboardStatus = failedCount ? `${failedCount} 个接口不可用或无权限，已跳过。` : '全部接口已加载。';
+      const taskTableConfig = {
+        columns: [['任务类型','task_type'], ['单据','doc_id'], ['对象','target'], ['状态','status', badge]],
+        noRecordActions: true
+      };
       return `
         <div class="grid">
-          <div class="card metric"><div class="label">当前库存行</div><div class="value">1,286</div><div class="trend">较昨日 +6.2%</div></div>
-          <div class="card metric"><div class="label">今日入库</div><div class="value">32</div><div class="trend">101 入库完成</div></div>
-          <div class="card metric"><div class="label">今日出库</div><div class="value">18</div><div class="trend">261 出库完成</div></div>
-          <div class="card metric"><div class="label">低库存预警</div><div class="value">7</div><div class="trend" style="color:var(--warning)">需补货确认</div></div>
+          <div class="card metric"><div class="label">库存行</div><div class="value">${countOf(stockPage)}</div><div class="trend">来自 /api/reports/current-stock</div></div>
+          <div class="card metric"><div class="label">低库存预警</div><div class="value">${countOf(lowPage)}</div><div class="trend" style="color:var(--warning)">来自报表接口</div></div>
+          <div class="card metric"><div class="label">待处理采购</div><div class="value">${countOf(poPage)}</div><div class="trend">采购订单接口</div></div>
+          <div class="card metric"><div class="label">待处理销售</div><div class="value">${countOf(soPage)}</div><div class="trend">销售订单接口</div></div>
         </div>
         <div class="split">
           <div class="card">
-            <div class="panel-title"><h2>待处理任务</h2><button class="btn small ghost">查看全部</button></div>
-            ${renderTable(['任务类型','单据','对象','状态'], [
-              ['采购收货','PO-20260504-0001','RM001','OPEN'],
-              ['销售发货','SO-20260504-0001','FIN001','OPEN'],
-              ['质量判定','IL-20260504-0001','BATCH-RM001-002','待检'],
-              ['盘点审核','COUNT-20260504-0001','RM-A01','SUBMITTED']
-            ])}
+            <div class="panel-title"><h2>待处理任务</h2><button class="btn small ghost" type="button" onclick="refreshPage()">刷新</button></div>
+            ${tasks.length ? renderRecordTable('dashboardTasks', taskTableConfig, tasks) : '<div class="empty">暂无待处理任务，或当前账号权限不足。</div>'}
           </div>
           <div class="card">
-            <div class="panel-title"><h2>最近动态</h2></div>
+            <div class="panel-title"><h2>系统入口</h2></div>
             <div class="timeline">
-              <div class="timeline-item"><strong>101 入库完成</strong><span>RM001 / BATCH-RM001-001 / +100 PCS</span></div>
-              <div class="timeline-item"><strong>批次被冻结</strong><span>BATCH-RM001-002 / 质量通知 QN-0001</span></div>
-              <div class="timeline-item"><strong>MRP 已运行</strong><span>FIN-A001 / 生成 5 条建议</span></div>
-              <div class="timeline-item"><strong>报表已刷新</strong><span>8 个物化视图刷新完成</span></div>
+              <div class="timeline-item"><strong>首页加载</strong><span>${dashboardStatus}</span></div>
+              <div class="timeline-item"><strong>主数据</strong><span>物料、货位、供应商、客户、BOM 已接真实接口</span></div>
+              <div class="timeline-item"><strong>库存与业务</strong><span>采购、销售、生产、盘点、库存流水已接真实接口</span></div>
+              <div class="timeline-item"><strong>质量 / MRP / 报表</strong><span>质量检验、MRP 建议、库存报表已接真实接口</span></div>
             </div>
           </div>
         </div>
       `;
     }
 
-    function simpleMasterPage(type) {
-      const mapping = {
-        materials: ['新增物料', 'material', ['物料编码','物料名称','类型','单位','当前库存','安全库存','质量状态'], samples.materials],
-        bins: ['新增货位', 'bin', ['货位编码','区域','类型','容量','已占用','利用率','状态'], [
-          ['RM-A01','RM','NORMAL','10,000','1,280','12.8%','ACTIVE'],
-          ['FG-A01','FG','NORMAL','5,000','86','1.7%','ACTIVE'],
-          ['QC-A01','QC','HOLD','2,000','120','6.0%','ACTIVE']
-        ]],
-        suppliers: ['新增供应商', 'supplier', ['供应商编码','名称','联系人','交期','邮箱','状态'], [
-          ['SUP001','深圳屏幕供应商','王经理','7 天','sup001@example.com','ACTIVE'],
-          ['SUP002','华东玻璃供应商','李经理','10 天','sup002@example.com','ACTIVE']
-        ]],
-        customers: ['新增客户', 'customer', ['客户编码','名称','联系人','电话','邮箱','状态'], [
-          ['CUST001','华南客户 A','张总','13800000001','cust001@example.com','ACTIVE'],
-          ['CUST002','华东客户 B','赵总','13800000002','cust002@example.com','ACTIVE']
-        ]],
-        bom: ['新增 BOM', 'bom', ['BOM 编码','成品物料','变体','版本','有效期','组件数','状态'], [
-          ['BOM-FIN-A01','FIN001','FIN-A001','1.0','2026-05-01 ~ 2099-12-31','3','ACTIVE'],
-          ['BOM-TP-01','TP001','-','1.0','2026-05-01 ~ 2099-12-31','2','ACTIVE']
-        ]]
+    async function renderMrpRunPage() {
+      const state = pageState.mrpRun || { page: 1, keyword: '' };
+      pageState.mrpRun = state;
+      const params = { page: state.page || 1, page_size: DEFAULT_PAGE_SIZE };
+      if (state.keyword) params.variant_code = state.keyword;
+      const data = normalizeItems(await apiData(`/api/mrp/runs${queryString(params)}`), params.page, params.page_size);
+      state.items = data.items;
+      const runTableConfig = {
+        columns: [
+          ['运行号','id'],
+          ['产品变体','product_variant_id'],
+          ['成品物料','material_id'],
+          ['需求数量','demand_qty'],
+          ['需求日期','demand_date', shortDate],
+          ['状态','status', badge],
+          ['创建时间','created_at', shortDate]
+        ],
+        noRecordActions: true
       };
-      const [btn, modal, headers, rows] = mapping[type];
-      return toolbar(btn, modal) + renderTable(headers, rows);
-    }
-
-    function purchaseReceiptPage() {
-      return `
-        ${toolbar('执行 PO 收货', 'purchaseReceipt')}
-        <div class="card">
-          <div class="panel-title"><h2>收货操作区</h2><button class="btn success" onclick="openModal('PO 一键收货', 'purchaseReceipt')">一键收货 101</button></div>
-          ${renderTable(['PO 编号','供应商','物料','待收数量','目标货位','状态'], [
-            ['PO-20260504-0001','SUP001','RM001','100','RM-A01','OPEN'],
-            ['PO-20260504-0003','SUP001','CG001','40','RM-A02','PARTIAL']
-          ])}
-        </div>
-      `;
-    }
-
-    function salesShipmentPage() {
-      return `
-        ${toolbar('执行 SO 发货', 'salesShipment')}
-        <div class="card">
-          <div class="panel-title"><h2>发货操作区</h2><button class="btn warning" onclick="openModal('SO 一键发货', 'salesShipment')">FEFO 发货 261</button></div>
-          ${renderTable(['SO 编号','客户','物料','待发数量','建议批次','状态'], [
-            ['SO-20260504-0001','CUST001','FIN001','20','BATCH-FIN001-001','OPEN'],
-            ['SO-20260504-0003','CUST003','FIN001','30','BATCH-FIN001-001','PARTIAL']
-          ])}
-        </div>
-      `;
-    }
-
-    function productionCompletePage() {
-      return `
-        ${toolbar('生产一键完工', 'productionComplete')}
-        <div class="split">
-          <div class="card">
-            <div class="panel-title"><h2>待完工生产订单</h2></div>
-            ${renderTable(['订单号','变体','成品','计划数量','已完工','状态'], [
-              ['MO-20260504-0001','FIN-A001','FIN001','100','0','RELEASED'],
-              ['MO-20260504-0002','FIN-B001','FIN001','50','20','PARTIAL']
-            ])}
-          </div>
-          <div class="card">
-            <h2>完工后自动动作</h2>
-            <div class="timeline">
-              <div class="timeline-item"><strong>1. BOM 爆炸</strong><span>计算组件需求</span></div>
-              <div class="timeline-item"><strong>2. FEFO 领料</strong><span>生成 261 原料出库</span></div>
-              <div class="timeline-item"><strong>3. 成品入库</strong><span>生成 101 成品入库</span></div>
-              <div class="timeline-item"><strong>4. 写入 genealogy</strong><span>成品批次 ↔ 原料批次</span></div>
-              <div class="timeline-item"><strong>5. 写入 variance</strong><span>生产成本差异</span></div>
-            </div>
-          </div>
-        </div>
-      `;
-    }
-
-    function inventoryCountPage() {
-      return `
-        ${toolbar('创建盘点单', 'inventoryCount')}
-        ${renderTable(['盘点单号','范围','对象','状态','差异行','过账状态'], [
-          ['COUNT-20260504-0001','BIN','RM-A01','COUNTING','2','未过账'],
-          ['COUNT-20260504-0002','MATERIAL','RM001','POSTED','3','已过账'],
-          ['COUNT-20260504-0003','ZONE','FG','SUBMITTED','1','未过账']
-        ])}
-      `;
-    }
-
-    function qualityInspectionPage() {
-      return `
-        ${toolbar('创建检验批', 'inspectionLot')}
-        ${renderTable(['检验批','类型','物料','批次','状态','判定'], [
-          ['IL-20260504-0001','PURCHASE_RECEIPT','RM001','BATCH-RM001-002','RESULT_ENTERED','待判定'],
-          ['IL-20260504-0002','PRODUCTION_RECEIPT','FIN001','BATCH-FIN001-001','DECIDED','合格']
-        ])}
-      `;
-    }
-
-    function mrpRunPage() {
       return `
         <div class="card">
           <div class="panel-title"><h2>运行 MRP</h2></div>
           <div class="form-grid">
-            <div class="form-field"><label>产品变体</label><input value="FIN-A001" /></div>
-            <div class="form-field"><label>成品物料</label><input value="FIN001" /></div>
-            <div class="form-field"><label>需求数量</label><input type="number" value="100" /></div>
-            <div class="form-field"><label>需求日期</label><input type="date" value="2026-05-20" /></div>
-            <div class="form-field full"><label>备注</label><textarea>MRP demand for customer order</textarea></div>
+            <div class="form-field"><label>产品变体</label><input id="mrp_variant_code" placeholder="请输入产品变体" /></div>
+            <div class="form-field"><label>成品物料</label><input id="mrp_finished_material_id" placeholder="请输入成品物料" /></div>
+            <div class="form-field"><label>需求数量</label><input id="mrp_demand_qty" type="number" placeholder="请输入需求数量" /></div>
+            <div class="form-field"><label>需求日期</label><input id="mrp_demand_date" type="date" /></div>
+            <div class="form-field full"><label>备注</label><textarea id="mrp_remark" placeholder="请输入备注"></textarea></div>
           </div>
-          <div class="modal-footer"><button class="btn primary" onclick="showToast('MRP 已运行，生成 5 条建议')">运行 MRP</button></div>
+          <div class="modal-footer"><button class="btn primary" type="button" onclick="submitMrpRun()">运行 MRP</button></div>
         </div>
         <br />
-        ${renderTable(['运行号','变体','需求数量','建议数','短缺数','状态'], [
-          ['MRP-20260504-0001','FIN-A001','100','5','3','COMPLETED'],
-          ['MRP-20260504-0002','FIN-B001','50','2','1','COMPLETED']
-        ])}
+          <div class="toolbar">
+          <div class="toolbar-left">
+            <input id="mrpRunSearch" placeholder="按产品变体筛选" value="${html(state.keyword || '')}" onkeydown="if(event.key==='Enter') searchPage('mrpRun')" />
+            <button class="btn ghost" type="button" onclick="searchMrpRunPage()">搜索</button>
+          </div>
+          <div class="toolbar-right"><button class="btn ghost" type="button" onclick="refreshPage()">刷新</button></div>
+        </div>
+        ${renderRecordTable('mrpRun', runTableConfig, data.items)}
+        ${renderPagination('mrpRun', data)}
       `;
     }
 
-    function reportsPage(kind) {
-      const rows = {
-        inventoryReports: [['RM001','RM-A01','BATCH-RM001-001','合格','1,000'], ['FIN001','FG-A01','BATCH-FIN001-001','合格','86']],
-        lowStock: [['TP001','Touch Panel','18','50','LOW'], ['CG001','Cover Glass','8','30','LOW']],
-        consistency: [['RM001','1,280','1,280','1,280','一致'], ['FIN001','86','86','86','一致']]
+    async function submitMrpRun() {
+      try {
+        const demandQty = Number(document.getElementById('mrp_demand_qty').value);
+        if ((!selectedValue('mrp_variant_code') && !selectedValue('mrp_finished_material_id')) || !demandQty || !selectedValue('mrp_demand_date')) {
+          showToast('请填写产品变体或成品物料，并填写需求数量和需求日期');
+          return;
+        }
+        await apiData('/api/mrp/run', {
+          method: 'POST',
+          body: JSON.stringify(stripEmpty({
+            variant_code: selectedValue('mrp_variant_code'),
+            finished_material_id: selectedValue('mrp_finished_material_id'),
+            demand_qty: demandQty,
+            demand_date: selectedValue('mrp_demand_date'),
+            remark: selectedValue('mrp_remark')
+          }))
+        });
+        pageState.mrpRun = { ...(pageState.mrpRun || {}), page: 1 };
+        showToast('MRP 已运行，列表已刷新');
+        renderPage('mrpRun');
+      } catch (error) {
+        showToast(`MRP 运行失败: ${errorMessage(error)}`);
+      }
+    }
+
+    function searchMrpRunPage() {
+      pageState.mrpRun = {
+        ...(pageState.mrpRun || {}),
+        keyword: document.getElementById('mrpRunSearch')?.value || '',
+        page: 1
       };
-      const headers = kind === 'consistency' ? ['物料','物料库存','货位库存','批次库存','状态'] : kind === 'lowStock' ? ['物料','名称','当前库存','安全库存','状态'] : ['物料','货位','批次','质量状态','数量'];
+      renderPage('mrpRun');
+    }
+
+    function renderTracePage(type) {
+      const label = type === 'batch' ? '批次号' : '序列号';
+      return `
+        <div class="toolbar">
+          <div class="toolbar-left"><input id="traceValue" placeholder="输入${label}" /></div>
+          <div class="toolbar-right"><button class="btn primary" type="button" onclick="runTrace('${type}')">开始追溯</button></div>
+        </div>
+        <div id="traceResult" class="empty">请输入${label}后开始追溯。</div>
+      `;
+    }
+
+    function renderTraceSummary(title, rows) {
+      return `
+        <div class="card">
+          <h2>${html(title)}</h2>
+          <div class="summary-grid">
+            ${rows.map(([label, value]) => `<div class="stat"><strong>${html(displayValue(value))}</strong><span>${html(label)}</span></div>`).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderTraceTable(title, tableId, columns, items) {
+      return `
+        <div class="card">
+          <h2>${html(title)}</h2>
+          ${renderRecordTable(tableId, { columns, noRecordActions: true }, items || [])}
+        </div>
+      `;
+    }
+
+    function renderBatchTraceResult(data, title = '批次快照') {
+      const batch = data.batch || {};
+      const genealogy = data.genealogy || {};
+      return `
+        ${renderTraceSummary(title, [
+          ['批次', batch.batch_number],
+          ['物料', `${displayValue(batch.material_id)} ${displayValue(batch.material_name)}`],
+          ['库存', batch.current_stock],
+          ['货位', batch.current_bin],
+          ['质量状态', batch.quality_status],
+          ['有效期', batch.expiry_date]
+        ])}
+        <div class="split">
+          ${renderTraceTable('反向追溯', 'batchTraceBackward', [
+            ['层级','level'], ['成品批次','parent_batch_number'], ['组件批次','component_batch_number'], ['组件物料','component_material_id'], ['消耗数量','consumed_qty'], ['生产订单','production_order_id']
+          ], genealogy.backward_components || [])}
+          ${renderTraceTable('正向追溯', 'batchTraceForward', [
+            ['层级','level'], ['成品批次','parent_batch_number'], ['组件批次','component_batch_number'], ['成品物料','parent_material_id'], ['产出数量','output_qty'], ['生产订单','production_order_id']
+          ], genealogy.forward_where_used || [])}
+        </div>
+        ${renderTraceTable('库存流转', 'batchTraceMovements', [
+          ['事务号','transaction_id'], ['时间','transaction_date', shortDate], ['移动类型','movement_type'], ['物料','material_id'], ['数量','quantity'], ['来源','from_bin'], ['目标','to_bin'], ['单据','reference_doc']
+        ], data.inventory_movements || [])}
+        <div class="split">
+          ${renderTraceTable('批次历史', 'batchTraceHistory', [
+            ['时间','changed_at', shortDate], ['事件','event_type'], ['原状态','old_quality_status'], ['新状态','new_quality_status'], ['原货位','old_bin'], ['新货位','new_bin'], ['数量变化','qty_change'], ['操作人','changed_by']
+          ], data.batch_history || [])}
+          ${renderTraceTable('质量检验', 'batchTraceInspections', [
+            ['检验批','inspection_lot_id'], ['类型','inspection_type'], ['状态','lot_status'], ['检验时间','inspection_date', shortDate], ['检验员','inspector']
+          ], data.inspection_lots || [])}
+        </div>
+        ${renderTraceTable('质量通知', 'batchTraceNotifications', [
+          ['通知单','notification_id'], ['问题描述','problem_description'], ['缺陷','defect_code'], ['严重度','severity'], ['状态','status'], ['负责人','responsible_person'], ['创建时间','created_at', shortDate]
+        ], data.quality_notifications || [])}
+      `;
+    }
+
+    function renderSerialTraceResult(data) {
+      const serial = data.serial || {};
+      return `
+        ${renderTraceSummary('序列号快照', [
+          ['序列号', serial.serial_number],
+          ['物料', `${displayValue(serial.material_id)} ${displayValue(serial.material_name)}`],
+          ['批次', serial.batch_number],
+          ['状态', serial.current_status],
+          ['货位', serial.current_bin],
+          ['质量状态', serial.quality_status]
+        ])}
+        <div class="split">
+          ${renderTraceTable('序列号流转', 'serialTraceHistory', [
+            ['时间','changed_at', shortDate], ['原状态','old_status'], ['新状态','new_status'], ['原货位','old_bin'], ['新货位','new_bin'], ['原质量','old_quality_status'], ['新质量','new_quality_status'], ['事务号','transaction_id']
+          ], data.serial_history || [])}
+          ${renderTraceTable('库存流转', 'serialTraceMovements', [
+            ['事务号','transaction_id'], ['时间','transaction_date', shortDate], ['移动类型','movement_type'], ['物料','material_id'], ['数量','quantity'], ['来源','from_bin'], ['目标','to_bin'], ['批次','batch_number']
+          ], data.inventory_movements || [])}
+        </div>
+        <div class="split">
+          ${renderTraceTable('质量检验', 'serialTraceInspections', [
+            ['检验批','inspection_lot_id'], ['类型','inspection_type'], ['状态','lot_status'], ['检验时间','inspection_date', shortDate], ['检验员','inspector']
+          ], data.inspection_lots || [])}
+          ${renderTraceTable('质量通知', 'serialTraceNotifications', [
+            ['通知单','notification_id'], ['问题描述','problem_description'], ['缺陷','defect_code'], ['严重度','severity'], ['状态','status'], ['负责人','responsible_person'], ['创建时间','created_at', shortDate]
+          ], data.quality_notifications || [])}
+        </div>
+        ${data.batch_context ? renderBatchTraceResult(data.batch_context, '绑定批次') : ''}
+      `;
+    }
+
+    async function runTrace(type) {
+      const value = document.getElementById('traceValue').value.trim();
+      if (!value) return showToast('请输入追溯对象');
+      const target = document.getElementById('traceResult');
+      target.innerHTML = '<div class="empty">追溯查询中...</div>';
+      try {
+        const endpoint = type === 'batch'
+          ? `/api/traceability/batches/${encodedId(value)}`
+          : `/api/traceability/serials/${encodedId(value)}`;
+        const data = await apiData(endpoint);
+        target.innerHTML = type === 'batch' ? renderBatchTraceResult(data) : renderSerialTraceResult(data);
+      } catch (error) {
+        target.innerHTML = `<div class="empty">追溯失败：${html(errorMessage(error))}</div>`;
+      }
+    }
+
+    async function renderAuditPage() {
+      const state = pageState.audit || { page: 1, keyword: '' };
+      pageState.audit = state;
+      const params = { page: state.page || 1, page_size: DEFAULT_PAGE_SIZE };
+      if (state.keyword) params.keyword = state.keyword;
+      if (state.category) params.category = state.category;
+      if (state.module) params.module = state.module;
+      let data;
+      try {
+        data = normalizeItems(await apiData(`/api/system/audit-logs${queryString(params)}`, { ignoreForbidden: true }));
+      } catch (error) {
+        return renderAuditUnavailable(error);
+      }
+      state.items = data.items;
+
+      const config = {
+        columns: [
+          ['时间', 'created_at', shortDate],
+          ['用户', record => record.username || record.user_id || 'SYSTEM'],
+          ['分类', 'category', badge],
+          ['模块', 'module', badge],
+          ['动作', 'action', badge],
+          ['对象', record => [record.table_name, record.record_id].filter(Boolean).join(' / ') || '-'],
+          ['IP', 'ip_address'],
+          ['变更', record => auditChangeSummary(record)]
+        ],
+        noRecordActions: true
+      };
+
       return `
         <div class="toolbar">
           <div class="toolbar-left">
-            <input placeholder="筛选物料 / 批次 / 货位" />
-            <select><option>全部</option><option>仅异常</option><option>仅低库存</option></select>
+            <input id="auditSearch" placeholder="搜索用户 / 动作 / 表 / 对象 / IP" value="${html(state.keyword || '')}" onkeydown="if(event.key==='Enter') searchPage('audit')" />
+            <select id="auditCategory" onchange="filterAuditPage()">
+              <option value="">全部类型</option>
+              ${[
+                ['LOGIN', '登录'],
+                ['DATA_CHANGE', '关键数据变更'],
+                ['POSTING', '过账'],
+                ['QUALITY', '质量判定'],
+                ['SYSTEM', '系统']
+              ].map(([value, label]) => `<option value="${value}" ${state.category === value ? 'selected' : ''}>${label}</option>`).join('')}
+            </select>
+            <select id="auditModule" onchange="filterAuditPage()">
+              <option value="">全部模块</option>
+              ${['auth', 'master-data', 'inventory', 'quality', 'purchase', 'sales', 'production', 'system']
+                .map(value => `<option value="${value}" ${state.module === value ? 'selected' : ''}>${value}</option>`).join('')}
+            </select>
+            <button class="btn ghost" type="button" onclick="searchPage('audit')">搜索</button>
           </div>
-          <div class="toolbar-right">
-            <button class="btn ghost" onclick="showToast('8 个物化视图刷新完成')">刷新物化视图</button>
-            <button class="btn primary" onclick="exportCsv()">导出 CSV</button>
-          </div>
+          <div class="toolbar-right"><button class="btn ghost" type="button" onclick="refreshPage()">刷新</button></div>
         </div>
-        ${renderTable(headers, rows[kind], false)}
+        ${data.items.length ? renderRecordTable('audit', config, data.items) : '<div class="empty">暂无真实审计记录。</div>'}
+        ${renderPagination('audit', data)}
       `;
     }
 
-    function tracePage(type) {
+    function auditChangeSummary(record) {
+      if (record.old_data && record.new_data) return '前后变更';
+      if (record.old_data) return '删除/旧值';
+      if (record.new_data) {
+        const data = typeof record.new_data === 'string' ? record.new_data : JSON.stringify(record.new_data);
+        return data.length > 80 ? `${data.slice(0, 80)}...` : data;
+      }
+      return '-';
+    }
+
+    function filterAuditPage() {
+      pageState.audit = {
+        ...(pageState.audit || {}),
+        keyword: document.getElementById('auditSearch')?.value || '',
+        category: selectedValue('auditCategory'),
+        module: selectedValue('auditModule'),
+        page: 1
+      };
+      renderPage('audit');
+    }
+
+    function renderAuditUnavailable(error) {
+      const status = Number(error?.status || 0);
+      let message = errorMessage(error);
+      if (status === 403) {
+        message = '当前账号没有 audit:read 权限。请使用管理员或审计员账号重新登录，并确认 0003 审计权限迁移已执行。';
+      } else if (status === 404) {
+        message = '审计日志接口未加载。请重启 API 服务，确认当前后端已包含 /api/system/audit-logs 路由。';
+      } else if (status >= 500) {
+        message = `审计日志接口返回服务端错误：${message}。请确认数据库迁移已执行，且 sys.sys_audit_log 表存在。`;
+      }
+
       return `
         <div class="toolbar">
-          <div class="toolbar-left"><input placeholder="输入${type === 'batch' ? '批次号' : '序列号'}" value="${type === 'batch' ? 'BATCH-FIN001-001' : 'SN-FIN001-0001'}" /></div>
-          <div class="toolbar-right"><button class="btn primary" onclick="showToast('追溯查询完成')">开始追溯</button></div>
-        </div>
-        <div class="split">
-          <div class="card">
-            <h2>${type === 'batch' ? '正向追溯' : '序列号流转'}</h2>
-            <div class="timeline">
-              <div class="timeline-item"><strong>原料入库</strong><span>101 / RM001 / BATCH-RM001-001</span></div>
-              <div class="timeline-item"><strong>生产领料</strong><span>261 / MO-20260504-0001</span></div>
-              <div class="timeline-item"><strong>成品入库</strong><span>101 / FIN001 / BATCH-FIN001-001</span></div>
-              <div class="timeline-item"><strong>销售出库</strong><span>261 / SO-20260504-0001</span></div>
-            </div>
+          <div class="toolbar-left">
+            <input id="auditSearch" placeholder="搜索用户 / 动作 / 表 / 对象 / IP" value="" disabled />
           </div>
-          <div class="card">
-            <h2>${type === 'batch' ? '反向追溯' : '绑定信息'}</h2>
-            ${renderTable(['节点','物料','批次/序列号','数量','单据'], [
-              ['成品','FIN001','BATCH-FIN001-001','10','MO-20260504-0001'],
-              ['组件','TP001','BATCH-TP001-001','10','TRX-0007'],
-              ['原料','RM001','BATCH-RM001-001','10','TRX-0001']
-            ], false)}
-          </div>
+          <div class="toolbar-right"><button class="btn ghost" type="button" onclick="refreshPage()">刷新</button></div>
         </div>
+        <div class="empty">${html(message)}</div>
       `;
+    }
+
+    async function renderSystemPage(page) {
+      if (page === 'audit') return renderAuditPage();
+      return '<div class="empty">页面建设中</div>';
     }
 
     async function renderPage(page) {
-      document.getElementById('pageTitle').textContent = pageMeta[page][0];
-      document.getElementById('pageDesc').textContent = pageMeta[page][1];
-
-      const content = document.getElementById('content');
-      
-      // 物料主数据使用真实 API
-      if (page === 'materials') {
-        content.innerHTML = '<div style="padding: 40px; text-align: center;">加载中...</div>';
-        content.innerHTML = await renderMaterialsPage();
+      const sequence = ++renderSequence;
+      currentPage = page;
+      if (pageMeta[page]) {
+        document.getElementById('pageTitle').textContent = pageMeta[page][0];
+        document.getElementById('pageDesc').textContent = pageMeta[page][1];
       }
-      else if (page === 'dashboard') content.innerHTML = dashboard();
-      else if (['bins','suppliers','customers','bom'].includes(page)) content.innerHTML = simpleMasterPage(page);
-      else if (page === 'purchaseOrders') content.innerHTML = toolbar('新建采购订单', 'purchaseOrder') + renderTable(['PO 编号','供应商','物料','数量','状态'], samples.orders);
-      else if (page === 'purchaseReceipt') content.innerHTML = purchaseReceiptPage();
-      else if (page === 'salesOrders') content.innerHTML = toolbar('新建销售订单', 'salesOrder') + renderTable(['SO 编号','客户','物料','数量','状态'], samples.sales);
-      else if (page === 'salesShipment') content.innerHTML = salesShipmentPage();
-      else if (page === 'productionOrders') content.innerHTML = toolbar('新建生产订单', 'productionOrder') + renderTable(['生产订单','变体','成品','计划数量','状态'], [['MO-20260504-0001','FIN-A001','FIN001','100','RELEASED'], ['MO-20260504-0002','FIN-B001','FIN001','50','PLANNED']]);
-      else if (page === 'productionComplete') content.innerHTML = productionCompletePage();
-      else if (page === 'inventoryCurrent') content.innerHTML = toolbar('手工过账', 'inventoryPost') + renderTable(['物料','货位','批次','质量状态','数量'], samples.stock);
-      else if (page === 'inventoryLedger') content.innerHTML = toolbar('新增过账', 'inventoryPost') + renderTable(['事务号','移动类型','物料','数量','来源货位','目标货位','批次'], [['TRX-0001','101','RM001','100', '-', 'RM-A01','BATCH-RM001-001'], ['TRX-0002','261','RM001','20','RM-A01','-', 'BATCH-RM001-001'], ['TRX-0003','311','RM001','30','RM-A01','RM-A02','BATCH-RM001-001']]);
-      else if (page === 'binStock') content.innerHTML = reportsPage('inventoryReports');
-      else if (page === 'batchStock') content.innerHTML = toolbar('批次操作', 'batchAction') + renderTable(['批次','物料','库存','质量状态','过期日期'], samples.batches);
-      else if (page === 'batchTrace') content.innerHTML = tracePage('batch');
-      else if (page === 'serialTrace') content.innerHTML = tracePage('serial');
-      else if (page === 'qualityInspection') content.innerHTML = qualityInspectionPage();
-      else if (page === 'qualityNotification') content.innerHTML = toolbar('创建质量通知', 'qualityNotification') + renderTable(['通知单','来源','物料','批次','严重等级','状态'], [['QN-0001','INSPECTION','RM001','BATCH-RM001-002','HIGH','OPEN'], ['QN-0002','MANUAL','FIN001','BATCH-FIN001-001','LOW','CLOSED']]);
-      else if (page === 'inventoryCount') content.innerHTML = inventoryCountPage();
-      else if (page === 'mrpRun') content.innerHTML = mrpRunPage();
-      else if (page === 'mrpSuggestions') content.innerHTML = toolbar('确认建议', 'mrpSuggestion') + renderTable(['建议号','运行号','物料','类型','净需求','建议数量','状态'], [['MRPS-0001','MRP-0001','RM001','PURCHASE','70','70','OPEN'], ['MRPS-0002','MRP-0001','TP001','PRODUCTION','20','20','OPEN']]);
-      else if (['inventoryReports','lowStock','consistency'].includes(page)) content.innerHTML = reportsPage(page);
-      else if (page === 'users') content.innerHTML = toolbar('新增用户', 'user') + renderTable(['用户','姓名','邮箱','角色','状态'], [['admin','系统管理员','admin@ims.local','ADMIN','ACTIVE'], ['operator','仓库操作员','op@ims.local','WAREHOUSE_OPERATOR','ACTIVE']]);
-      else if (page === 'roles') content.innerHTML = toolbar('新增角色', 'role') + renderTable(['角色','名称','权限数','状态'], [['ADMIN','系统管理员','24','ACTIVE'], ['AUDITOR','审计员','6','ACTIVE']]);
-      else if (page === 'audit') content.innerHTML = toolbar('导出审计日志', 'audit') + renderTable(['时间','用户','动作','对象','结果'], [['2026-05-04 10:01','admin','AUTH_LOGIN_SUCCESS','USER','正常'], ['2026-05-04 10:20','operator','POST_101','TRX-0001','正常'], ['2026-05-04 11:02','qa','FREEZE_BATCH','BATCH-RM001-002','正常']]);
-      else if (page === 'params') content.innerHTML = toolbar('新增参数', 'param') + renderTable(['参数键','参数值','说明','状态'], [['JWT_EXPIRES_SECONDS','86400','Token 有效期','ACTIVE'], ['ALLOW_EXPIRED_BATCH_OUT','false','是否允许过期批次出库','ACTIVE']]);
-      else content.innerHTML = '<div class="empty">页面建设中</div>';
-    }
+      document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.page === page));
+      const content = document.getElementById('content');
+      content.innerHTML = '<div class="empty">加载中...</div>';
+      try {
+        let nextHtml = '';
+        if (page === 'dashboard') nextHtml = await renderDashboard();
+        else if (page === 'mrpRun') nextHtml = await renderMrpRunPage();
+        else if (page === 'batchTrace') nextHtml = renderTracePage('batch');
+        else if (page === 'serialTrace') nextHtml = renderTracePage('serial');
+        else if (page === 'audit') nextHtml = await renderSystemPage(page);
+        else if (pageConfigs[page]) nextHtml = await renderResourcePage(page);
+        else nextHtml = '<div class="empty">当前页面尚未配置真实接口。</div>';
+        if (sequence !== renderSequence) return;
 
-    function modalForm(type) {
-      const commonFields = `
-        <div class="form-field"><label>编码</label><input placeholder="自动或手动输入" /></div>
-        <div class="form-field"><label>名称</label><input placeholder="请输入名称" /></div>
-        <div class="form-field"><label>状态</label><select><option>ACTIVE</option><option>INACTIVE</option></select></div>
-        <div class="form-field full"><label>备注</label><textarea placeholder="请输入备注"></textarea></div>
-      `;
-      const forms = {
-        material: `
-          <div class="form-grid">
-            <div class="form-field"><label>物料编码</label><input value="RM001" /></div>
-            <div class="form-field"><label>物料名称</label><input value="Raw Material A" /></div>
-            <div class="form-field"><label>物料类型</label><select><option>RAW</option><option>SEMI</option><option>FIN</option></select></div>
-            <div class="form-field"><label>基础单位</label><input value="PCS" /></div>
-            <div class="form-field"><label>安全库存</label><input type="number" value="100" /></div>
-            <div class="form-field"><label>标准成本</label><input type="number" value="12.5" /></div>
-          </div>`,
-        bin: `<div class="form-grid"><div class="form-field"><label>货位编码</label><input value="RM-A01" /></div><div class="form-field"><label>区域</label><select><option>RM</option><option>SF</option><option>FG</option><option>QC</option></select></div><div class="form-field"><label>容量</label><input type="number" value="10000" /></div><div class="form-field"><label>类型</label><select><option>NORMAL</option><option>HOLD</option><option>SCRAP</option></select></div></div>`,
-        purchaseOrder: `<div class="form-grid"><div class="form-field"><label>供应商</label><input value="SUP001" /></div><div class="form-field"><label>预计到货日期</label><input type="date" value="2026-05-15" /></div><div class="form-field"><label>物料</label><input value="RM001" /></div><div class="form-field"><label>采购数量</label><input type="number" value="100" /></div><div class="form-field"><label>单价</label><input type="number" value="12.5" /></div><div class="form-field"><label>目标货位</label><input value="RM-A01" /></div></div>`,
-        purchaseReceipt: `<div class="form-grid"><div class="form-field"><label>PO 编号</label><input value="PO-20260504-0001" /></div><div class="form-field"><label>收货数量</label><input type="number" value="100" /></div><div class="form-field"><label>批次号</label><input value="BATCH-RM001-P5-001" /></div><div class="form-field"><label>目标货位</label><input value="RM-A01" /></div><div class="form-field"><label>移动类型</label><input value="101" disabled /></div><div class="form-field"><label>过账日期</label><input type="datetime-local" /></div></div>`,
-        salesOrder: `<div class="form-grid"><div class="form-field"><label>客户</label><input value="CUST001" /></div><div class="form-field"><label>需求日期</label><input type="date" value="2026-05-20" /></div><div class="form-field"><label>物料</label><input value="FIN001" /></div><div class="form-field"><label>销售数量</label><input type="number" value="20" /></div><div class="form-field"><label>单价</label><input type="number" value="99.9" /></div><div class="form-field"><label>来源货位</label><input value="FG-A01" /></div></div>`,
-        salesShipment: `<div class="form-grid"><div class="form-field"><label>SO 编号</label><input value="SO-20260504-0001" /></div><div class="form-field"><label>发货数量</label><input type="number" value="20" /></div><div class="form-field"><label>拣配策略</label><select><option>FEFO</option><option>MANUAL</option></select></div><div class="form-field"><label>来源货位</label><input value="FG-A01" /></div><div class="form-field"><label>移动类型</label><input value="261" disabled /></div><div class="form-field"><label>过账日期</label><input type="datetime-local" /></div></div>`,
-        inventoryPost: `<div class="form-grid"><div class="form-field"><label>物料</label><input value="RM001" /></div><div class="form-field"><label>移动类型</label><select><option>101</option><option>261</option><option>311</option><option>701</option><option>702</option><option>999</option></select></div><div class="form-field"><label>数量</label><input type="number" value="10" /></div><div class="form-field"><label>批次</label><input value="BATCH-RM001-001" /></div><div class="form-field"><label>来源货位</label><input placeholder="出库/转储填写" /></div><div class="form-field"><label>目标货位</label><input placeholder="入库/转储填写" /></div></div>`,
-        productionComplete: `<div class="form-grid"><div class="form-field"><label>生产订单</label><input value="MO-20260504-0001" /></div><div class="form-field"><label>完工数量</label><input type="number" value="100" /></div><div class="form-field"><label>成品批次</label><input value="BATCH-FIN001-P6-001" /></div><div class="form-field"><label>入库货位</label><input value="FG-A01" /></div><div class="form-field"><label>领料策略</label><select><option>FEFO</option></select></div><div class="form-field"><label>过账日期</label><input type="datetime-local" /></div></div>`,
-        inventoryCount: `<div class="form-grid"><div class="form-field"><label>盘点类型</label><select><option>REGULAR</option><option>CYCLE</option></select></div><div class="form-field"><label>盘点范围</label><select><option>BIN</option><option>MATERIAL</option><option>ZONE</option></select></div><div class="form-field"><label>货位</label><input value="RM-A01" /></div><div class="form-field"><label>备注</label><input value="regular bin count" /></div></div>`,
-        inspectionLot: `<div class="form-grid"><div class="form-field"><label>检验类型</label><select><option>PURCHASE_RECEIPT</option><option>PRODUCTION_RECEIPT</option><option>MANUAL</option></select></div><div class="form-field"><label>物料</label><input value="RM001" /></div><div class="form-field"><label>批次</label><input value="BATCH-RM001-002" /></div><div class="form-field"><label>样本数</label><input type="number" value="5" /></div></div>`,
-        qualityNotification: `<div class="form-grid"><div class="form-field"><label>来源</label><select><option>INSPECTION_LOT</option><option>MANUAL</option></select></div><div class="form-field"><label>严重等级</label><select><option>LOW</option><option>MEDIUM</option><option>HIGH</option><option>CRITICAL</option></select></div><div class="form-field"><label>批次</label><input value="BATCH-RM001-002" /></div><div class="form-field"><label>不良代码</label><input value="DEF-SCRATCH" /></div><div class="form-field full"><label>问题描述</label><textarea>检验发现外观划伤</textarea></div></div>`,
-        quick: `<div class="grid"><button class="btn success" onclick="showToast('打开采购收货')">采购收货 101</button><button class="btn warning" onclick="showToast('打开销售发货')">销售发货 261</button><button class="btn primary" onclick="showToast('打开生产完工')">生产完工</button><button class="btn danger" onclick="showToast('打开批次冻结')">冻结批次</button></div>`,
-        detail: `<div class="empty">这里展示单据详情、行项目、状态流转、审计记录和关联库存事务。</div>`
-      };
-      return forms[type] || `<div class="form-grid">${commonFields}</div>`;
-    }
-
-    function openModal(title, type) {
-      document.getElementById('modalTitle').textContent = title;
-      document.getElementById('modalBody').innerHTML = modalForm(type);
-      document.getElementById('modalMask').classList.add('show');
-    }
-
-    function closeModal() {
-      document.getElementById('modalMask').classList.remove('show');
-    }
-
-    function submitModal() {
-      closeModal();
-      showToast('提交成功，业务状态已更新');
-    }
-
-    function showToast(message) {
-      const toast = document.getElementById('toast');
-      toast.textContent = message;
-      toast.classList.add('show');
-      setTimeout(() => toast.classList.remove('show'), 2200);
-    }
-
-    function refreshPage() {
-      showToast('页面数据已刷新');
-    }
-
-    function exportCsv() {
-      showToast('CSV 导出任务已生成');
-    }
-
-    function filterTable(keyword) {
-      const table = document.getElementById('dataTable');
-      if (!table) return;
-      const rows = table.querySelectorAll('tbody tr');
-      rows.forEach(row => {
-        row.style.display = row.textContent.toLowerCase().includes(keyword.toLowerCase()) ? '' : 'none';
-      });
+        if (['inventoryReports', 'lowStock', 'consistency'].includes(page)) {
+          nextHtml = nextHtml.replace(
+            '<button class="btn ghost" type="button" onclick="refreshPage()">刷新</button>',
+            '<button class="btn ghost" type="button" onclick="refreshReports()">刷新物化视图</button><button class="btn ghost" type="button" onclick="refreshPage()">刷新</button>'
+          );
+        }
+        content.innerHTML = nextHtml;
+      } catch (error) {
+        if (sequence !== renderSequence) return;
+        content.innerHTML = `<div class="empty">加载失败：${html(errorMessage(error))}</div>`;
+      }
     }
 
     document.querySelectorAll('.nav-item').forEach(item => {

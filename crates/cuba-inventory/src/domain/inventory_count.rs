@@ -403,7 +403,7 @@ impl InventoryCountLine {
         difference_reason: Option<String>,
         remark: Option<String>,
     ) -> Result<(), InventoryCountDomainError> {
-        if counted_qty < Decimal::ZERO {
+        if counted_qty < Decimal::ZERO || counted_qty.trunc() != counted_qty {
             return Err(InventoryCountDomainError::CountedQtyInvalid);
         }
 
@@ -507,4 +507,102 @@ pub struct InventoryCountPostedTransaction {
     pub from_bin: Option<String>,
     pub to_bin: Option<String>,
     pub batch_number: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot_line(system_qty: i64) -> InventoryCountLine {
+        InventoryCountLine::from_stock_snapshot(
+            "COUNT-TEST".to_string(),
+            10,
+            "MAT-001".to_string(),
+            "BIN-A".to_string(),
+            Some("BATCH-001".to_string()),
+            Some("合格".to_string()),
+            Decimal::from(system_qty),
+        )
+    }
+
+    #[test]
+    fn counted_qty_above_system_qty_becomes_gain_701() {
+        let mut line = snapshot_line(100);
+
+        line.enter_counted_qty(
+            Decimal::from(105),
+            Some("extra stock found".to_string()),
+            None,
+        )
+        .expect("counted qty should be accepted");
+
+        assert_eq!(line.difference_qty, Some(Decimal::from(5)));
+        assert_eq!(
+            line.movement_type,
+            Some(InventoryCountMovementType::Gain701)
+        );
+        assert_eq!(line.posting_qty(), Decimal::from(5));
+    }
+
+    #[test]
+    fn counted_qty_below_system_qty_becomes_loss_702() {
+        let mut line = snapshot_line(100);
+
+        line.enter_counted_qty(Decimal::from(97), Some("shortage found".to_string()), None)
+            .expect("counted qty should be accepted");
+
+        assert_eq!(line.difference_qty, Some(Decimal::from(-3)));
+        assert_eq!(
+            line.movement_type,
+            Some(InventoryCountMovementType::Loss702)
+        );
+        assert_eq!(line.posting_qty(), Decimal::from(3));
+    }
+
+    #[test]
+    fn submit_requires_difference_reason_for_difference_lines() {
+        let mut line = snapshot_line(100);
+        line.enter_counted_qty(Decimal::from(101), None, None)
+            .expect("counted qty should be accepted");
+
+        let err = line
+            .validate_before_submit()
+            .expect_err("difference line without reason should fail");
+
+        assert!(matches!(
+            err,
+            InventoryCountDomainError::DifferenceReasonRequired
+        ));
+    }
+
+    #[test]
+    fn submit_all_counted_lines_moves_count_to_submitted() {
+        let mut count = InventoryCount::new(
+            "COUNT-TEST".to_string(),
+            InventoryCountType::Regular,
+            InventoryCountScope::Bin,
+            None,
+            Some("BIN-A".to_string()),
+            None,
+            None,
+            "operator".to_string(),
+            None,
+        )
+        .expect("valid count scope");
+
+        let mut line = snapshot_line(100);
+        line.enter_counted_qty(
+            Decimal::from(100),
+            None,
+            Some("matched system quantity".to_string()),
+        )
+        .expect("counted qty should be accepted");
+
+        count
+            .mark_counting(vec![line])
+            .expect("draft count can enter counting");
+        count.submit().expect("all lines are counted");
+
+        assert_eq!(count.status, InventoryCountStatus::Submitted);
+    }
 }

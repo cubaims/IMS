@@ -1,0 +1,27 @@
+meta {
+  name: 09 Create Customer
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{base_url}}/api/master-data/customers
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "customer_id": "{{customer_id}}",
+    "customer_name": "Bruno Customer",
+    "contact_person": "Buyer",
+    "phone": "13900000000",
+    "email": "customer@example.com",
+    "address": "Customer Address",
+    "credit_limit": "100000.00"
+  }
+}

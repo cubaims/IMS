@@ -1,27 +1,31 @@
 use async_trait::async_trait;
-use serde_json::Value;
-use sqlx::{PgPool, Row};
+use sqlx::{Decode, PgPool, Postgres, Row, Type, postgres::PgRow};
 
-use cuba_shared::{AppError, AppResult};
+use cuba_shared::{AppError, AppResult, Page};
 
 use std::collections::HashSet;
 
 use crate::domain::{
-    Bom, BomComponent, BomHeader, BomId, BomStatus, MaterialId, VariantCode,
+    BinCode, DefectSeverity, InspectionCharId, InspectionCharacteristic, MaterialType, StorageBin,
 };
-use crate::domain::{BinCode, StorageBin};
+use crate::domain::{Bom, BomComponent, BomHeader, BomId, BomStatus, MaterialId, VariantCode};
 
 use crate::application::{
-    BomRepository, CreateBomHeaderCommand, CreateCustomerCommand,
-    CreateDefectCodeCommand, CreateInspectionCharCommand, CreateMaterialCommand,
-    CreateMaterialSupplierCommand, CreateProductVariantCommand, CreateStorageBinCommand,
-    CreateSupplierCommand, CreateWorkCenterCommand, CustomerRepository, MasterDataQuery,
-    MaterialRepository, MaterialSupplierRepository, ProductVariantRepository,
-    QualityMasterRepository, StorageBinRepository, SupplierRepository, UpdateBomComponentCommand,
-    UpdateBomHeaderCommand, UpdateCustomerCommand, UpdateDefectCodeCommand,
-    UpdateInspectionCharCommand, UpdateMaterialCommand, UpdateMaterialSupplierCommand,
-    UpdateProductVariantCommand, UpdateStorageBinCommand, UpdateSupplierCommand,
-    UpdateWorkCenterCommand, WorkCenterRepository,
+    BinCapacityUtilizationReadModel, BomComponentReadModel, BomDetailReadModel,
+    BomExplosionItemReadModel, BomExplosionPreviewReadModel, BomHeaderReadModel, BomRepository,
+    BomSummaryReadModel, BomTreeComponentReadModel, BomTreeReadModel, BomValidationReadModel,
+    CreateBomHeaderCommand, CreateCustomerCommand, CreateDefectCodeCommand,
+    CreateInspectionCharCommand, CreateMaterialCommand, CreateMaterialSupplierCommand,
+    CreateProductVariantCommand, CreateStorageBinCommand, CreateSupplierCommand,
+    CreateWorkCenterCommand, CustomerReadModel, CustomerRepository, DefectCodeReadModel, DeleteAck,
+    InspectionCharacteristicReadModel, MasterDataQuery, MaterialReadModel, MaterialRepository,
+    MaterialSupplierReadModel, MaterialSupplierRepository, MutationAck, ProductVariantReadModel,
+    ProductVariantRepository, QualityMasterRepository, StorageBinReadModel, StorageBinRepository,
+    SupplierReadModel, SupplierRepository, UpdateBomComponentCommand, UpdateBomHeaderCommand,
+    UpdateCustomerCommand, UpdateDefectCodeCommand, UpdateInspectionCharCommand,
+    UpdateMaterialCommand, UpdateMaterialSupplierCommand, UpdateProductVariantCommand,
+    UpdateStorageBinCommand, UpdateSupplierCommand, UpdateWorkCenterCommand, WorkCenterReadModel,
+    WorkCenterRepository,
 };
 
 #[derive(Clone)]
@@ -34,18 +38,47 @@ impl PostgresMasterDataRepository {
         Self { pool }
     }
 
-    #[allow(dead_code)]
-    async fn fetch_json(&self, sql: &str) -> AppResult<Value> {
-        let row = sqlx::query(sql)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(cuba_shared::map_master_data_db_error)?;
-
-        row.try_get::<Value, _>("data")
+    fn column<T>(row: &PgRow, name: &str) -> AppResult<T>
+    where
+        for<'r> T: Decode<'r, Postgres> + Type<Postgres>,
+    {
+        row.try_get(name)
             .map_err(|error| AppError::Internal(error.to_string()))
     }
 
-    async fn fetch_json_with_id(&self, sql: &str, id: &str) -> AppResult<Value> {
+    fn pagination(query: &MasterDataQuery) -> (u64, u64, i64, i64) {
+        let page = u64::from(query.page.unwrap_or(1).max(1));
+        let page_size = u64::from(query.page_size.unwrap_or(20).clamp(1, 200));
+        let limit = page_size as i64;
+        let offset = ((page - 1) as i64) * limit;
+
+        (page, page_size, limit, offset)
+    }
+
+    fn page_from_rows<T>(
+        rows: Vec<PgRow>,
+        page: u64,
+        page_size: u64,
+        parse: fn(&PgRow) -> AppResult<T>,
+    ) -> AppResult<Page<T>> {
+        let total = rows
+            .first()
+            .map(|row| Self::column::<i64>(row, "total"))
+            .transpose()?
+            .unwrap_or(0);
+        let items = rows.iter().map(parse).collect::<AppResult<Vec<_>>>()?;
+
+        Ok(Page::new(items, total.max(0) as u64, page, page_size))
+    }
+
+    async fn fetch_one_by_id<T>(
+        &self,
+        sql: &str,
+        id: &str,
+        not_found_code: &'static str,
+        not_found_message: impl Into<String>,
+        parse: fn(&PgRow) -> AppResult<T>,
+    ) -> AppResult<T> {
         let row = sqlx::query(sql)
             .bind(id)
             .fetch_optional(&self.pool)
@@ -53,151 +86,452 @@ impl PostgresMasterDataRepository {
             .map_err(cuba_shared::map_master_data_db_error)?;
 
         let Some(row) = row else {
-            return Err(AppError::NotFound(format!("record not found: {id}")));
+            return Err(AppError::business(not_found_code, not_found_message));
         };
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        parse(&row)
     }
 
-    async fn fetch_list(&self, base_sql: &str, query: MasterDataQuery) -> AppResult<Value> {
-        let sql = format!(
-            r#"
-            SELECT json_build_object(
-                'items', COALESCE(json_agg(t), '[]'::json),
-                'page', $1::int,
-                'page_size', $2::int
-            ) AS data
-            FROM (
-                {base_sql}
-                LIMIT $3 OFFSET $4
-            ) t
-            "#
-        );
-
-        let page = query.page.unwrap_or(1).max(1);
-        let page_size = query.page_size.unwrap_or(20).clamp(1, 200);
-        let limit = page_size as i64;
-        let offset = ((page - 1) as i64) * limit;
-
-        let row = sqlx::query(&sql)
-            .bind(page as i32)
-            .bind(page_size as i32)
-            .bind(limit)
-            .bind(offset)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(cuba_shared::map_master_data_db_error)?;
-
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+    fn normalize_material_type(value: &str) -> AppResult<&'static str> {
+        MaterialType::from_db_value(value)
+            .map(|material_type| material_type.as_db_value())
+            .ok_or_else(|| {
+                AppError::Validation(format!("未知的物料类型 '{value}',应为 原材料/半成品/成品"))
+            })
     }
 
-    async fn affected_to_json(
-        &self,
+    fn normalize_optional_material_type(value: Option<&str>) -> AppResult<Option<&'static str>> {
+        value.map(Self::normalize_material_type).transpose()
+    }
+
+    fn normalize_bom_status(value: &str) -> AppResult<&'static str> {
+        BomStatus::from_db_value(value)
+            .map(|status| status.as_db_value())
+            .ok_or_else(|| {
+                AppError::Validation(format!("未知的 BOM 状态 '{value}',应为 草稿/生效/失效"))
+            })
+    }
+
+    fn normalize_optional_bom_status(value: Option<&str>) -> AppResult<Option<&'static str>> {
+        value.map(Self::normalize_bom_status).transpose()
+    }
+
+    fn normalize_defect_severity(value: &str) -> AppResult<&'static str> {
+        DefectSeverity::from_db_value(value)
+            .map(|severity| severity.as_db_value())
+            .ok_or_else(|| {
+                AppError::Validation(format!("未知的不良严重等级 '{value}',应为 一般/严重/紧急"))
+            })
+    }
+
+    fn normalize_optional_defect_severity(value: Option<&str>) -> AppResult<Option<&'static str>> {
+        value.map(Self::normalize_defect_severity).transpose()
+    }
+
+    fn affected_to_ack(
         result: sqlx::postgres::PgQueryResult,
-        id_name: &str,
         id_value: &str,
-    ) -> AppResult<Value> {
+        not_found_code: &'static str,
+        not_found_message: impl Into<String>,
+    ) -> AppResult<MutationAck> {
         if result.rows_affected() == 0 {
-            return Err(AppError::NotFound(format!(
-                "record not found: {id_name}={id_value}"
-            )));
+            return Err(AppError::business(not_found_code, not_found_message));
         }
 
-        Ok(serde_json::json!({
-            id_name: id_value,
-            "affected": result.rows_affected()
-        }))
+        Ok(MutationAck {
+            resource_id: id_value.to_string(),
+            affected: result.rows_affected(),
+        })
+    }
+
+    async fn ensure_bom_exists(&self, bom_id: &str) -> AppResult<()> {
+        let exists: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM mdm.mdm_bom_headers WHERE bom_id = $1
+            )
+            "#,
+        )
+        .bind(bom_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+
+        if !exists {
+            return Err(AppError::business(
+                "BOM_NOT_FOUND",
+                format!("BOM 不存在: {bom_id}"),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn parse_material(row: &PgRow) -> AppResult<MaterialReadModel> {
+        Ok(MaterialReadModel {
+            material_id: Self::column(row, "material_id")?,
+            material_name: Self::column(row, "material_name")?,
+            material_type: Self::column(row, "material_type")?,
+            base_unit: Self::column(row, "base_unit")?,
+            default_zone: Self::column(row, "default_zone")?,
+            safety_stock: Self::column(row, "safety_stock")?,
+            reorder_point: Self::column(row, "reorder_point")?,
+            standard_price: Self::column(row, "standard_price")?,
+            map_price: Self::column(row, "map_price")?,
+            current_stock: Self::column(row, "current_stock")?,
+            status: Self::column(row, "status")?,
+            created_at: Self::column(row, "created_at")?,
+            updated_at: Self::column(row, "updated_at")?,
+        })
+    }
+
+    fn parse_storage_bin(row: &PgRow) -> AppResult<StorageBinReadModel> {
+        Ok(StorageBinReadModel {
+            bin_code: Self::column(row, "bin_code")?,
+            zone: Self::column(row, "zone")?,
+            bin_type: Self::column(row, "bin_type")?,
+            capacity: Self::column(row, "capacity")?,
+            current_occupied: Self::column(row, "current_occupied")?,
+            status: Self::column(row, "status")?,
+            notes: Self::column(row, "notes")?,
+            created_at: Self::column(row, "created_at")?,
+            updated_at: Self::column(row, "updated_at")?,
+        })
+    }
+
+    fn parse_bin_utilization(row: &PgRow) -> AppResult<BinCapacityUtilizationReadModel> {
+        Ok(BinCapacityUtilizationReadModel {
+            bin_code: Self::column(row, "bin_code")?,
+            zone: Self::column(row, "zone")?,
+            capacity: Self::column(row, "capacity")?,
+            current_occupied: Self::column(row, "current_occupied")?,
+            utilization_pct: Self::column(row, "utilization_pct")?,
+        })
+    }
+
+    fn parse_supplier(row: &PgRow) -> AppResult<SupplierReadModel> {
+        Ok(SupplierReadModel {
+            supplier_id: Self::column(row, "supplier_id")?,
+            supplier_name: Self::column(row, "supplier_name")?,
+            contact_person: Self::column(row, "contact_person")?,
+            phone: Self::column(row, "phone")?,
+            email: Self::column(row, "email")?,
+            address: Self::column(row, "address")?,
+            quality_rating: Self::column(row, "quality_rating")?,
+            is_active: Self::column(row, "is_active")?,
+            created_at: Self::column(row, "created_at")?,
+            updated_at: Self::column(row, "updated_at")?,
+        })
+    }
+
+    fn parse_customer(row: &PgRow) -> AppResult<CustomerReadModel> {
+        Ok(CustomerReadModel {
+            customer_id: Self::column(row, "customer_id")?,
+            customer_name: Self::column(row, "customer_name")?,
+            contact_person: Self::column(row, "contact_person")?,
+            phone: Self::column(row, "phone")?,
+            email: Self::column(row, "email")?,
+            address: Self::column(row, "address")?,
+            credit_limit: Self::column(row, "credit_limit")?,
+            is_active: Self::column(row, "is_active")?,
+            created_at: Self::column(row, "created_at")?,
+            updated_at: Self::column(row, "updated_at")?,
+        })
+    }
+
+    fn parse_material_supplier(row: &PgRow) -> AppResult<MaterialSupplierReadModel> {
+        Ok(MaterialSupplierReadModel {
+            id: Self::column(row, "id")?,
+            material_id: Self::column(row, "material_id")?,
+            supplier_id: Self::column(row, "supplier_id")?,
+            supplier_name: Self::column(row, "supplier_name")?,
+            is_primary: Self::column(row, "is_primary")?,
+            supplier_material_code: Self::column(row, "supplier_material_code")?,
+            purchase_price: Self::column(row, "purchase_price")?,
+            currency: Self::column(row, "currency")?,
+            lead_time_days: Self::column(row, "lead_time_days")?,
+            moq: Self::column(row, "moq")?,
+            quality_rating: Self::column(row, "quality_rating")?,
+            is_active: Self::column(row, "is_active")?,
+            created_at: Self::column(row, "created_at")?,
+            updated_at: Self::column(row, "updated_at")?,
+        })
+    }
+
+    fn parse_variant(row: &PgRow) -> AppResult<ProductVariantReadModel> {
+        Ok(ProductVariantReadModel {
+            variant_code: Self::column(row, "variant_code")?,
+            variant_name: Self::column(row, "variant_name")?,
+            base_material_id: Self::column(row, "base_material_id")?,
+            bom_id: Self::column(row, "bom_id")?,
+            standard_cost: Self::column(row, "standard_cost")?,
+            is_active: Self::column(row, "is_active")?,
+            created_at: Self::column(row, "created_at")?,
+            updated_at: Self::column(row, "updated_at")?,
+        })
+    }
+
+    fn parse_bom_summary(row: &PgRow) -> AppResult<BomSummaryReadModel> {
+        Ok(BomSummaryReadModel {
+            bom_id: Self::column(row, "bom_id")?,
+            bom_name: Self::column(row, "bom_name")?,
+            parent_material_id: Self::column(row, "parent_material_id")?,
+            parent_material_name: Self::column(row, "parent_material_name")?,
+            variant_code: Self::column(row, "variant_code")?,
+            version: Self::column(row, "version")?,
+            base_quantity: Self::column(row, "base_quantity")?,
+            valid_from: Self::column(row, "valid_from")?,
+            valid_to: Self::column(row, "valid_to")?,
+            status: Self::column(row, "status")?,
+            is_active: Self::column(row, "is_active")?,
+            created_by: Self::column(row, "created_by")?,
+            approved_by: Self::column(row, "approved_by")?,
+            approved_at: Self::column(row, "approved_at")?,
+            notes: Self::column(row, "notes")?,
+            created_at: Self::column(row, "created_at")?,
+            updated_at: Self::column(row, "updated_at")?,
+            component_count: Self::column(row, "component_count")?,
+        })
+    }
+
+    fn parse_bom_header(row: &PgRow) -> AppResult<BomHeaderReadModel> {
+        Ok(BomHeaderReadModel {
+            bom_id: Self::column(row, "bom_id")?,
+            bom_name: Self::column(row, "bom_name")?,
+            parent_material_id: Self::column(row, "parent_material_id")?,
+            variant_code: Self::column(row, "variant_code")?,
+            version: Self::column(row, "version")?,
+            base_quantity: Self::column(row, "base_quantity")?,
+            valid_from: Self::column(row, "valid_from")?,
+            valid_to: Self::column(row, "valid_to")?,
+            status: Self::column(row, "status")?,
+            is_active: Self::column(row, "is_active")?,
+            created_by: Self::column(row, "created_by")?,
+            approved_by: Self::column(row, "approved_by")?,
+            approved_at: Self::column(row, "approved_at")?,
+            notes: Self::column(row, "notes")?,
+            created_at: Self::column(row, "created_at")?,
+            updated_at: Self::column(row, "updated_at")?,
+        })
+    }
+
+    fn parse_bom_component(row: &PgRow) -> AppResult<BomComponentReadModel> {
+        Ok(BomComponentReadModel {
+            id: Self::column(row, "id")?,
+            bom_id: Self::column(row, "bom_id")?,
+            parent_material_id: Self::column(row, "parent_material_id")?,
+            parent_material_name: Self::column(row, "parent_material_name")?,
+            component_material_id: Self::column(row, "component_material_id")?,
+            component_material_name: Self::column(row, "component_material_name")?,
+            quantity: Self::column(row, "quantity")?,
+            unit: Self::column(row, "unit")?,
+            bom_level: Self::column(row, "bom_level")?,
+            scrap_rate: Self::column(row, "scrap_rate")?,
+            is_critical: Self::column(row, "is_critical")?,
+            valid_from: Self::column(row, "valid_from")?,
+            valid_to: Self::column(row, "valid_to")?,
+            created_at: Self::column(row, "created_at")?,
+        })
+    }
+
+    fn parse_bom_tree_component(row: &PgRow) -> AppResult<BomTreeComponentReadModel> {
+        Ok(BomTreeComponentReadModel {
+            id: Self::column(row, "id")?,
+            component_material_id: Self::column(row, "component_material_id")?,
+            component_material_name: Self::column(row, "component_material_name")?,
+            quantity: Self::column(row, "quantity")?,
+            unit: Self::column(row, "unit")?,
+            bom_level: Self::column(row, "bom_level")?,
+            scrap_rate: Self::column(row, "scrap_rate")?,
+            is_critical: Self::column(row, "is_critical")?,
+        })
+    }
+
+    fn parse_validation(row: &PgRow) -> AppResult<BomValidationReadModel> {
+        Ok(BomValidationReadModel {
+            bom_id: Self::column(row, "bom_id")?,
+            header_exists: Self::column(row, "header_exists")?,
+            component_count: Self::column(row, "component_count")?,
+            has_components: Self::column(row, "has_components")?,
+            self_reference_count: Self::column(row, "self_reference_count")?,
+            missing_component_materials: Self::column(row, "missing_component_materials")?,
+            cycle_detected: Self::column(row, "cycle_detected")?,
+            cycle_node: Self::column(row, "cycle_node")?,
+            valid: Self::column(row, "valid")?,
+        })
+    }
+
+    fn parse_explosion_item(row: &PgRow) -> AppResult<BomExplosionItemReadModel> {
+        Ok(BomExplosionItemReadModel {
+            bom_level: Self::column(row, "bom_level")?,
+            parent_material_id: Self::column(row, "parent_material_id")?,
+            component_material_id: Self::column(row, "component_material_id")?,
+            component_name: Self::column(row, "component_name")?,
+            unit_qty: Self::column(row, "unit_qty")?,
+            required_qty: Self::column(row, "required_qty")?,
+            available_qty: Self::column(row, "available_qty")?,
+            shortage_qty: Self::column(row, "shortage_qty")?,
+            is_critical: Self::column(row, "is_critical")?,
+        })
+    }
+
+    fn parse_work_center(row: &PgRow) -> AppResult<WorkCenterReadModel> {
+        Ok(WorkCenterReadModel {
+            work_center_id: Self::column(row, "work_center_id")?,
+            work_center_name: Self::column(row, "work_center_name")?,
+            location: Self::column(row, "location")?,
+            capacity_per_day: Self::column(row, "capacity_per_day")?,
+            efficiency: Self::column(row, "efficiency")?,
+            is_active: Self::column(row, "is_active")?,
+            created_at: Self::column(row, "created_at")?,
+        })
+    }
+
+    fn parse_inspection_char(row: &PgRow) -> AppResult<InspectionCharacteristicReadModel> {
+        Ok(InspectionCharacteristicReadModel {
+            char_id: Self::column(row, "char_id")?,
+            char_name: Self::column(row, "char_name")?,
+            material_type: Self::column(row, "material_type")?,
+            inspection_type: Self::column(row, "inspection_type")?,
+            method: Self::column(row, "method")?,
+            standard: Self::column(row, "standard")?,
+            unit: Self::column(row, "unit")?,
+            lower_limit: Self::column(row, "lower_limit")?,
+            upper_limit: Self::column(row, "upper_limit")?,
+            is_critical: Self::column(row, "is_critical")?,
+            is_active: Self::column(row, "is_active")?,
+            created_at: Self::column(row, "created_at")?,
+        })
+    }
+
+    fn parse_defect_code(row: &PgRow) -> AppResult<DefectCodeReadModel> {
+        Ok(DefectCodeReadModel {
+            defect_code: Self::column(row, "defect_code")?,
+            defect_name: Self::column(row, "defect_name")?,
+            category: Self::column(row, "category")?,
+            severity: Self::column(row, "severity")?,
+            description: Self::column(row, "description")?,
+            is_active: Self::column(row, "is_active")?,
+            created_at: Self::column(row, "created_at")?,
+        })
+    }
+
+    async fn fetch_bom_components(&self, bom_id: &str) -> AppResult<Vec<BomComponentReadModel>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                c.id,
+                c.bom_id,
+                c.parent_material_id,
+                pm.material_name AS parent_material_name,
+                c.component_material_id,
+                cm.material_name AS component_material_name,
+                c.quantity,
+                c.unit,
+                c.bom_level,
+                c.scrap_rate,
+                c.is_critical,
+                c.valid_from,
+                c.valid_to,
+                c.created_at
+            FROM mdm.mdm_bom_components c
+            LEFT JOIN mdm.mdm_materials pm ON pm.material_id = c.parent_material_id
+            LEFT JOIN mdm.mdm_materials cm ON cm.material_id = c.component_material_id
+            WHERE c.bom_id = $1
+            ORDER BY c.id
+            "#,
+        )
+        .bind(bom_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+
+        rows.iter()
+            .map(Self::parse_bom_component)
+            .collect::<AppResult<Vec<_>>>()
     }
 }
 
 #[async_trait]
 impl MaterialRepository for PostgresMasterDataRepository {
-    async fn list_materials(&self, query: MasterDataQuery) -> AppResult<Value> {
+    async fn list_materials(&self, query: MasterDataQuery) -> AppResult<Page<MaterialReadModel>> {
         // 计划 §五.1:按物料类型筛选 + 按物料编码/名称模糊搜索 + 按 status 精确过滤
-        let page = query.page.unwrap_or(1).max(1) as i32;
-        let page_size = query.page_size.unwrap_or(20).clamp(1, 200) as i32;
-        let limit = page_size as i64;
-        let offset = ((page - 1) as i64) * limit;
+        let (page, page_size, limit, offset) = Self::pagination(&query);
         let keyword_pattern = query.keyword.as_ref().map(|k| format!("%{}%", k));
+        let material_type = Self::normalize_optional_material_type(query.material_type.as_deref())?;
 
-        let row = sqlx::query(
+        let rows = sqlx::query(
             r#"
-            SELECT json_build_object(
-                'items', COALESCE(json_agg(t), '[]'::json),
-                'page', $1::int,
-                'page_size', $2::int
-            ) AS data
-            FROM (
-                SELECT
-                    material_id,
-                    material_name,
-                    material_type::text AS material_type,
-                    base_unit,
-                    default_zone,
-                    safety_stock,
-                    reorder_point,
-                    standard_price,
-                    map_price,
-                    current_stock,
-                    status,
-                    created_at,
-                    updated_at
-                FROM mdm.mdm_materials
-                WHERE
-                    ($5::text IS NULL OR material_id ILIKE $5 OR material_name ILIKE $5)
-                    AND ($6::text IS NULL OR material_type::text = $6)
-                    AND ($7::text IS NULL OR status = $7)
-                ORDER BY material_id
-                LIMIT $3 OFFSET $4
-            ) t
+            SELECT
+                COUNT(*) OVER() AS total,
+                material_id,
+                material_name,
+                material_type::text AS material_type,
+                base_unit,
+                default_zone,
+                safety_stock,
+                reorder_point,
+                standard_price,
+                map_price,
+                current_stock,
+                status,
+                created_at,
+                updated_at
+            FROM mdm.mdm_materials
+            WHERE
+                ($3::text IS NULL OR material_id ILIKE $3 OR material_name ILIKE $3)
+                AND ($4::text IS NULL OR material_type::text = $4)
+                AND ($5::text IS NULL OR status = $5)
+            ORDER BY material_id
+            LIMIT $1 OFFSET $2
             "#,
         )
-        .bind(page)
-        .bind(page_size)
         .bind(limit)
         .bind(offset)
         .bind(keyword_pattern.as_deref())
-        .bind(query.material_type.as_deref())
+        .bind(material_type)
         .bind(query.status.as_deref())
-        .fetch_one(&self.pool)
+        .fetch_all(&self.pool)
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::page_from_rows(rows, page, page_size, Self::parse_material)
     }
 
-    async fn get_material(&self, material_id: &str) -> AppResult<Value> {
-        self.fetch_json_with_id(
+    async fn get_material(&self, material_id: &str) -> AppResult<MaterialReadModel> {
+        self.fetch_one_by_id(
             r#"
-            SELECT row_to_json(t) AS data
-            FROM (
-                SELECT
-                    material_id,
-                    material_name,
-                    material_type::text AS material_type,
-                    base_unit,
-                    default_zone,
-                    safety_stock,
-                    reorder_point,
-                    standard_price,
-                    map_price,
-                    current_stock,
-                    status,
-                    created_at,
-                    updated_at
-                FROM mdm.mdm_materials
-                WHERE material_id = $1
-            ) t
+            SELECT
+                material_id,
+                material_name,
+                material_type::text AS material_type,
+                base_unit,
+                default_zone,
+                safety_stock,
+                reorder_point,
+                standard_price,
+                map_price,
+                current_stock,
+                status,
+                created_at,
+                updated_at
+            FROM mdm.mdm_materials
+            WHERE material_id = $1
             "#,
             material_id,
+            "MATERIAL_NOT_FOUND",
+            format!("物料不存在: {material_id}"),
+            Self::parse_material,
         )
         .await
     }
 
-    async fn create_material(&self, command: CreateMaterialCommand) -> AppResult<Value> {
+    async fn create_material(
+        &self,
+        command: CreateMaterialCommand,
+    ) -> AppResult<MaterialReadModel> {
+        let material_type = Self::normalize_material_type(&command.material_type)?;
+
         let row = sqlx::query(
             r#"
             INSERT INTO mdm.mdm_materials (
@@ -226,12 +560,25 @@ impl MaterialRepository for PostgresMasterDataRepository {
                 0,
                 '正常'
             )
-            RETURNING row_to_json(mdm.mdm_materials.*) AS data
+            RETURNING
+                material_id,
+                material_name,
+                material_type::text AS material_type,
+                base_unit,
+                default_zone,
+                safety_stock,
+                reorder_point,
+                standard_price,
+                map_price,
+                current_stock,
+                status,
+                created_at,
+                updated_at
             "#,
         )
         .bind(command.material_id)
         .bind(command.material_name)
-        .bind(command.material_type)
+        .bind(material_type)
         .bind(command.base_unit)
         .bind(command.default_zone)
         .bind(command.safety_stock)
@@ -242,15 +589,14 @@ impl MaterialRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_material(&row)
     }
 
     async fn update_material(
         &self,
         material_id: &str,
         command: UpdateMaterialCommand,
-    ) -> AppResult<Value> {
+    ) -> AppResult<MaterialReadModel> {
         let row = sqlx::query(
             r#"
             UPDATE mdm.mdm_materials
@@ -264,7 +610,20 @@ impl MaterialRepository for PostgresMasterDataRepository {
                 status = COALESCE($8, status),
                 updated_at = NOW()
             WHERE material_id = $1
-            RETURNING row_to_json(mdm.mdm_materials.*) AS data
+            RETURNING
+                material_id,
+                material_name,
+                material_type::text AS material_type,
+                base_unit,
+                default_zone,
+                safety_stock,
+                reorder_point,
+                standard_price,
+                map_price,
+                current_stock,
+                status,
+                created_at,
+                updated_at
             "#,
         )
         .bind(material_id)
@@ -280,16 +639,16 @@ impl MaterialRepository for PostgresMasterDataRepository {
         .map_err(cuba_shared::map_master_data_db_error)?;
 
         let Some(row) = row else {
-            return Err(AppError::NotFound(format!(
-                "material not found: {material_id}"
-            )));
+            return Err(AppError::business(
+                "MATERIAL_NOT_FOUND",
+                format!("物料不存在: {material_id}"),
+            ));
         };
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_material(&row)
     }
 
-    async fn activate_material(&self, material_id: &str) -> AppResult<Value> {
+    async fn activate_material(&self, material_id: &str) -> AppResult<MutationAck> {
         let result = sqlx::query(
             r#"
             UPDATE mdm.mdm_materials
@@ -302,11 +661,15 @@ impl MaterialRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        self.affected_to_json(result, "material_id", material_id)
-            .await
+        Self::affected_to_ack(
+            result,
+            material_id,
+            "MATERIAL_NOT_FOUND",
+            format!("物料不存在: {material_id}"),
+        )
     }
 
-    async fn deactivate_material(&self, material_id: &str) -> AppResult<Value> {
+    async fn deactivate_material(&self, material_id: &str) -> AppResult<MutationAck> {
         let result = sqlx::query(
             r#"
             UPDATE mdm.mdm_materials
@@ -319,89 +682,81 @@ impl MaterialRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        self.affected_to_json(result, "material_id", material_id)
-            .await
+        Self::affected_to_ack(
+            result,
+            material_id,
+            "MATERIAL_NOT_FOUND",
+            format!("物料不存在: {material_id}"),
+        )
     }
 }
 
 #[async_trait]
 impl StorageBinRepository for PostgresMasterDataRepository {
-    async fn list_bins(&self, query: MasterDataQuery) -> AppResult<Value> {
+    async fn list_bins(&self, query: MasterDataQuery) -> AppResult<Page<StorageBinReadModel>> {
         // 计划 §五.2:按区域查询货位 + 按是否可用查询货位 + 模糊搜索
-        let page = query.page.unwrap_or(1).max(1) as i32;
-        let page_size = query.page_size.unwrap_or(20).clamp(1, 200) as i32;
-        let limit = page_size as i64;
-        let offset = ((page - 1) as i64) * limit;
+        let (page, page_size, limit, offset) = Self::pagination(&query);
         let keyword_pattern = query.keyword.as_ref().map(|k| format!("%{}%", k));
 
-        let row = sqlx::query(
+        let rows = sqlx::query(
             r#"
-            SELECT json_build_object(
-                'items', COALESCE(json_agg(t), '[]'::json),
-                'page', $1::int,
-                'page_size', $2::int
-            ) AS data
-            FROM (
-                SELECT
-                    bin_code,
-                    zone,
-                    bin_type,
-                    capacity,
-                    current_occupied,
-                    status,
-                    notes,
-                    created_at,
-                    updated_at
-                FROM mdm.mdm_storage_bins
-                WHERE
-                    ($5::text IS NULL OR bin_code ILIKE $5 OR zone ILIKE $5)
-                    AND ($6::text IS NULL OR zone = $6)
-                    AND ($7::text IS NULL OR status = $7)
-                ORDER BY zone, bin_code
-                LIMIT $3 OFFSET $4
-            ) t
+            SELECT
+                COUNT(*) OVER() AS total,
+                bin_code,
+                zone,
+                bin_type,
+                capacity,
+                current_occupied,
+                status,
+                notes,
+                created_at,
+                updated_at
+            FROM mdm.mdm_storage_bins
+            WHERE
+                ($3::text IS NULL OR bin_code ILIKE $3 OR zone ILIKE $3)
+                AND ($4::text IS NULL OR zone = $4)
+                AND ($5::text IS NULL OR status = $5)
+            ORDER BY zone, bin_code
+            LIMIT $1 OFFSET $2
             "#,
         )
-        .bind(page)
-        .bind(page_size)
         .bind(limit)
         .bind(offset)
         .bind(keyword_pattern.as_deref())
         .bind(query.zone.as_deref())
         .bind(query.status.as_deref())
-        .fetch_one(&self.pool)
+        .fetch_all(&self.pool)
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::page_from_rows(rows, page, page_size, Self::parse_storage_bin)
     }
 
-    async fn get_bin(&self, bin_code: &str) -> AppResult<Value> {
-        self.fetch_json_with_id(
+    async fn get_bin(&self, bin_code: &str) -> AppResult<StorageBinReadModel> {
+        self.fetch_one_by_id(
             r#"
-            SELECT row_to_json(t) AS data
-            FROM (
-                SELECT
-                    bin_code,
-                    zone,
-                    bin_type,
-                    capacity,
-                    current_occupied,
-                    status,
-                    notes,
-                    created_at,
-                    updated_at
-                FROM mdm.mdm_storage_bins
-                WHERE bin_code = $1
-            ) t
+            SELECT
+                bin_code,
+                zone,
+                bin_type,
+                capacity,
+                current_occupied,
+                status,
+                notes,
+                created_at,
+                updated_at
+            FROM mdm.mdm_storage_bins
+            WHERE bin_code = $1
             "#,
             bin_code,
+            "BIN_NOT_FOUND",
+            format!("货位不存在: {bin_code}"),
+            Self::parse_storage_bin,
         )
         .await
     }
 
-    async fn create_bin(&self, command: CreateStorageBinCommand) -> AppResult<Value> {
+    async fn create_bin(&self, command: CreateStorageBinCommand) -> AppResult<StorageBinReadModel> {
         let row = sqlx::query(
             r#"
             INSERT INTO mdm.mdm_storage_bins (
@@ -422,7 +777,16 @@ impl StorageBinRepository for PostgresMasterDataRepository {
                 '正常',
                 $5
             )
-            RETURNING row_to_json(mdm.mdm_storage_bins.*) AS data
+            RETURNING
+                bin_code,
+                zone,
+                bin_type,
+                capacity,
+                current_occupied,
+                status,
+                notes,
+                created_at,
+                updated_at
             "#,
         )
         .bind(command.bin_code)
@@ -434,15 +798,14 @@ impl StorageBinRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_storage_bin(&row)
     }
 
     async fn update_bin(
         &self,
         bin_code: &str,
         command: UpdateStorageBinCommand,
-    ) -> AppResult<Value> {
+    ) -> AppResult<StorageBinReadModel> {
         // 计划 §五.2 / §六.2:容量不能小于当前占用。
         // 用 entity 的 change_capacity 跑这条跨字段规则:先 SELECT 当前状态,
         // 装进 StorageBin 调用,失败则不进 UPDATE。
@@ -458,10 +821,11 @@ impl StorageBinRepository for PostgresMasterDataRepository {
             .fetch_optional(&self.pool)
             .await
             .map_err(cuba_shared::map_master_data_db_error)?
-            .ok_or_else(|| AppError::NotFound(format!("bin not found: {bin_code}")))?;
+            .ok_or_else(|| {
+                AppError::business("BIN_NOT_FOUND", format!("货位不存在: {bin_code}"))
+            })?;
 
-            let bin_code_vo = BinCode::new(bin_code)
-                .map_err(|e| AppError::Validation(e.to_string()))?;
+            let bin_code_vo = BinCode::new(bin_code)?;
             let mut entity = StorageBin {
                 bin_code: bin_code_vo,
                 zone: current.try_get::<String, _>("zone").unwrap_or_default(),
@@ -472,10 +836,8 @@ impl StorageBinRepository for PostgresMasterDataRepository {
                     .try_get::<String, _>("status")
                     .unwrap_or_else(|_| "正常".to_string()),
             };
-            // 触发 change_capacity 不变式 — 容量 >= 0 且 >= current_occupied
-            entity
-                .change_capacity(new_capacity)
-                .map_err(|e| AppError::Validation(e.to_string()))?;
+            // 触发 change_capacity 不变式:容量 > 0 且 >= current_occupied
+            entity.change_capacity(new_capacity)?;
         }
 
         let row = sqlx::query(
@@ -489,7 +851,16 @@ impl StorageBinRepository for PostgresMasterDataRepository {
                 notes = COALESCE($6, notes),
                 updated_at = NOW()
             WHERE bin_code = $1
-            RETURNING row_to_json(mdm.mdm_storage_bins.*) AS data
+            RETURNING
+                bin_code,
+                zone,
+                bin_type,
+                capacity,
+                current_occupied,
+                status,
+                notes,
+                created_at,
+                updated_at
             "#,
         )
         .bind(bin_code)
@@ -503,14 +874,16 @@ impl StorageBinRepository for PostgresMasterDataRepository {
         .map_err(cuba_shared::map_master_data_db_error)?;
 
         let Some(row) = row else {
-            return Err(AppError::NotFound(format!("bin not found: {bin_code}")));
+            return Err(AppError::business(
+                "BIN_NOT_FOUND",
+                format!("货位不存在: {bin_code}"),
+            ));
         };
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_storage_bin(&row)
     }
 
-    async fn activate_bin(&self, bin_code: &str) -> AppResult<Value> {
+    async fn activate_bin(&self, bin_code: &str) -> AppResult<MutationAck> {
         let result = sqlx::query(
             r#"
             UPDATE mdm.mdm_storage_bins
@@ -523,14 +896,19 @@ impl StorageBinRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        self.affected_to_json(result, "bin_code", bin_code).await
+        Self::affected_to_ack(
+            result,
+            bin_code,
+            "BIN_NOT_FOUND",
+            format!("货位不存在: {bin_code}"),
+        )
     }
 
-    async fn deactivate_bin(&self, bin_code: &str) -> AppResult<Value> {
+    async fn deactivate_bin(&self, bin_code: &str) -> AppResult<MutationAck> {
         let result = sqlx::query(
             r#"
             UPDATE mdm.mdm_storage_bins
-            SET status = '停用', updated_at = NOW()
+            SET status = '冻结', updated_at = NOW()
             WHERE bin_code = $1
             "#,
         )
@@ -539,28 +917,30 @@ impl StorageBinRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        self.affected_to_json(result, "bin_code", bin_code).await
+        Self::affected_to_ack(
+            result,
+            bin_code,
+            "BIN_NOT_FOUND",
+            format!("货位不存在: {bin_code}"),
+        )
     }
 
-    async fn get_bin_capacity_utilization(&self, bin_code: &str) -> AppResult<Value> {
+    async fn get_bin_capacity_utilization(
+        &self,
+        bin_code: &str,
+    ) -> AppResult<BinCapacityUtilizationReadModel> {
         // 计划 §五.2:查询货位容量利用率。
-        // utilization_pct 用 numeric 在 SQL 计算,避免浮点;capacity = 0 时回 0.0。
+        // utilization_pct 用 numeric 在 SQL 计算,避免浮点。
         let row = sqlx::query(
             r#"
-            SELECT row_to_json(t) AS data
-            FROM (
-                SELECT
-                    bin_code,
-                    zone,
-                    capacity,
-                    current_occupied,
-                    CASE
-                        WHEN capacity = 0 THEN 0.00::numeric
-                        ELSE ROUND(current_occupied::numeric * 100 / capacity::numeric, 2)
-                    END AS utilization_pct
-                FROM mdm.mdm_storage_bins
-                WHERE bin_code = $1
-            ) t
+            SELECT
+                bin_code,
+                zone,
+                capacity,
+                current_occupied,
+                ROUND(current_occupied::numeric * 100 / capacity::numeric, 2) AS utilization_pct
+            FROM mdm.mdm_storage_bins
+            WHERE bin_code = $1
             "#,
         )
         .bind(bin_code)
@@ -569,92 +949,85 @@ impl StorageBinRepository for PostgresMasterDataRepository {
         .map_err(cuba_shared::map_master_data_db_error)?;
 
         let Some(row) = row else {
-            return Err(AppError::NotFound(format!("bin not found: {bin_code}")));
+            return Err(AppError::business(
+                "BIN_NOT_FOUND",
+                format!("货位不存在: {bin_code}"),
+            ));
         };
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_bin_utilization(&row)
     }
 }
 
 #[async_trait]
 impl SupplierRepository for PostgresMasterDataRepository {
-    async fn list_suppliers(&self, query: MasterDataQuery) -> AppResult<Value> {
+    async fn list_suppliers(&self, query: MasterDataQuery) -> AppResult<Page<SupplierReadModel>> {
         // 计划 §五.3:模糊搜索 + 按 is_active 过滤
-        let page = query.page.unwrap_or(1).max(1) as i32;
-        let page_size = query.page_size.unwrap_or(20).clamp(1, 200) as i32;
-        let limit = page_size as i64;
-        let offset = ((page - 1) as i64) * limit;
+        let (page, page_size, limit, offset) = Self::pagination(&query);
         let keyword_pattern = query.keyword.as_ref().map(|k| format!("%{}%", k));
 
-        let row = sqlx::query(
+        let rows = sqlx::query(
             r#"
-            SELECT json_build_object(
-                'items', COALESCE(json_agg(t), '[]'::json),
-                'page', $1::int,
-                'page_size', $2::int
-            ) AS data
-            FROM (
-                SELECT
-                    supplier_id,
-                    supplier_name,
-                    contact_person,
-                    phone,
-                    email,
-                    address,
-                    quality_rating,
-                    is_active,
-                    created_at,
-                    updated_at
-                FROM mdm.mdm_suppliers
-                WHERE
-                    ($5::text IS NULL OR supplier_id ILIKE $5 OR supplier_name ILIKE $5)
-                    AND ($6::bool IS NULL OR is_active = $6)
-                ORDER BY supplier_id
-                LIMIT $3 OFFSET $4
-            ) t
+            SELECT
+                COUNT(*) OVER() AS total,
+                supplier_id,
+                supplier_name,
+                contact_person,
+                phone,
+                email,
+                address,
+                quality_rating,
+                is_active,
+                created_at,
+                updated_at
+            FROM mdm.mdm_suppliers
+            WHERE
+                ($3::text IS NULL OR supplier_id ILIKE $3 OR supplier_name ILIKE $3)
+                AND ($4::bool IS NULL OR is_active = $4)
+            ORDER BY supplier_id
+            LIMIT $1 OFFSET $2
             "#,
         )
-        .bind(page)
-        .bind(page_size)
         .bind(limit)
         .bind(offset)
         .bind(keyword_pattern.as_deref())
         .bind(query.is_active)
-        .fetch_one(&self.pool)
+        .fetch_all(&self.pool)
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::page_from_rows(rows, page, page_size, Self::parse_supplier)
     }
 
-    async fn get_supplier(&self, supplier_id: &str) -> AppResult<Value> {
-        self.fetch_json_with_id(
+    async fn get_supplier(&self, supplier_id: &str) -> AppResult<SupplierReadModel> {
+        self.fetch_one_by_id(
             r#"
-            SELECT row_to_json(t) AS data
-            FROM (
-                SELECT
-                    supplier_id,
-                    supplier_name,
-                    contact_person,
-                    phone,
-                    email,
-                    address,
-                    quality_rating,
-                    is_active,
-                    created_at,
-                    updated_at
-                FROM mdm.mdm_suppliers
-                WHERE supplier_id = $1
-            ) t
+            SELECT
+                supplier_id,
+                supplier_name,
+                contact_person,
+                phone,
+                email,
+                address,
+                quality_rating,
+                is_active,
+                created_at,
+                updated_at
+            FROM mdm.mdm_suppliers
+            WHERE supplier_id = $1
             "#,
             supplier_id,
+            "SUPPLIER_NOT_FOUND",
+            format!("供应商不存在: {supplier_id}"),
+            Self::parse_supplier,
         )
         .await
     }
 
-    async fn create_supplier(&self, command: CreateSupplierCommand) -> AppResult<Value> {
+    async fn create_supplier(
+        &self,
+        command: CreateSupplierCommand,
+    ) -> AppResult<SupplierReadModel> {
         let row = sqlx::query(
             r#"
             INSERT INTO mdm.mdm_suppliers (
@@ -677,7 +1050,17 @@ impl SupplierRepository for PostgresMasterDataRepository {
                 COALESCE($7, 'A'),
                 TRUE
             )
-            RETURNING row_to_json(mdm.mdm_suppliers.*) AS data
+            RETURNING
+                supplier_id,
+                supplier_name,
+                contact_person,
+                phone,
+                email,
+                address,
+                quality_rating,
+                is_active,
+                created_at,
+                updated_at
             "#,
         )
         .bind(command.supplier_id)
@@ -691,15 +1074,14 @@ impl SupplierRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_supplier(&row)
     }
 
     async fn update_supplier(
         &self,
         supplier_id: &str,
         command: UpdateSupplierCommand,
-    ) -> AppResult<Value> {
+    ) -> AppResult<SupplierReadModel> {
         let row = sqlx::query(
             r#"
             UPDATE mdm.mdm_suppliers
@@ -713,7 +1095,17 @@ impl SupplierRepository for PostgresMasterDataRepository {
                 is_active = COALESCE($8, is_active),
                 updated_at = NOW()
             WHERE supplier_id = $1
-            RETURNING row_to_json(mdm.mdm_suppliers.*) AS data
+            RETURNING
+                supplier_id,
+                supplier_name,
+                contact_person,
+                phone,
+                email,
+                address,
+                quality_rating,
+                is_active,
+                created_at,
+                updated_at
             "#,
         )
         .bind(supplier_id)
@@ -729,16 +1121,16 @@ impl SupplierRepository for PostgresMasterDataRepository {
         .map_err(cuba_shared::map_master_data_db_error)?;
 
         let Some(row) = row else {
-            return Err(AppError::NotFound(format!(
-                "supplier not found: {supplier_id}"
-            )));
+            return Err(AppError::business(
+                "SUPPLIER_NOT_FOUND",
+                format!("供应商不存在: {supplier_id}"),
+            ));
         };
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_supplier(&row)
     }
 
-    async fn activate_supplier(&self, supplier_id: &str) -> AppResult<Value> {
+    async fn activate_supplier(&self, supplier_id: &str) -> AppResult<MutationAck> {
         let result = sqlx::query(
             r#"
             UPDATE mdm.mdm_suppliers
@@ -751,11 +1143,15 @@ impl SupplierRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        self.affected_to_json(result, "supplier_id", supplier_id)
-            .await
+        Self::affected_to_ack(
+            result,
+            supplier_id,
+            "SUPPLIER_NOT_FOUND",
+            format!("供应商不存在: {supplier_id}"),
+        )
     }
 
-    async fn deactivate_supplier(&self, supplier_id: &str) -> AppResult<Value> {
+    async fn deactivate_supplier(&self, supplier_id: &str) -> AppResult<MutationAck> {
         let result = sqlx::query(
             r#"
             UPDATE mdm.mdm_suppliers
@@ -768,89 +1164,84 @@ impl SupplierRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        self.affected_to_json(result, "supplier_id", supplier_id)
-            .await
+        Self::affected_to_ack(
+            result,
+            supplier_id,
+            "SUPPLIER_NOT_FOUND",
+            format!("供应商不存在: {supplier_id}"),
+        )
     }
 }
 
 #[async_trait]
 impl CustomerRepository for PostgresMasterDataRepository {
-    async fn list_customers(&self, query: MasterDataQuery) -> AppResult<Value> {
+    async fn list_customers(&self, query: MasterDataQuery) -> AppResult<Page<CustomerReadModel>> {
         // 计划 §五.5:模糊搜索 + 按 is_active 过滤
-        let page = query.page.unwrap_or(1).max(1) as i32;
-        let page_size = query.page_size.unwrap_or(20).clamp(1, 200) as i32;
-        let limit = page_size as i64;
-        let offset = ((page - 1) as i64) * limit;
+        let (page, page_size, limit, offset) = Self::pagination(&query);
         let keyword_pattern = query.keyword.as_ref().map(|k| format!("%{}%", k));
 
-        let row = sqlx::query(
+        let rows = sqlx::query(
             r#"
-            SELECT json_build_object(
-                'items', COALESCE(json_agg(t), '[]'::json),
-                'page', $1::int,
-                'page_size', $2::int
-            ) AS data
-            FROM (
-                SELECT
-                    customer_id,
-                    customer_name,
-                    contact_person,
-                    phone,
-                    email,
-                    address,
-                    credit_limit,
-                    is_active,
-                    created_at,
-                    updated_at
-                FROM mdm.mdm_customers
-                WHERE
-                    ($5::text IS NULL OR customer_id ILIKE $5 OR customer_name ILIKE $5)
-                    AND ($6::bool IS NULL OR is_active = $6)
-                ORDER BY customer_id
-                LIMIT $3 OFFSET $4
-            ) t
+            SELECT
+                COUNT(*) OVER() AS total,
+                customer_id,
+                customer_name,
+                contact_person,
+                phone,
+                email,
+                address,
+                credit_limit,
+                is_active,
+                created_at,
+                updated_at
+            FROM mdm.mdm_customers
+            WHERE
+                ($3::text IS NULL OR customer_id ILIKE $3 OR customer_name ILIKE $3)
+                AND ($4::bool IS NULL OR is_active = $4)
+            ORDER BY customer_id
+            LIMIT $1 OFFSET $2
             "#,
         )
-        .bind(page)
-        .bind(page_size)
         .bind(limit)
         .bind(offset)
         .bind(keyword_pattern.as_deref())
         .bind(query.is_active)
-        .fetch_one(&self.pool)
+        .fetch_all(&self.pool)
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::page_from_rows(rows, page, page_size, Self::parse_customer)
     }
 
-    async fn get_customer(&self, customer_id: &str) -> AppResult<Value> {
-        self.fetch_json_with_id(
+    async fn get_customer(&self, customer_id: &str) -> AppResult<CustomerReadModel> {
+        self.fetch_one_by_id(
             r#"
-            SELECT row_to_json(t) AS data
-            FROM (
-                SELECT
-                    customer_id,
-                    customer_name,
-                    contact_person,
-                    phone,
-                    email,
-                    address,
-                    credit_limit,
-                    is_active,
-                    created_at,
-                    updated_at
-                FROM mdm.mdm_customers
-                WHERE customer_id = $1
-            ) t
+            SELECT
+                customer_id,
+                customer_name,
+                contact_person,
+                phone,
+                email,
+                address,
+                credit_limit,
+                is_active,
+                created_at,
+                updated_at
+            FROM mdm.mdm_customers
+            WHERE customer_id = $1
             "#,
             customer_id,
+            "CUSTOMER_NOT_FOUND",
+            format!("客户不存在: {customer_id}"),
+            Self::parse_customer,
         )
         .await
     }
 
-    async fn create_customer(&self, command: CreateCustomerCommand) -> AppResult<Value> {
+    async fn create_customer(
+        &self,
+        command: CreateCustomerCommand,
+    ) -> AppResult<CustomerReadModel> {
         let row = sqlx::query(
             r#"
             INSERT INTO mdm.mdm_customers (
@@ -873,7 +1264,17 @@ impl CustomerRepository for PostgresMasterDataRepository {
                 COALESCE($7, 0),
                 TRUE
             )
-            RETURNING row_to_json(mdm.mdm_customers.*) AS data
+            RETURNING
+                customer_id,
+                customer_name,
+                contact_person,
+                phone,
+                email,
+                address,
+                credit_limit,
+                is_active,
+                created_at,
+                updated_at
             "#,
         )
         .bind(command.customer_id)
@@ -887,15 +1288,14 @@ impl CustomerRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_customer(&row)
     }
 
     async fn update_customer(
         &self,
         customer_id: &str,
         command: UpdateCustomerCommand,
-    ) -> AppResult<Value> {
+    ) -> AppResult<CustomerReadModel> {
         let row = sqlx::query(
             r#"
             UPDATE mdm.mdm_customers
@@ -909,7 +1309,17 @@ impl CustomerRepository for PostgresMasterDataRepository {
                 is_active = COALESCE($8, is_active),
                 updated_at = NOW()
             WHERE customer_id = $1
-            RETURNING row_to_json(mdm.mdm_customers.*) AS data
+            RETURNING
+                customer_id,
+                customer_name,
+                contact_person,
+                phone,
+                email,
+                address,
+                credit_limit,
+                is_active,
+                created_at,
+                updated_at
             "#,
         )
         .bind(customer_id)
@@ -925,16 +1335,16 @@ impl CustomerRepository for PostgresMasterDataRepository {
         .map_err(cuba_shared::map_master_data_db_error)?;
 
         let Some(row) = row else {
-            return Err(AppError::NotFound(format!(
-                "customer not found: {customer_id}"
-            )));
+            return Err(AppError::business(
+                "CUSTOMER_NOT_FOUND",
+                format!("客户不存在: {customer_id}"),
+            ));
         };
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_customer(&row)
     }
 
-    async fn activate_customer(&self, customer_id: &str) -> AppResult<Value> {
+    async fn activate_customer(&self, customer_id: &str) -> AppResult<MutationAck> {
         let result = sqlx::query(
             r#"
             UPDATE mdm.mdm_customers
@@ -947,11 +1357,15 @@ impl CustomerRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        self.affected_to_json(result, "customer_id", customer_id)
-            .await
+        Self::affected_to_ack(
+            result,
+            customer_id,
+            "CUSTOMER_NOT_FOUND",
+            format!("客户不存在: {customer_id}"),
+        )
     }
 
-    async fn deactivate_customer(&self, customer_id: &str) -> AppResult<Value> {
+    async fn deactivate_customer(&self, customer_id: &str) -> AppResult<MutationAck> {
         let result = sqlx::query(
             r#"
             UPDATE mdm.mdm_customers
@@ -964,51 +1378,77 @@ impl CustomerRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        self.affected_to_json(result, "customer_id", customer_id)
-            .await
+        Self::affected_to_ack(
+            result,
+            customer_id,
+            "CUSTOMER_NOT_FOUND",
+            format!("客户不存在: {customer_id}"),
+        )
     }
 }
 
 #[async_trait]
 impl MaterialSupplierRepository for PostgresMasterDataRepository {
-    async fn list_material_suppliers(&self, material_id: &str) -> AppResult<Value> {
-        let row = sqlx::query(
+    async fn list_material_suppliers(
+        &self,
+        material_id: &str,
+    ) -> AppResult<Vec<MaterialSupplierReadModel>> {
+        let material_exists: Option<bool> = sqlx::query_scalar(
             r#"
-            SELECT COALESCE(json_agg(t ORDER BY t.is_primary DESC, t.supplier_id), '[]'::json) AS data
-            FROM (
-                SELECT
-                    ms.id,
-                    ms.material_id,
-                    ms.supplier_id,
-                    s.supplier_name,
-                    ms.is_primary,
-                    ms.supplier_material_code,
-                    ms.purchase_price,
-                    ms.currency,
-                    ms.lead_time_days,
-                    ms.moq,
-                    ms.quality_rating,
-                    ms.is_active,
-                    ms.created_at,
-                    ms.updated_at
-                FROM mdm.mdm_material_suppliers ms
-                JOIN mdm.mdm_suppliers s ON s.supplier_id = ms.supplier_id
-                WHERE ms.material_id = $1
-            ) t
+            SELECT TRUE
+            FROM mdm.mdm_materials
+            WHERE material_id = $1
             "#,
         )
-            .bind(material_id)
-            .fetch_one(&self.pool)
-            .await.map_err(cuba_shared::map_master_data_db_error)?;
+        .bind(material_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        if material_exists.is_none() {
+            return Err(AppError::business(
+                "MATERIAL_NOT_FOUND",
+                format!("物料不存在: {material_id}"),
+            ));
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                ms.id,
+                ms.material_id,
+                ms.supplier_id,
+                s.supplier_name,
+                ms.is_primary,
+                ms.supplier_material_code,
+                ms.purchase_price,
+                ms.currency,
+                ms.lead_time_days,
+                ms.moq,
+                ms.quality_rating,
+                ms.is_active,
+                ms.created_at,
+                ms.updated_at
+            FROM mdm.mdm_material_suppliers ms
+            JOIN mdm.mdm_suppliers s ON s.supplier_id = ms.supplier_id
+            WHERE ms.material_id = $1
+            ORDER BY ms.is_primary DESC, ms.supplier_id
+            "#,
+        )
+        .bind(material_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+
+        rows.iter()
+            .map(Self::parse_material_supplier)
+            .collect::<AppResult<Vec<_>>>()
     }
 
     async fn create_material_supplier(
         &self,
         command: CreateMaterialSupplierCommand,
-    ) -> AppResult<Value> {
+    ) -> AppResult<MaterialSupplierReadModel> {
         // 计划 §五.4:停用物料不能新增供应商关系、停用供应商不能设为主供应商。
         // 这些是跨表规则,放到事务里检查避免 TOCTOU。
         let mut tx = self
@@ -1094,31 +1534,50 @@ impl MaterialSupplierRepository for PostgresMasterDataRepository {
 
         let row = sqlx::query(
             r#"
-            INSERT INTO mdm.mdm_material_suppliers (
-                material_id,
-                supplier_id,
-                is_primary,
-                supplier_material_code,
-                purchase_price,
-                currency,
-                lead_time_days,
-                moq,
-                quality_rating,
-                is_active
+            WITH inserted AS (
+                INSERT INTO mdm.mdm_material_suppliers (
+                    material_id,
+                    supplier_id,
+                    is_primary,
+                    supplier_material_code,
+                    purchase_price,
+                    currency,
+                    lead_time_days,
+                    moq,
+                    quality_rating,
+                    is_active
+                )
+                VALUES (
+                    $1,
+                    $2,
+                    COALESCE($3, FALSE),
+                    $4,
+                    $5,
+                    COALESCE($6, 'CNY'),
+                    COALESCE($7, 0),
+                    COALESCE($8, 1),
+                    COALESCE($9, 'A'),
+                    TRUE
+                )
+                RETURNING *
             )
-            VALUES (
-                $1,
-                $2,
-                COALESCE($3, FALSE),
-                $4,
-                $5,
-                COALESCE($6, 'CNY'),
-                COALESCE($7, 0),
-                COALESCE($8, 1),
-                COALESCE($9, 'A'),
-                TRUE
-            )
-            RETURNING row_to_json(mdm.mdm_material_suppliers.*) AS data
+            SELECT
+                inserted.id,
+                inserted.material_id,
+                inserted.supplier_id,
+                s.supplier_name,
+                inserted.is_primary,
+                inserted.supplier_material_code,
+                inserted.purchase_price,
+                inserted.currency,
+                inserted.lead_time_days,
+                inserted.moq,
+                inserted.quality_rating,
+                inserted.is_active,
+                inserted.created_at,
+                inserted.updated_at
+            FROM inserted
+            LEFT JOIN mdm.mdm_suppliers s ON s.supplier_id = inserted.supplier_id
             "#,
         )
         .bind(command.material_id)
@@ -1138,8 +1597,7 @@ impl MaterialSupplierRepository for PostgresMasterDataRepository {
             .await
             .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_material_supplier(&row)
     }
 
     async fn update_material_supplier(
@@ -1147,23 +1605,42 @@ impl MaterialSupplierRepository for PostgresMasterDataRepository {
         material_id: &str,
         supplier_id: &str,
         command: UpdateMaterialSupplierCommand,
-    ) -> AppResult<Value> {
+    ) -> AppResult<MaterialSupplierReadModel> {
         let row = sqlx::query(
             r#"
-            UPDATE mdm.mdm_material_suppliers
-            SET
-                is_primary = COALESCE($3, is_primary),
-                supplier_material_code = COALESCE($4, supplier_material_code),
-                purchase_price = COALESCE($5, purchase_price),
-                currency = COALESCE($6, currency),
-                lead_time_days = COALESCE($7, lead_time_days),
-                moq = COALESCE($8, moq),
-                quality_rating = COALESCE($9, quality_rating),
-                is_active = COALESCE($10, is_active),
-                updated_at = NOW()
-            WHERE material_id = $1
-              AND supplier_id = $2
-            RETURNING row_to_json(mdm.mdm_material_suppliers.*) AS data
+            WITH updated AS (
+                UPDATE mdm.mdm_material_suppliers
+                SET
+                    is_primary = COALESCE($3, is_primary),
+                    supplier_material_code = COALESCE($4, supplier_material_code),
+                    purchase_price = COALESCE($5, purchase_price),
+                    currency = COALESCE($6, currency),
+                    lead_time_days = COALESCE($7, lead_time_days),
+                    moq = COALESCE($8, moq),
+                    quality_rating = COALESCE($9, quality_rating),
+                    is_active = COALESCE($10, is_active),
+                    updated_at = NOW()
+                WHERE material_id = $1
+                  AND supplier_id = $2
+                RETURNING *
+            )
+            SELECT
+                updated.id,
+                updated.material_id,
+                updated.supplier_id,
+                s.supplier_name,
+                updated.is_primary,
+                updated.supplier_material_code,
+                updated.purchase_price,
+                updated.currency,
+                updated.lead_time_days,
+                updated.moq,
+                updated.quality_rating,
+                updated.is_active,
+                updated.created_at,
+                updated.updated_at
+            FROM updated
+            LEFT JOIN mdm.mdm_suppliers s ON s.supplier_id = updated.supplier_id
             "#,
         )
         .bind(material_id)
@@ -1186,11 +1663,14 @@ impl MaterialSupplierRepository for PostgresMasterDataRepository {
             )));
         };
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_material_supplier(&row)
     }
 
-    async fn set_primary_supplier(&self, material_id: &str, supplier_id: &str) -> AppResult<Value> {
+    async fn set_primary_supplier(
+        &self,
+        material_id: &str,
+        supplier_id: &str,
+    ) -> AppResult<MaterialSupplierReadModel> {
         // 计划 §五.4:停用供应商不能设为主供应商。
         // 全程在事务里:先校验供应商 active + 物料-供应商关系 active,
         // 再原子地清旧主、设新主。
@@ -1268,10 +1748,29 @@ impl MaterialSupplierRepository for PostgresMasterDataRepository {
 
         let row = sqlx::query(
             r#"
-            UPDATE mdm.mdm_material_suppliers
-            SET is_primary = TRUE, updated_at = NOW()
-            WHERE material_id = $1 AND supplier_id = $2
-            RETURNING row_to_json(mdm.mdm_material_suppliers.*) AS data
+            WITH updated AS (
+                UPDATE mdm.mdm_material_suppliers
+                SET is_primary = TRUE, updated_at = NOW()
+                WHERE material_id = $1 AND supplier_id = $2
+                RETURNING *
+            )
+            SELECT
+                updated.id,
+                updated.material_id,
+                updated.supplier_id,
+                s.supplier_name,
+                updated.is_primary,
+                updated.supplier_material_code,
+                updated.purchase_price,
+                updated.currency,
+                updated.lead_time_days,
+                updated.moq,
+                updated.quality_rating,
+                updated.is_active,
+                updated.created_at,
+                updated.updated_at
+            FROM updated
+            LEFT JOIN mdm.mdm_suppliers s ON s.supplier_id = updated.supplier_id
             "#,
         )
         .bind(material_id)
@@ -1284,15 +1783,14 @@ impl MaterialSupplierRepository for PostgresMasterDataRepository {
             .await
             .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_material_supplier(&row)
     }
 
     async fn remove_material_supplier(
         &self,
         material_id: &str,
         supplier_id: &str,
-    ) -> AppResult<Value> {
+    ) -> AppResult<DeleteAck> {
         let result = sqlx::query(
             r#"
             DELETE FROM mdm.mdm_material_suppliers
@@ -1312,88 +1810,81 @@ impl MaterialSupplierRepository for PostgresMasterDataRepository {
             )));
         }
 
-        Ok(serde_json::json!({
-            "material_id": material_id,
-            "supplier_id": supplier_id,
-            "deleted": true
-        }))
+        Ok(DeleteAck {
+            resource_id: format!("{material_id}:{supplier_id}"),
+            deleted: true,
+        })
     }
 }
 
 #[async_trait]
 impl ProductVariantRepository for PostgresMasterDataRepository {
-    async fn list_variants(&self, query: MasterDataQuery) -> AppResult<Value> {
+    async fn list_variants(
+        &self,
+        query: MasterDataQuery,
+    ) -> AppResult<Page<ProductVariantReadModel>> {
         // 计划 §五.6:支持模糊搜索 + is_active 过滤
-        let page = query.page.unwrap_or(1).max(1) as i32;
-        let page_size = query.page_size.unwrap_or(20).clamp(1, 200) as i32;
-        let limit = page_size as i64;
-        let offset = ((page - 1) as i64) * limit;
+        let (page, page_size, limit, offset) = Self::pagination(&query);
         let keyword_pattern = query.keyword.as_ref().map(|k| format!("%{}%", k));
 
-        let row = sqlx::query(
+        let rows = sqlx::query(
             r#"
-            SELECT json_build_object(
-                'items', COALESCE(json_agg(t), '[]'::json),
-                'page', $1::int,
-                'page_size', $2::int
-            ) AS data
-            FROM (
-                SELECT
-                    variant_code,
-                    variant_name,
-                    base_material_id,
-                    bom_id,
-                    standard_cost,
-                    is_active,
-                    created_at,
-                    updated_at
-                FROM mdm.mdm_product_variants
-                WHERE
-                    ($5::text IS NULL OR variant_code ILIKE $5 OR variant_name ILIKE $5)
-                    AND ($6::bool IS NULL OR is_active = $6)
-                ORDER BY variant_code
-                LIMIT $3 OFFSET $4
-            ) t
+            SELECT
+                COUNT(*) OVER() AS total,
+                variant_code,
+                variant_name,
+                base_material_id,
+                bom_id,
+                standard_cost,
+                is_active,
+                created_at,
+                updated_at
+            FROM mdm.mdm_product_variants
+            WHERE
+                ($3::text IS NULL OR variant_code ILIKE $3 OR variant_name ILIKE $3)
+                AND ($4::bool IS NULL OR is_active = $4)
+            ORDER BY variant_code
+            LIMIT $1 OFFSET $2
             "#,
         )
-        .bind(page)
-        .bind(page_size)
         .bind(limit)
         .bind(offset)
         .bind(keyword_pattern.as_deref())
         .bind(query.is_active)
-        .fetch_one(&self.pool)
+        .fetch_all(&self.pool)
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::page_from_rows(rows, page, page_size, Self::parse_variant)
     }
 
-    async fn get_variant(&self, variant_code: &str) -> AppResult<Value> {
-        self.fetch_json_with_id(
+    async fn get_variant(&self, variant_code: &str) -> AppResult<ProductVariantReadModel> {
+        self.fetch_one_by_id(
             r#"
-            SELECT row_to_json(t) AS data
-            FROM (
-                SELECT
-                    variant_code,
-                    variant_name,
-                    base_material_id,
-                    bom_id,
-                    standard_cost,
-                    is_active,
-                    created_at,
-                    updated_at
-                FROM mdm.mdm_product_variants
-                WHERE variant_code = $1
-            ) t
+            SELECT
+                variant_code,
+                variant_name,
+                base_material_id,
+                bom_id,
+                standard_cost,
+                is_active,
+                created_at,
+                updated_at
+            FROM mdm.mdm_product_variants
+            WHERE variant_code = $1
             "#,
             variant_code,
+            "VARIANT_NOT_FOUND",
+            format!("产品变体不存在: {variant_code}"),
+            Self::parse_variant,
         )
         .await
     }
 
-    async fn create_variant(&self, command: CreateProductVariantCommand) -> AppResult<Value> {
+    async fn create_variant(
+        &self,
+        command: CreateProductVariantCommand,
+    ) -> AppResult<ProductVariantReadModel> {
         // 计划 §五.6 领域规则:
         //   - 变体必须绑定有效成品物料(base_material_id 必须存在且 status='正常')
         //   - 绑定 BOM 必须存在且有效(bom_id 可选,如果给了必须 is_active=TRUE)
@@ -1404,10 +1895,10 @@ impl ProductVariantRepository for PostgresMasterDataRepository {
             .await
             .map_err(cuba_shared::map_master_data_db_error)?;
 
-        // 1) base_material 必须存在且未停用
-        let mat_status: Option<String> = sqlx::query_scalar(
+        // 1) base_material 必须存在、状态正常,且必须是成品物料。
+        let material: Option<(String, String)> = sqlx::query_as(
             r#"
-            SELECT status::text
+            SELECT status::text, material_type::text
             FROM mdm.mdm_materials
             WHERE material_id = $1
             FOR SHARE
@@ -1417,27 +1908,33 @@ impl ProductVariantRepository for PostgresMasterDataRepository {
         .fetch_optional(&mut *tx)
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
-        match mat_status {
+        match material {
             None => {
                 return Err(AppError::Validation(format!(
                     "base_material 不存在: {}",
                     command.base_material_id
                 )));
             }
-            Some(s) if s == "停用" => {
+            Some((status, _)) if status != "正常" => {
                 return Err(AppError::Validation(format!(
-                    "base_material 已停用,不能用于产品变体: {}",
+                    "base_material 不是正常状态,不能用于产品变体: {}",
                     command.base_material_id
                 )));
             }
-            _ => {}
+            Some((_, material_type)) if material_type != "成品" => {
+                return Err(AppError::Validation(format!(
+                    "base_material 必须是成品物料: {}",
+                    command.base_material_id
+                )));
+            }
+            Some(_) => {}
         }
 
-        // 2) 如果指定了 bom_id,该 BOM 必须存在且 is_active=TRUE
+        // 2) 如果指定了 bom_id,该 BOM 必须存在且 status='生效' 且 is_active=TRUE。
         if let Some(bom_id) = command.bom_id.as_deref() {
-            let bom_active: Option<bool> = sqlx::query_scalar(
+            let bom_state: Option<(String, bool)> = sqlx::query_as(
                 r#"
-                SELECT is_active
+                SELECT status::text, is_active
                 FROM mdm.mdm_bom_headers
                 WHERE bom_id = $1
                 FOR SHARE
@@ -1447,11 +1944,11 @@ impl ProductVariantRepository for PostgresMasterDataRepository {
             .fetch_optional(&mut *tx)
             .await
             .map_err(cuba_shared::map_master_data_db_error)?;
-            match bom_active {
+            match bom_state {
                 None => {
                     return Err(AppError::Validation(format!("bom_id 不存在: {bom_id}")));
                 }
-                Some(false) => {
+                Some((status, is_active)) if status != "生效" || !is_active => {
                     return Err(AppError::Validation(format!(
                         "bom_id 未生效,不能绑定到产品变体: {bom_id}"
                     )));
@@ -1478,7 +1975,15 @@ impl ProductVariantRepository for PostgresMasterDataRepository {
                 $5,
                 TRUE
             )
-            RETURNING row_to_json(mdm.mdm_product_variants.*) AS data
+            RETURNING
+                variant_code,
+                variant_name,
+                base_material_id,
+                bom_id,
+                standard_cost,
+                is_active,
+                created_at,
+                updated_at
             "#,
         )
         .bind(command.variant_code)
@@ -1494,15 +1999,37 @@ impl ProductVariantRepository for PostgresMasterDataRepository {
             .await
             .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_variant(&row)
     }
 
     async fn update_variant(
         &self,
         variant_code: &str,
         command: UpdateProductVariantCommand,
-    ) -> AppResult<Value> {
+    ) -> AppResult<ProductVariantReadModel> {
+        if let Some(bom_id) = command.bom_id.as_deref() {
+            let bom_state: Option<(String, bool)> = sqlx::query_as(
+                r#"
+                SELECT status::text, is_active
+                FROM mdm.mdm_bom_headers
+                WHERE bom_id = $1
+                "#,
+            )
+            .bind(bom_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(cuba_shared::map_master_data_db_error)?;
+            match bom_state {
+                None => return Err(AppError::Validation(format!("bom_id 不存在: {bom_id}"))),
+                Some((status, is_active)) if status != "生效" || !is_active => {
+                    return Err(AppError::Validation(format!(
+                        "bom_id 未生效,不能绑定到产品变体: {bom_id}"
+                    )));
+                }
+                Some(_) => {}
+            }
+        }
+
         let row = sqlx::query(
             r#"
             UPDATE mdm.mdm_product_variants
@@ -1513,7 +2040,15 @@ impl ProductVariantRepository for PostgresMasterDataRepository {
                 is_active = COALESCE($5, is_active),
                 updated_at = NOW()
             WHERE variant_code = $1
-            RETURNING row_to_json(mdm.mdm_product_variants.*) AS data
+            RETURNING
+                variant_code,
+                variant_name,
+                base_material_id,
+                bom_id,
+                standard_cost,
+                is_active,
+                created_at,
+                updated_at
             "#,
         )
         .bind(variant_code)
@@ -1526,16 +2061,16 @@ impl ProductVariantRepository for PostgresMasterDataRepository {
         .map_err(cuba_shared::map_master_data_db_error)?;
 
         let Some(row) = row else {
-            return Err(AppError::NotFound(format!(
-                "product variant not found: {variant_code}"
-            )));
+            return Err(AppError::business(
+                "VARIANT_NOT_FOUND",
+                format!("产品变体不存在: {variant_code}"),
+            ));
         };
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_variant(&row)
     }
 
-    async fn activate_variant(&self, variant_code: &str) -> AppResult<Value> {
+    async fn activate_variant(&self, variant_code: &str) -> AppResult<MutationAck> {
         let result = sqlx::query(
             r#"
             UPDATE mdm.mdm_product_variants
@@ -1548,11 +2083,15 @@ impl ProductVariantRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        self.affected_to_json(result, "variant_code", variant_code)
-            .await
+        Self::affected_to_ack(
+            result,
+            variant_code,
+            "VARIANT_NOT_FOUND",
+            format!("产品变体不存在: {variant_code}"),
+        )
     }
 
-    async fn deactivate_variant(&self, variant_code: &str) -> AppResult<Value> {
+    async fn deactivate_variant(&self, variant_code: &str) -> AppResult<MutationAck> {
         let result = sqlx::query(
             r#"
             UPDATE mdm.mdm_product_variants
@@ -1565,102 +2104,172 @@ impl ProductVariantRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        self.affected_to_json(result, "variant_code", variant_code)
-            .await
+        Self::affected_to_ack(
+            result,
+            variant_code,
+            "VARIANT_NOT_FOUND",
+            format!("产品变体不存在: {variant_code}"),
+        )
     }
 }
 
 #[async_trait]
 impl BomRepository for PostgresMasterDataRepository {
-    async fn list_boms(&self, query: MasterDataQuery) -> AppResult<Value> {
+    async fn list_boms(&self, query: MasterDataQuery) -> AppResult<Page<BomSummaryReadModel>> {
         // 计划 §五.7:模糊搜索 (bom_id / bom_name) + status + is_active 过滤
-        let page = query.page.unwrap_or(1).max(1) as i32;
-        let page_size = query.page_size.unwrap_or(20).clamp(1, 200) as i32;
-        let limit = page_size as i64;
-        let offset = ((page - 1) as i64) * limit;
+        let (page, page_size, limit, offset) = Self::pagination(&query);
         let keyword_pattern = query.keyword.as_ref().map(|k| format!("%{}%", k));
+        let status = Self::normalize_optional_bom_status(query.status.as_deref())?;
 
-        let row = sqlx::query(
+        let rows = sqlx::query(
             r#"
-            SELECT json_build_object(
-                'items', COALESCE(json_agg(t), '[]'::json),
-                'page', $1::int,
-                'page_size', $2::int
-            ) AS data
-            FROM (
-                SELECT
-                    h.bom_id,
-                    h.bom_name,
-                    h.parent_material_id,
-                    pm.material_name AS parent_material_name,
-                    h.variant_code,
-                    h.version,
-                    h.base_quantity,
-                    h.valid_from,
-                    h.valid_to,
-                    h.status,
-                    h.is_active,
-                    h.created_by,
-                    h.approved_by,
-                    h.approved_at,
-                    h.notes,
-                    h.created_at,
-                    h.updated_at,
-                    COUNT(c.id) AS component_count
-                FROM mdm.mdm_bom_headers h
-                LEFT JOIN mdm.mdm_materials pm ON pm.material_id = h.parent_material_id
-                LEFT JOIN mdm.mdm_bom_components c ON c.bom_id = h.bom_id
-                WHERE
-                    ($5::text IS NULL OR h.bom_id ILIKE $5 OR h.bom_name ILIKE $5)
-                    AND ($6::text IS NULL OR h.status = $6)
-                    AND ($7::bool IS NULL OR h.is_active = $7)
-                GROUP BY
-                    h.bom_id,
-                    pm.material_name
-                ORDER BY h.bom_id
-                LIMIT $3 OFFSET $4
-            ) t
+            SELECT
+                COUNT(*) OVER() AS total,
+                h.bom_id,
+                h.bom_name,
+                h.parent_material_id,
+                pm.material_name AS parent_material_name,
+                h.variant_code,
+                h.version,
+                h.base_quantity,
+                h.valid_from,
+                h.valid_to,
+                h.status,
+                h.is_active,
+                h.created_by,
+                h.approved_by,
+                h.approved_at,
+                h.notes,
+                h.created_at,
+                h.updated_at,
+                COUNT(c.id) AS component_count
+            FROM mdm.mdm_bom_headers h
+            LEFT JOIN mdm.mdm_materials pm ON pm.material_id = h.parent_material_id
+            LEFT JOIN mdm.mdm_bom_components c ON c.bom_id = h.bom_id
+            WHERE
+                ($3::text IS NULL OR h.bom_id ILIKE $3 OR h.bom_name ILIKE $3)
+                AND ($4::text IS NULL OR h.status = $4)
+                AND ($5::bool IS NULL OR h.is_active = $5)
+            GROUP BY
+                h.bom_id,
+                pm.material_name
+            ORDER BY h.bom_id
+            LIMIT $1 OFFSET $2
             "#,
         )
-        .bind(page)
-        .bind(page_size)
         .bind(limit)
         .bind(offset)
         .bind(keyword_pattern.as_deref())
-        .bind(query.status.as_deref())
+        .bind(status)
         .bind(query.is_active)
-        .fetch_one(&self.pool)
+        .fetch_all(&self.pool)
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::page_from_rows(rows, page, page_size, Self::parse_bom_summary)
     }
 
-    async fn get_bom(&self, bom_id: &str) -> AppResult<Value> {
-        self.fetch_json_with_id(
-            r#"
-            SELECT row_to_json(t) AS data
-            FROM (
-                SELECT
-                    h.*,
-                    COALESCE(
-                        json_agg(c ORDER BY c.id)
-                            FILTER (WHERE c.id IS NOT NULL),
-                        '[]'::json
-                    ) AS components
-                FROM mdm.mdm_bom_headers h
-                LEFT JOIN mdm.mdm_bom_components c ON c.bom_id = h.bom_id
-                WHERE h.bom_id = $1
-                GROUP BY h.bom_id
-            ) t
+    async fn get_bom(&self, bom_id: &str) -> AppResult<BomDetailReadModel> {
+        let header = self
+            .fetch_one_by_id(
+                r#"
+            SELECT
+                bom_id,
+                bom_name,
+                parent_material_id,
+                variant_code,
+                version,
+                base_quantity,
+                valid_from,
+                valid_to,
+                status,
+                is_active,
+                created_by,
+                approved_by,
+                approved_at,
+                notes,
+                created_at,
+                updated_at
+            FROM mdm.mdm_bom_headers
+            WHERE bom_id = $1
             "#,
-            bom_id,
-        )
-        .await
+                bom_id,
+                "BOM_NOT_FOUND",
+                format!("BOM 不存在: {bom_id}"),
+                Self::parse_bom_header,
+            )
+            .await?;
+
+        let components = self.fetch_bom_components(bom_id).await?;
+
+        Ok(BomDetailReadModel { header, components })
     }
 
-    async fn create_bom(&self, command: CreateBomHeaderCommand) -> AppResult<Value> {
+    async fn create_bom(&self, command: CreateBomHeaderCommand) -> AppResult<BomHeaderReadModel> {
+        let status = Self::normalize_optional_bom_status(command.status.as_deref())?;
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(cuba_shared::map_master_data_db_error)?;
+
+        let parent_status: Option<String> = sqlx::query_scalar(
+            r#"
+            SELECT status::text
+            FROM mdm.mdm_materials
+            WHERE material_id = $1
+            FOR SHARE
+            "#,
+        )
+        .bind(&command.parent_material_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+        match parent_status {
+            None => {
+                return Err(AppError::Validation(format!(
+                    "BOM 父物料不存在: {}",
+                    command.parent_material_id
+                )));
+            }
+            Some(status) if status == "停用" => {
+                return Err(AppError::Validation(format!(
+                    "BOM 父物料已停用: {}",
+                    command.parent_material_id
+                )));
+            }
+            _ => {}
+        }
+
+        if let Some(variant_code) = command.variant_code.as_deref() {
+            let variant_active: Option<bool> = sqlx::query_scalar(
+                r#"
+                SELECT is_active
+                FROM mdm.mdm_product_variants
+                WHERE variant_code = $1
+                FOR SHARE
+                "#,
+            )
+            .bind(variant_code)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(cuba_shared::map_master_data_db_error)?;
+            match variant_active {
+                None => {
+                    return Err(AppError::Validation(format!(
+                        "产品变体不存在: {variant_code}"
+                    )));
+                }
+                Some(false) => {
+                    return Err(AppError::Validation(format!(
+                        "产品变体已停用: {variant_code}"
+                    )));
+                }
+                Some(true) => {}
+            }
+        }
+
         let row = sqlx::query(
             r#"
             INSERT INTO mdm.mdm_bom_headers (
@@ -1687,7 +2296,23 @@ impl BomRepository for PostgresMasterDataRepository {
                 COALESCE($9, '草稿'),
                 $10
             )
-            RETURNING row_to_json(mdm.mdm_bom_headers.*) AS data
+            RETURNING
+                bom_id,
+                bom_name,
+                parent_material_id,
+                variant_code,
+                version,
+                base_quantity,
+                valid_from,
+                valid_to,
+                status,
+                is_active,
+                created_by,
+                approved_by,
+                approved_at,
+                notes,
+                created_at,
+                updated_at
             "#,
         )
         .bind(command.bom_id)
@@ -1698,17 +2323,26 @@ impl BomRepository for PostgresMasterDataRepository {
         .bind(command.base_quantity)
         .bind(command.valid_from)
         .bind(command.valid_to)
-        .bind(command.status)
+        .bind(status)
         .bind(command.notes)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        tx.commit()
+            .await
+            .map_err(cuba_shared::map_master_data_db_error)?;
+
+        Self::parse_bom_header(&row)
     }
 
-    async fn update_bom(&self, bom_id: &str, command: UpdateBomHeaderCommand) -> AppResult<Value> {
+    async fn update_bom(
+        &self,
+        bom_id: &str,
+        command: UpdateBomHeaderCommand,
+    ) -> AppResult<BomHeaderReadModel> {
+        let status = Self::normalize_optional_bom_status(command.status.as_deref())?;
+
         let row = sqlx::query(
             r#"
             UPDATE mdm.mdm_bom_headers
@@ -1724,7 +2358,23 @@ impl BomRepository for PostgresMasterDataRepository {
                 notes = COALESCE($10, notes),
                 updated_at = NOW()
             WHERE bom_id = $1
-            RETURNING row_to_json(mdm.mdm_bom_headers.*) AS data
+            RETURNING
+                bom_id,
+                bom_name,
+                parent_material_id,
+                variant_code,
+                version,
+                base_quantity,
+                valid_from,
+                valid_to,
+                status,
+                is_active,
+                created_by,
+                approved_by,
+                approved_at,
+                notes,
+                created_at,
+                updated_at
             "#,
         )
         .bind(bom_id)
@@ -1734,7 +2384,7 @@ impl BomRepository for PostgresMasterDataRepository {
         .bind(command.base_quantity)
         .bind(command.valid_from)
         .bind(command.valid_to)
-        .bind(command.status)
+        .bind(status)
         .bind(command.is_active)
         .bind(command.notes)
         .fetch_optional(&self.pool)
@@ -1742,66 +2392,56 @@ impl BomRepository for PostgresMasterDataRepository {
         .map_err(cuba_shared::map_master_data_db_error)?;
 
         let Some(row) = row else {
-            return Err(AppError::NotFound(format!("bom not found: {bom_id}")));
+            return Err(AppError::business(
+                "BOM_NOT_FOUND",
+                format!("BOM 不存在: {bom_id}"),
+            ));
         };
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_bom_header(&row)
     }
 
-    async fn list_components(&self, bom_id: &str) -> AppResult<Value> {
-        let row = sqlx::query(
-            r#"
-            SELECT COALESCE(json_agg(t ORDER BY t.id), '[]'::json) AS data
-            FROM (
-                SELECT
-                    c.id,
-                    c.bom_id,
-                    c.parent_material_id,
-                    pm.material_name AS parent_material_name,
-                    c.component_material_id,
-                    cm.material_name AS component_material_name,
-                    c.quantity,
-                    c.unit,
-                    c.bom_level,
-                    c.scrap_rate,
-                    c.is_critical,
-                    c.valid_from,
-                    c.valid_to,
-                    c.created_at
-                FROM mdm.mdm_bom_components c
-                LEFT JOIN mdm.mdm_materials pm ON pm.material_id = c.parent_material_id
-                LEFT JOIN mdm.mdm_materials cm ON cm.material_id = c.component_material_id
-                WHERE c.bom_id = $1
-            ) t
-            "#,
-        )
-        .bind(bom_id)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(cuba_shared::map_master_data_db_error)?;
-
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+    async fn list_components(&self, bom_id: &str) -> AppResult<Vec<BomComponentReadModel>> {
+        self.ensure_bom_exists(bom_id).await?;
+        self.fetch_bom_components(bom_id).await
     }
-
 
     async fn update_component(
         &self,
         component_id: i64,
         command: UpdateBomComponentCommand,
-    ) -> AppResult<Value> {
+    ) -> AppResult<BomComponentReadModel> {
         let row = sqlx::query(
             r#"
-            UPDATE mdm.mdm_bom_components
-            SET
-                quantity = COALESCE($2, quantity),
-                unit = COALESCE($3, unit),
-                bom_level = COALESCE($4, bom_level),
-                scrap_rate = COALESCE($5, scrap_rate),
-                is_critical = COALESCE($6, is_critical)
-            WHERE id = $1
-            RETURNING row_to_json(mdm.mdm_bom_components.*) AS data
+            WITH updated AS (
+                UPDATE mdm.mdm_bom_components
+                SET
+                    quantity = COALESCE($2, quantity),
+                    unit = COALESCE($3, unit),
+                    bom_level = COALESCE($4, bom_level),
+                    scrap_rate = COALESCE($5, scrap_rate),
+                    is_critical = COALESCE($6, is_critical)
+                WHERE id = $1
+                RETURNING *
+            )
+            SELECT
+                updated.id,
+                updated.bom_id,
+                updated.parent_material_id,
+                pm.material_name AS parent_material_name,
+                updated.component_material_id,
+                cm.material_name AS component_material_name,
+                updated.quantity,
+                updated.unit,
+                updated.bom_level,
+                updated.scrap_rate,
+                updated.is_critical,
+                updated.valid_from,
+                updated.valid_to,
+                updated.created_at
+            FROM updated
+            LEFT JOIN mdm.mdm_materials pm ON pm.material_id = updated.parent_material_id
+            LEFT JOIN mdm.mdm_materials cm ON cm.material_id = updated.component_material_id
             "#,
         )
         .bind(component_id)
@@ -1815,16 +2455,79 @@ impl BomRepository for PostgresMasterDataRepository {
         .map_err(cuba_shared::map_master_data_db_error)?;
 
         let Some(row) = row else {
-            return Err(AppError::NotFound(format!(
-                "bom component not found: {component_id}"
-            )));
+            return Err(AppError::business(
+                "BOM_COMPONENT_NOT_FOUND",
+                format!("BOM 组件不存在: {component_id}"),
+            ));
         };
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_bom_component(&row)
     }
 
-    async fn remove_component(&self, component_id: i64) -> AppResult<Value> {
+    async fn update_component_for_bom(
+        &self,
+        bom_id: &str,
+        component_id: i64,
+        command: UpdateBomComponentCommand,
+    ) -> AppResult<BomComponentReadModel> {
+        self.ensure_bom_exists(bom_id).await?;
+
+        let row = sqlx::query(
+            r#"
+            WITH updated AS (
+                UPDATE mdm.mdm_bom_components
+                SET
+                    quantity = COALESCE($3, quantity),
+                    unit = COALESCE($4, unit),
+                    bom_level = COALESCE($5, bom_level),
+                    scrap_rate = COALESCE($6, scrap_rate),
+                    is_critical = COALESCE($7, is_critical)
+                WHERE id = $1
+                  AND bom_id = $2
+                RETURNING *
+            )
+            SELECT
+                updated.id,
+                updated.bom_id,
+                updated.parent_material_id,
+                pm.material_name AS parent_material_name,
+                updated.component_material_id,
+                cm.material_name AS component_material_name,
+                updated.quantity,
+                updated.unit,
+                updated.bom_level,
+                updated.scrap_rate,
+                updated.is_critical,
+                updated.valid_from,
+                updated.valid_to,
+                updated.created_at
+            FROM updated
+            LEFT JOIN mdm.mdm_materials pm ON pm.material_id = updated.parent_material_id
+            LEFT JOIN mdm.mdm_materials cm ON cm.material_id = updated.component_material_id
+            "#,
+        )
+        .bind(component_id)
+        .bind(bom_id)
+        .bind(command.quantity)
+        .bind(command.unit)
+        .bind(command.bom_level)
+        .bind(command.scrap_rate)
+        .bind(command.is_critical)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+
+        let Some(row) = row else {
+            return Err(AppError::business(
+                "BOM_COMPONENT_NOT_FOUND",
+                format!("BOM 组件不存在: bom_id={bom_id}, component_id={component_id}"),
+            ));
+        };
+
+        Self::parse_bom_component(&row)
+    }
+
+    async fn remove_component(&self, component_id: i64) -> AppResult<DeleteAck> {
         let result = sqlx::query(
             r#"
             DELETE FROM mdm.mdm_bom_components
@@ -1837,59 +2540,112 @@ impl BomRepository for PostgresMasterDataRepository {
         .map_err(cuba_shared::map_master_data_db_error)?;
 
         if result.rows_affected() == 0 {
-            return Err(AppError::NotFound(format!(
-                "bom component not found: {component_id}"
-            )));
+            return Err(AppError::business(
+                "BOM_COMPONENT_NOT_FOUND",
+                format!("BOM 组件不存在: {component_id}"),
+            ));
         }
 
-        Ok(serde_json::json!({
-            "component_id": component_id,
-            "deleted": true
-        }))
+        Ok(DeleteAck {
+            resource_id: component_id.to_string(),
+            deleted: true,
+        })
     }
 
-    async fn get_bom_tree(&self, bom_id: &str) -> AppResult<Value> {
-        self.fetch_json_with_id(
+    async fn remove_component_for_bom(
+        &self,
+        bom_id: &str,
+        component_id: i64,
+    ) -> AppResult<DeleteAck> {
+        self.ensure_bom_exists(bom_id).await?;
+
+        let result = sqlx::query(
             r#"
-            SELECT row_to_json(t) AS data
-            FROM (
-                SELECT
-                    h.bom_id,
-                    h.bom_name,
-                    h.parent_material_id,
-                    h.variant_code,
-                    h.version,
-                    h.status,
-                    h.is_active,
-                    COALESCE(
-                        json_agg(
-                            json_build_object(
-                                'id', c.id,
-                                'component_material_id', c.component_material_id,
-                                'component_material_name', cm.material_name,
-                                'quantity', c.quantity,
-                                'unit', c.unit,
-                                'bom_level', c.bom_level,
-                                'scrap_rate', c.scrap_rate,
-                                'is_critical', c.is_critical
-                            )
-                            ORDER BY c.bom_level, c.id
-                        ) FILTER (WHERE c.id IS NOT NULL),
-                        '[]'::json
-                    ) AS components
-                FROM mdm.mdm_bom_headers h
-                LEFT JOIN mdm.mdm_bom_components c ON c.bom_id = h.bom_id
-                LEFT JOIN mdm.mdm_materials cm ON cm.material_id = c.component_material_id
-                WHERE h.bom_id = $1
-                GROUP BY h.bom_id
-            ) t
+            DELETE FROM mdm.mdm_bom_components
+            WHERE id = $1
+              AND bom_id = $2
             "#,
-            bom_id,
         )
+        .bind(component_id)
+        .bind(bom_id)
+        .execute(&self.pool)
         .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+
+        if result.rows_affected() == 0 {
+            return Err(AppError::business(
+                "BOM_COMPONENT_NOT_FOUND",
+                format!("BOM 组件不存在: bom_id={bom_id}, component_id={component_id}"),
+            ));
+        }
+
+        Ok(DeleteAck {
+            resource_id: format!("{bom_id}:{component_id}"),
+            deleted: true,
+        })
     }
 
-    async fn validate_bom(&self, bom_id: &str) -> AppResult<Value> {
+    async fn get_bom_tree(&self, bom_id: &str) -> AppResult<BomTreeReadModel> {
+        let header = sqlx::query(
+            r#"
+            SELECT
+                bom_id,
+                bom_name,
+                parent_material_id,
+                variant_code,
+                version,
+                status,
+                is_active
+            FROM mdm.mdm_bom_headers
+            WHERE bom_id = $1
+            "#,
+        )
+        .bind(bom_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?
+        .ok_or_else(|| AppError::business("BOM_NOT_FOUND", format!("BOM 不存在: {bom_id}")))?;
+
+        let component_rows = sqlx::query(
+            r#"
+            SELECT
+                c.id,
+                c.component_material_id,
+                cm.material_name AS component_material_name,
+                c.quantity,
+                c.unit,
+                c.bom_level,
+                c.scrap_rate,
+                c.is_critical
+            FROM mdm.mdm_bom_components c
+            LEFT JOIN mdm.mdm_materials cm ON cm.material_id = c.component_material_id
+            WHERE c.bom_id = $1
+            ORDER BY c.bom_level, c.id
+            "#,
+        )
+        .bind(bom_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+
+        let components = component_rows
+            .iter()
+            .map(Self::parse_bom_tree_component)
+            .collect::<AppResult<Vec<_>>>()?;
+
+        Ok(BomTreeReadModel {
+            bom_id: Self::column(&header, "bom_id")?,
+            bom_name: Self::column(&header, "bom_name")?,
+            parent_material_id: Self::column(&header, "parent_material_id")?,
+            variant_code: Self::column(&header, "variant_code")?,
+            version: Self::column(&header, "version")?,
+            status: Self::column(&header, "status")?,
+            is_active: Self::column(&header, "is_active")?,
+            components,
+        })
+    }
+
+    async fn validate_bom(&self, bom_id: &str) -> AppResult<BomValidationReadModel> {
         // 计划 §五.7 BOM 校验:
         //   - header_exists(BOM 是否存在)
         //   - has_components(组件数 > 0)
@@ -1944,22 +2700,20 @@ impl BomRepository for PostgresMasterDataRepository {
                 WHERE current_node = start_node AND depth > 0
                 LIMIT 1
             )
-            SELECT json_build_object(
-                'bom_id', $1,
-                'header_exists', (SELECT ok FROM header_exists),
-                'component_count', (SELECT cnt FROM component_count),
-                'has_components', (SELECT cnt FROM component_count) > 0,
-                'self_reference_count', (SELECT cnt FROM self_reference),
-                'missing_component_materials', (SELECT cnt FROM missing_components),
-                'cycle_detected', EXISTS (SELECT 1 FROM cycle_walk),
-                'cycle_node', (SELECT start_node FROM cycle_walk),
-                'valid',
+            SELECT
+                $1::text AS bom_id,
+                (SELECT ok FROM header_exists) AS header_exists,
+                (SELECT cnt FROM component_count) AS component_count,
+                (SELECT cnt FROM component_count) > 0 AS has_components,
+                (SELECT cnt FROM self_reference) AS self_reference_count,
+                (SELECT cnt FROM missing_components) AS missing_component_materials,
+                EXISTS (SELECT 1 FROM cycle_walk) AS cycle_detected,
+                (SELECT start_node FROM cycle_walk) AS cycle_node,
                     (SELECT ok FROM header_exists)
                     AND (SELECT cnt FROM component_count) > 0
                     AND (SELECT cnt FROM self_reference) = 0
                     AND (SELECT cnt FROM missing_components) = 0
-                    AND NOT EXISTS (SELECT 1 FROM cycle_walk)
-            ) AS data
+                    AND NOT EXISTS (SELECT 1 FROM cycle_walk) AS valid
             "#,
         )
         .bind(bom_id)
@@ -1967,8 +2721,7 @@ impl BomRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_validation(&row)
     }
 
     async fn preview_bom_explosion(
@@ -1976,21 +2729,41 @@ impl BomRepository for PostgresMasterDataRepository {
         material_id: &str,
         quantity: i32,
         variant_code: Option<String>,
-    ) -> AppResult<Value> {
-        let row = sqlx::query(
+    ) -> AppResult<BomExplosionPreviewReadModel> {
+        let rows = sqlx::query(
             r#"
-            SELECT COALESCE(json_agg(t ORDER BY t.bom_level, t.component_material_id), '[]'::json) AS data
-            FROM wms.fn_bom_explosion($1, $2, $3) t
+            SELECT
+                bom_level,
+                parent_material_id,
+                component_material_id,
+                component_name,
+                unit_qty,
+                required_qty,
+                available_qty,
+                shortage_qty,
+                is_critical
+            FROM wms.fn_bom_explosion($1, $2, $3)
+            ORDER BY bom_level, component_material_id
             "#,
         )
-            .bind(material_id)
-            .bind(quantity)
-            .bind(variant_code)
-            .fetch_one(&self.pool)
-            .await.map_err(cuba_shared::map_master_data_db_error)?;
+        .bind(material_id)
+        .bind(quantity)
+        .bind(variant_code.as_deref())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        let items = rows
+            .iter()
+            .map(Self::parse_explosion_item)
+            .collect::<AppResult<Vec<_>>>()?;
+
+        Ok(BomExplosionPreviewReadModel {
+            material_id: material_id.to_string(),
+            quantity,
+            variant_code,
+            items,
+        })
     }
 
     async fn load_bom(&self, bom_id: &BomId) -> AppResult<Bom> {
@@ -2011,20 +2784,18 @@ impl BomRepository for PostgresMasterDataRepository {
             WHERE bom_id = $1
             "#,
         )
-            .bind(bom_id.value())
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(cuba_shared::map_master_data_db_error)?
-            .ok_or_else(|| {
-                AppError::business("BOM_NOT_FOUND", format!("BOM 不存在: {}", bom_id.value()))
-            })?;
+        .bind(bom_id.value())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?
+        .ok_or_else(|| {
+            AppError::business("BOM_NOT_FOUND", format!("BOM 不存在: {}", bom_id.value()))
+        })?;
 
         let header = BomHeader {
             bom_id: BomId::new(header_row.get::<String, _>("bom_id"))?,
             bom_name: header_row.get::<String, _>("bom_name"),
-            parent_material_id: MaterialId::new(
-                header_row.get::<String, _>("parent_material_id"),
-            )?,
+            parent_material_id: MaterialId::new(header_row.get::<String, _>("parent_material_id"))?,
             variant_code: header_row
                 .get::<Option<String>, _>("variant_code")
                 .map(VariantCode::new)
@@ -2045,18 +2816,16 @@ impl BomRepository for PostgresMasterDataRepository {
             ORDER BY id
             "#,
         )
-            .bind(bom_id.value())
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(cuba_shared::map_master_data_db_error)?;
+        .bind(bom_id.value())
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
 
         let mut components = Vec::with_capacity(component_rows.len());
         for r in component_rows {
             components.push(BomComponent {
                 bom_id: BomId::new(r.get::<String, _>("bom_id"))?,
-                parent_material_id: MaterialId::new(
-                    r.get::<String, _>("parent_material_id"),
-                )?,
+                parent_material_id: MaterialId::new(r.get::<String, _>("parent_material_id"))?,
                 component_material_id: MaterialId::new(
                     r.get::<String, _>("component_material_id"),
                 )?,
@@ -2095,112 +2864,104 @@ impl BomRepository for PostgresMasterDataRepository {
             WHERE bom_id = $1
             "#,
         )
-            .bind(bom.id().value())
-            .bind(&bom.header().bom_name)
-            .bind(bom.header().variant_code.as_ref().map(|v| v.value()))
-            .bind(&bom.header().version)
-            .bind(bom.header().status.as_db_value())
-            .bind(bom.header().is_active)
-            .execute(&mut *tx)
-            .await
-            .map_err(cuba_shared::map_master_data_db_error)?;
+        .bind(bom.id().value())
+        .bind(&bom.header().bom_name)
+        .bind(bom.header().variant_code.as_ref().map(|v| v.value()))
+        .bind(&bom.header().version)
+        .bind(bom.header().status.as_db_value())
+        .bind(bom.header().is_active)
+        .execute(&mut *tx)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
 
-        // 2) Diff components by (parent, component) edge
-        let existing: Vec<(String, String)> = sqlx::query_as(
+        // 2) Diff components by component material. 当前 schema 唯一键是
+        // (bom_id, component_material_id),所以同一 BOM 内组件物料只能出现一次。
+        let existing: Vec<String> = sqlx::query_scalar(
             r#"
-            SELECT parent_material_id, component_material_id
+            SELECT component_material_id
             FROM mdm.mdm_bom_components
             WHERE bom_id = $1
             "#,
         )
-            .bind(bom.id().value())
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(cuba_shared::map_master_data_db_error)?;
+        .bind(bom.id().value())
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
 
-        let existing_set: HashSet<(String, String)> = existing.into_iter().collect();
-        let desired_set: HashSet<(String, String)> = bom
+        let existing_set: HashSet<String> = existing.into_iter().collect();
+        let desired_set: HashSet<String> = bom
             .components()
             .iter()
-            .map(|c| {
-                (
-                    c.parent_material_id.value().to_string(),
-                    c.component_material_id.value().to_string(),
-                )
-            })
+            .map(|c| c.component_material_id.value().to_string())
             .collect();
 
-        // 2a) DELETE 多余边
-        for (parent, child) in existing_set.difference(&desired_set) {
+        // 2a) DELETE 多余组件
+        for child in existing_set.difference(&desired_set) {
             sqlx::query(
                 r#"
                 DELETE FROM mdm.mdm_bom_components
                 WHERE bom_id = $1
-                  AND parent_material_id = $2
-                  AND component_material_id = $3
+                  AND component_material_id = $2
                 "#,
             )
-                .bind(bom.id().value())
-                .bind(parent)
-                .bind(child)
-                .execute(&mut *tx)
-                .await
-                .map_err(cuba_shared::map_master_data_db_error)?;
+            .bind(bom.id().value())
+            .bind(child)
+            .execute(&mut *tx)
+            .await
+            .map_err(cuba_shared::map_master_data_db_error)?;
         }
 
-        // 2b) INSERT 新边 / UPDATE 已有边的可变属性
+        // 2b) INSERT 新组件 / UPDATE 已有组件的可变属性
         for c in bom.components() {
             let parent = c.parent_material_id.value().to_string();
             let child = c.component_material_id.value().to_string();
-            let edge = (parent.clone(), child.clone());
 
-            if existing_set.contains(&edge) {
+            if existing_set.contains(&child) {
                 sqlx::query(
                     r#"
                     UPDATE mdm.mdm_bom_components
-                    SET quantity    = $4,
-                        unit        = $5,
-                        bom_level   = $6,
-                        scrap_rate  = $7,
-                        is_critical = $8,
-                        updated_at  = NOW()
+                    SET parent_material_id = $3,
+                        quantity           = $4,
+                        unit               = $5,
+                        bom_level          = $6,
+                        scrap_rate         = $7,
+                        is_critical        = $8
                     WHERE bom_id = $1
-                      AND parent_material_id = $2
-                      AND component_material_id = $3
+                      AND component_material_id = $2
                     "#,
                 )
-                    .bind(bom.id().value())
-                    .bind(&parent)
-                    .bind(&child)
-                    .bind(c.quantity)
-                    .bind(&c.unit)
-                    .bind(c.bom_level)
-                    .bind(c.scrap_rate)
-                    .bind(c.is_critical)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(cuba_shared::map_master_data_db_error)?;
+                .bind(bom.id().value())
+                .bind(&child)
+                .bind(&parent)
+                .bind(c.quantity)
+                .bind(&c.unit)
+                .bind(c.bom_level)
+                .bind(c.scrap_rate)
+                .bind(c.is_critical)
+                .execute(&mut *tx)
+                .await
+                .map_err(cuba_shared::map_master_data_db_error)?;
             } else {
                 sqlx::query(
                     r#"
                     INSERT INTO mdm.mdm_bom_components
                         (bom_id, parent_material_id, component_material_id,
                          quantity, unit, bom_level, scrap_rate, is_critical,
-                         created_at, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+                         created_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
                     "#,
                 )
-                    .bind(bom.id().value())
-                    .bind(&parent)
-                    .bind(&child)
-                    .bind(c.quantity)
-                    .bind(&c.unit)
-                    .bind(c.bom_level)
-                    .bind(c.scrap_rate)
-                    .bind(c.is_critical)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(cuba_shared::map_master_data_db_error)?;
+                .bind(bom.id().value())
+                .bind(&parent)
+                .bind(&child)
+                .bind(c.quantity)
+                .bind(&c.unit)
+                .bind(c.bom_level)
+                .bind(c.scrap_rate)
+                .bind(c.is_critical)
+                .execute(&mut *tx)
+                .await
+                .map_err(cuba_shared::map_master_data_db_error)?;
             }
         }
 
@@ -2260,12 +3021,12 @@ impl BomRepository for PostgresMasterDataRepository {
             LIMIT 1
             "#,
         )
-            .bind(bom.id().value())
-            .bind(&parents)
-            .bind(&children)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(cuba_shared::map_master_data_db_error)?;
+        .bind(bom.id().value())
+        .bind(&parents)
+        .bind(&children)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
 
         if let Some(node) = cycle {
             return Err(AppError::business(
@@ -2275,13 +3036,43 @@ impl BomRepository for PostgresMasterDataRepository {
         }
         Ok(())
     }
-
 }
 
 #[async_trait]
 impl WorkCenterRepository for PostgresMasterDataRepository {
-    async fn list_work_centers(&self, query: MasterDataQuery) -> AppResult<Value> {
-        self.fetch_list(
+    async fn list_work_centers(
+        &self,
+        query: MasterDataQuery,
+    ) -> AppResult<Page<WorkCenterReadModel>> {
+        let (page, page_size, limit, offset) = Self::pagination(&query);
+
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                COUNT(*) OVER() AS total,
+                work_center_id,
+                work_center_name,
+                location,
+                capacity_per_day,
+                efficiency,
+                is_active,
+                created_at
+            FROM mdm.mdm_work_centers
+            ORDER BY work_center_id
+            LIMIT $1 OFFSET $2
+            "#,
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+
+        Self::page_from_rows(rows, page, page_size, Self::parse_work_center)
+    }
+
+    async fn get_work_center(&self, work_center_id: &str) -> AppResult<WorkCenterReadModel> {
+        self.fetch_one_by_id(
             r#"
             SELECT
                 work_center_id,
@@ -2292,36 +3083,20 @@ impl WorkCenterRepository for PostgresMasterDataRepository {
                 is_active,
                 created_at
             FROM mdm.mdm_work_centers
-            ORDER BY work_center_id
-            "#,
-            query,
-        )
-        .await
-    }
-
-    async fn get_work_center(&self, work_center_id: &str) -> AppResult<Value> {
-        self.fetch_json_with_id(
-            r#"
-            SELECT row_to_json(t) AS data
-            FROM (
-                SELECT
-                    work_center_id,
-                    work_center_name,
-                    location,
-                    capacity_per_day,
-                    efficiency,
-                    is_active,
-                    created_at
-                FROM mdm.mdm_work_centers
-                WHERE work_center_id = $1
-            ) t
+            WHERE work_center_id = $1
             "#,
             work_center_id,
+            "WORK_CENTER_NOT_FOUND",
+            format!("工作中心不存在: {work_center_id}"),
+            Self::parse_work_center,
         )
         .await
     }
 
-    async fn create_work_center(&self, command: CreateWorkCenterCommand) -> AppResult<Value> {
+    async fn create_work_center(
+        &self,
+        command: CreateWorkCenterCommand,
+    ) -> AppResult<WorkCenterReadModel> {
         let row = sqlx::query(
             r#"
             INSERT INTO mdm.mdm_work_centers (
@@ -2340,7 +3115,14 @@ impl WorkCenterRepository for PostgresMasterDataRepository {
                 COALESCE($5, 100.00),
                 TRUE
             )
-            RETURNING row_to_json(mdm.mdm_work_centers.*) AS data
+            RETURNING
+                work_center_id,
+                work_center_name,
+                location,
+                capacity_per_day,
+                efficiency,
+                is_active,
+                created_at
             "#,
         )
         .bind(command.work_center_id)
@@ -2352,15 +3134,14 @@ impl WorkCenterRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_work_center(&row)
     }
 
     async fn update_work_center(
         &self,
         work_center_id: &str,
         command: UpdateWorkCenterCommand,
-    ) -> AppResult<Value> {
+    ) -> AppResult<WorkCenterReadModel> {
         let row = sqlx::query(
             r#"
             UPDATE mdm.mdm_work_centers
@@ -2371,7 +3152,14 @@ impl WorkCenterRepository for PostgresMasterDataRepository {
                 efficiency = COALESCE($5, efficiency),
                 is_active = COALESCE($6, is_active)
             WHERE work_center_id = $1
-            RETURNING row_to_json(mdm.mdm_work_centers.*) AS data
+            RETURNING
+                work_center_id,
+                work_center_name,
+                location,
+                capacity_per_day,
+                efficiency,
+                is_active,
+                created_at
             "#,
         )
         .bind(work_center_id)
@@ -2385,16 +3173,16 @@ impl WorkCenterRepository for PostgresMasterDataRepository {
         .map_err(cuba_shared::map_master_data_db_error)?;
 
         let Some(row) = row else {
-            return Err(AppError::NotFound(format!(
-                "work center not found: {work_center_id}"
-            )));
+            return Err(AppError::business(
+                "WORK_CENTER_NOT_FOUND",
+                format!("工作中心不存在: {work_center_id}"),
+            ));
         };
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_work_center(&row)
     }
 
-    async fn activate_work_center(&self, work_center_id: &str) -> AppResult<Value> {
+    async fn activate_work_center(&self, work_center_id: &str) -> AppResult<MutationAck> {
         let result = sqlx::query(
             r#"
             UPDATE mdm.mdm_work_centers
@@ -2407,11 +3195,15 @@ impl WorkCenterRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        self.affected_to_json(result, "work_center_id", work_center_id)
-            .await
+        Self::affected_to_ack(
+            result,
+            work_center_id,
+            "WORK_CENTER_NOT_FOUND",
+            format!("工作中心不存在: {work_center_id}"),
+        )
     }
 
-    async fn deactivate_work_center(&self, work_center_id: &str) -> AppResult<Value> {
+    async fn deactivate_work_center(&self, work_center_id: &str) -> AppResult<MutationAck> {
         let result = sqlx::query(
             r#"
             UPDATE mdm.mdm_work_centers
@@ -2424,15 +3216,67 @@ impl WorkCenterRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        self.affected_to_json(result, "work_center_id", work_center_id)
-            .await
+        Self::affected_to_ack(
+            result,
+            work_center_id,
+            "WORK_CENTER_NOT_FOUND",
+            format!("工作中心不存在: {work_center_id}"),
+        )
     }
 }
 
 #[async_trait]
 impl QualityMasterRepository for PostgresMasterDataRepository {
-    async fn list_inspection_chars(&self, query: MasterDataQuery) -> AppResult<Value> {
-        self.fetch_list(
+    async fn list_inspection_chars(
+        &self,
+        query: MasterDataQuery,
+    ) -> AppResult<Page<InspectionCharacteristicReadModel>> {
+        let (page, page_size, limit, offset) = Self::pagination(&query);
+        let keyword_pattern = query.keyword.as_ref().map(|k| format!("%{}%", k));
+        let material_type = Self::normalize_optional_material_type(query.material_type.as_deref())?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                COUNT(*) OVER() AS total,
+                char_id,
+                char_name,
+                material_type::text AS material_type,
+                inspection_type,
+                method,
+                standard,
+                unit,
+                lower_limit,
+                upper_limit,
+                is_critical,
+                is_active,
+                created_at
+            FROM mdm.mdm_inspection_chars
+            WHERE
+                ($3::text IS NULL OR char_id ILIKE $3 OR char_name ILIKE $3)
+                AND ($4::text IS NULL OR material_type::text = $4)
+                AND ($5::bool IS NULL OR is_active = $5)
+            ORDER BY char_id
+            LIMIT $1 OFFSET $2
+            "#,
+        )
+        .bind(limit)
+        .bind(offset)
+        .bind(keyword_pattern.as_deref())
+        .bind(material_type)
+        .bind(query.is_active)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+
+        Self::page_from_rows(rows, page, page_size, Self::parse_inspection_char)
+    }
+
+    async fn get_inspection_char(
+        &self,
+        char_id: &str,
+    ) -> AppResult<InspectionCharacteristicReadModel> {
+        self.fetch_one_by_id(
             r#"
             SELECT
                 char_id,
@@ -2445,37 +3289,15 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
                 lower_limit,
                 upper_limit,
                 is_critical,
+                is_active,
                 created_at
             FROM mdm.mdm_inspection_chars
-            ORDER BY char_id
-            "#,
-            query,
-        )
-        .await
-    }
-
-    async fn get_inspection_char(&self, char_id: &str) -> AppResult<Value> {
-        self.fetch_json_with_id(
-            r#"
-            SELECT row_to_json(t) AS data
-            FROM (
-                SELECT
-                    char_id,
-                    char_name,
-                    material_type::text AS material_type,
-                    inspection_type,
-                    method,
-                    standard,
-                    unit,
-                    lower_limit,
-                    upper_limit,
-                    is_critical,
-                    created_at
-                FROM mdm.mdm_inspection_chars
-                WHERE char_id = $1
-            ) t
+            WHERE char_id = $1
             "#,
             char_id,
+            "INSPECTION_CHAR_NOT_FOUND",
+            format!("检验特性不存在: {char_id}"),
+            Self::parse_inspection_char,
         )
         .await
     }
@@ -2483,7 +3305,10 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
     async fn create_inspection_char(
         &self,
         command: CreateInspectionCharCommand,
-    ) -> AppResult<Value> {
+    ) -> AppResult<InspectionCharacteristicReadModel> {
+        let material_type =
+            Self::normalize_optional_material_type(command.material_type.as_deref())?;
+
         let row = sqlx::query(
             r#"
             INSERT INTO mdm.mdm_inspection_chars (
@@ -2496,7 +3321,8 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
                 unit,
                 lower_limit,
                 upper_limit,
-                is_critical
+                is_critical,
+                is_active
             )
             VALUES (
                 $1,
@@ -2508,14 +3334,27 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
                 $7,
                 $8,
                 $9,
-                COALESCE($10, FALSE)
+                COALESCE($10, FALSE),
+                TRUE
             )
-            RETURNING row_to_json(mdm.mdm_inspection_chars.*) AS data
+            RETURNING
+                char_id,
+                char_name,
+                material_type::text AS material_type,
+                inspection_type,
+                method,
+                standard,
+                unit,
+                lower_limit,
+                upper_limit,
+                is_critical,
+                is_active,
+                created_at
             "#,
         )
         .bind(command.char_id)
         .bind(command.char_name)
-        .bind(command.material_type)
+        .bind(material_type)
         .bind(command.inspection_type)
         .bind(command.method)
         .bind(command.standard)
@@ -2527,15 +3366,63 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_inspection_char(&row)
     }
 
     async fn update_inspection_char(
         &self,
         char_id: &str,
         command: UpdateInspectionCharCommand,
-    ) -> AppResult<Value> {
+    ) -> AppResult<InspectionCharacteristicReadModel> {
+        let material_type =
+            Self::normalize_optional_material_type(command.material_type.as_deref())?;
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(cuba_shared::map_master_data_db_error)?;
+
+        let current = sqlx::query(
+            r#"
+            SELECT char_name, lower_limit, upper_limit
+            FROM mdm.mdm_inspection_chars
+            WHERE char_id = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(char_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+
+        let Some(current) = current else {
+            return Err(AppError::business(
+                "INSPECTION_CHAR_NOT_FOUND",
+                format!("检验特性不存在: {char_id}"),
+            ));
+        };
+
+        let lower_limit = command.lower_limit.or_else(|| {
+            current
+                .try_get::<Option<rust_decimal::Decimal>, _>("lower_limit")
+                .ok()
+                .flatten()
+        });
+        let upper_limit = command.upper_limit.or_else(|| {
+            current
+                .try_get::<Option<rust_decimal::Decimal>, _>("upper_limit")
+                .ok()
+                .flatten()
+        });
+        let mut entity = InspectionCharacteristic::new(
+            InspectionCharId::new(char_id)?,
+            current
+                .try_get::<String, _>("char_name")
+                .unwrap_or_else(|_| "Inspection".to_string()),
+        )?;
+        entity.set_limits(lower_limit, upper_limit)?;
+
         let row = sqlx::query(
             r#"
             UPDATE mdm.mdm_inspection_chars
@@ -2550,12 +3437,24 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
                 upper_limit = COALESCE($9, upper_limit),
                 is_critical = COALESCE($10, is_critical)
             WHERE char_id = $1
-            RETURNING row_to_json(mdm.mdm_inspection_chars.*) AS data
+            RETURNING
+                char_id,
+                char_name,
+                material_type::text AS material_type,
+                inspection_type,
+                method,
+                standard,
+                unit,
+                lower_limit,
+                upper_limit,
+                is_critical,
+                is_active,
+                created_at
             "#,
         )
         .bind(char_id)
         .bind(command.char_name)
-        .bind(command.material_type)
+        .bind(material_type)
         .bind(command.inspection_type)
         .bind(command.method)
         .bind(command.standard)
@@ -2563,22 +3462,101 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
         .bind(command.lower_limit)
         .bind(command.upper_limit)
         .bind(command.is_critical)
-        .fetch_optional(&self.pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        let Some(row) = row else {
-            return Err(AppError::NotFound(format!(
-                "inspection char not found: {char_id}"
-            )));
-        };
+        tx.commit()
+            .await
+            .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_inspection_char(&row)
     }
 
-    async fn list_defect_codes(&self, query: MasterDataQuery) -> AppResult<Value> {
-        self.fetch_list(
+    async fn activate_inspection_char(&self, char_id: &str) -> AppResult<MutationAck> {
+        let result = sqlx::query(
+            r#"
+            UPDATE mdm.mdm_inspection_chars
+            SET is_active = TRUE
+            WHERE char_id = $1
+            "#,
+        )
+        .bind(char_id)
+        .execute(&self.pool)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+
+        Self::affected_to_ack(
+            result,
+            char_id,
+            "INSPECTION_CHAR_NOT_FOUND",
+            format!("检验特性不存在: {char_id}"),
+        )
+    }
+
+    async fn deactivate_inspection_char(&self, char_id: &str) -> AppResult<MutationAck> {
+        let result = sqlx::query(
+            r#"
+            UPDATE mdm.mdm_inspection_chars
+            SET is_active = FALSE
+            WHERE char_id = $1
+            "#,
+        )
+        .bind(char_id)
+        .execute(&self.pool)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+
+        Self::affected_to_ack(
+            result,
+            char_id,
+            "INSPECTION_CHAR_NOT_FOUND",
+            format!("检验特性不存在: {char_id}"),
+        )
+    }
+
+    async fn list_defect_codes(
+        &self,
+        query: MasterDataQuery,
+    ) -> AppResult<Page<DefectCodeReadModel>> {
+        let (page, page_size, limit, offset) = Self::pagination(&query);
+        let keyword_pattern = query.keyword.as_ref().map(|k| format!("%{}%", k));
+        let severity = Self::normalize_optional_defect_severity(query.status.as_deref())?;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                COUNT(*) OVER() AS total,
+                defect_code,
+                defect_name,
+                category,
+                severity,
+                description,
+                is_active,
+                created_at
+            FROM mdm.mdm_defect_codes
+            WHERE
+                ($3::text IS NULL OR defect_code ILIKE $3 OR defect_name ILIKE $3)
+                AND ($4::text IS NULL OR severity = $4)
+                AND ($5::bool IS NULL OR is_active = $5)
+            ORDER BY defect_code
+            LIMIT $1 OFFSET $2
+            "#,
+        )
+        .bind(limit)
+        .bind(offset)
+        .bind(keyword_pattern.as_deref())
+        .bind(severity)
+        .bind(query.is_active)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+
+        Self::page_from_rows(rows, page, page_size, Self::parse_defect_code)
+    }
+
+    async fn get_defect_code(&self, defect_code: &str) -> AppResult<DefectCodeReadModel> {
+        self.fetch_one_by_id(
             r#"
             SELECT
                 defect_code,
@@ -2589,36 +3567,22 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
                 is_active,
                 created_at
             FROM mdm.mdm_defect_codes
-            ORDER BY defect_code
-            "#,
-            query,
-        )
-        .await
-    }
-
-    async fn get_defect_code(&self, defect_code: &str) -> AppResult<Value> {
-        self.fetch_json_with_id(
-            r#"
-            SELECT row_to_json(t) AS data
-            FROM (
-                SELECT
-                    defect_code,
-                    defect_name,
-                    category,
-                    severity,
-                    description,
-                    is_active,
-                    created_at
-                FROM mdm.mdm_defect_codes
-                WHERE defect_code = $1
-            ) t
+            WHERE defect_code = $1
             "#,
             defect_code,
+            "DEFECT_CODE_NOT_FOUND",
+            format!("不良代码不存在: {defect_code}"),
+            Self::parse_defect_code,
         )
         .await
     }
 
-    async fn create_defect_code(&self, command: CreateDefectCodeCommand) -> AppResult<Value> {
+    async fn create_defect_code(
+        &self,
+        command: CreateDefectCodeCommand,
+    ) -> AppResult<DefectCodeReadModel> {
+        let severity = Self::normalize_defect_severity(&command.severity)?;
+
         let row = sqlx::query(
             r#"
             INSERT INTO mdm.mdm_defect_codes (
@@ -2637,27 +3601,35 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
                 $5,
                 TRUE
             )
-            RETURNING row_to_json(mdm.mdm_defect_codes.*) AS data
+            RETURNING
+                defect_code,
+                defect_name,
+                category,
+                severity,
+                description,
+                is_active,
+                created_at
             "#,
         )
         .bind(command.defect_code)
         .bind(command.defect_name)
         .bind(command.category)
-        .bind(command.severity)
+        .bind(severity)
         .bind(command.description)
         .fetch_one(&self.pool)
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_defect_code(&row)
     }
 
     async fn update_defect_code(
         &self,
         defect_code: &str,
         command: UpdateDefectCodeCommand,
-    ) -> AppResult<Value> {
+    ) -> AppResult<DefectCodeReadModel> {
+        let severity = Self::normalize_optional_defect_severity(command.severity.as_deref())?;
+
         let row = sqlx::query(
             r#"
             UPDATE mdm.mdm_defect_codes
@@ -2668,13 +3640,20 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
                 description = COALESCE($5, description),
                 is_active = COALESCE($6, is_active)
             WHERE defect_code = $1
-            RETURNING row_to_json(mdm.mdm_defect_codes.*) AS data
+            RETURNING
+                defect_code,
+                defect_name,
+                category,
+                severity,
+                description,
+                is_active,
+                created_at
             "#,
         )
         .bind(defect_code)
         .bind(command.defect_name)
         .bind(command.category)
-        .bind(command.severity)
+        .bind(severity)
         .bind(command.description)
         .bind(command.is_active)
         .fetch_optional(&self.pool)
@@ -2682,16 +3661,16 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
         .map_err(cuba_shared::map_master_data_db_error)?;
 
         let Some(row) = row else {
-            return Err(AppError::NotFound(format!(
-                "defect code not found: {defect_code}"
-            )));
+            return Err(AppError::business(
+                "DEFECT_CODE_NOT_FOUND",
+                format!("不良代码不存在: {defect_code}"),
+            ));
         };
 
-        row.try_get::<Value, _>("data")
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Self::parse_defect_code(&row)
     }
 
-    async fn activate_defect_code(&self, defect_code: &str) -> AppResult<Value> {
+    async fn activate_defect_code(&self, defect_code: &str) -> AppResult<MutationAck> {
         let result = sqlx::query(
             r#"
             UPDATE mdm.mdm_defect_codes
@@ -2704,11 +3683,15 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        self.affected_to_json(result, "defect_code", defect_code)
-            .await
+        Self::affected_to_ack(
+            result,
+            defect_code,
+            "DEFECT_CODE_NOT_FOUND",
+            format!("不良代码不存在: {defect_code}"),
+        )
     }
 
-    async fn deactivate_defect_code(&self, defect_code: &str) -> AppResult<Value> {
+    async fn deactivate_defect_code(&self, defect_code: &str) -> AppResult<MutationAck> {
         let result = sqlx::query(
             r#"
             UPDATE mdm.mdm_defect_codes
@@ -2721,7 +3704,11 @@ impl QualityMasterRepository for PostgresMasterDataRepository {
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
 
-        self.affected_to_json(result, "defect_code", defect_code)
-            .await
+        Self::affected_to_ack(
+            result,
+            defect_code,
+            "DEFECT_CODE_NOT_FOUND",
+            format!("不良代码不存在: {defect_code}"),
+        )
     }
 }

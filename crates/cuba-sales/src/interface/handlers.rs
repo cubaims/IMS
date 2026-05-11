@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
 };
-use cuba_shared::{ApiResponse, AppResult, AppState};
+use cuba_shared::{ApiResponse, AppResult, AppState, CurrentUser, write_audit_event};
 
 use crate::{
     application::{
@@ -23,14 +23,9 @@ fn service(state: &AppState) -> SalesOrderService {
     SalesOrderService::new(Arc::new(repository))
 }
 
-fn current_operator() -> String {
-    // Phase 5 先用占位值。
-    // Phase 2 权限中间件完成后，从 CurrentUser 中读取 username。
-    "api".to_string()
-}
-
 pub async fn create_sales_order(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Json(request): Json<CreateSalesOrderRequest>,
 ) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
     let command = CreateSalesOrderCommand {
@@ -50,9 +45,7 @@ pub async fn create_sales_order(
             .collect(),
     };
 
-    let result = service(&state)
-        .create_order(command, current_operator())
-        .await?;
+    let result = service(&state).create_order(command, user.username).await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }
@@ -75,9 +68,11 @@ pub async fn get_sales_order(
 
 pub async fn post_sales_shipment(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path(so_id): Path<String>,
     Json(request): Json<PostSalesShipmentRequest>,
 ) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+    let record_id = so_id.clone();
     let command = PostSalesShipmentCommand {
         so_id,
         posting_date: request.posting_date,
@@ -96,8 +91,17 @@ pub async fn post_sales_shipment(
     };
 
     let result = service(&state)
-        .post_shipment(command, current_operator())
+        .post_shipment(command, user.username.clone())
         .await?;
+    write_audit_event(
+        &state.db_pool,
+        Some(user.user_id),
+        "SALES_SHIPMENT_POST",
+        Some("wms.wms_sales_orders_h"),
+        Some(&record_id),
+        Some(result.clone()),
+    )
+    .await;
 
     Ok(Json(ApiResponse::ok(result)))
 }
@@ -125,11 +129,10 @@ pub async fn preview_sales_fefo_pick(
 
 pub async fn close_sales_order(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path(so_id): Path<String>,
 ) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
-    let result = service(&state)
-        .close_order(so_id, current_operator())
-        .await?;
+    let result = service(&state).close_order(so_id, user.username).await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }

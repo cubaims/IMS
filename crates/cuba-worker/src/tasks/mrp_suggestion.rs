@@ -1,10 +1,15 @@
+use cuba_shared::map_worker_db_error;
 use sqlx::PgPool;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tracing::{error, info};
 
 /// MRP 建议生成任务（临时版：只接受 pool）
-pub async fn mrp_suggestion_task(pool: PgPool) {
-    info!("MRP 建议生成任务已启动");
+pub async fn mrp_suggestion_task(pool: PgPool, interval_minutes: u64) {
+    let interval_seconds = interval_minutes.max(1) * 60;
+    info!(
+        "MRP 建议生成任务已启动（每 {} 分钟执行一次）",
+        interval_minutes.max(1)
+    );
 
     loop {
         match run_mrp_suggestion(&pool).await {
@@ -12,8 +17,7 @@ pub async fn mrp_suggestion_task(pool: PgPool) {
             Err(e) => error!("❌ MRP 建议生成失败: {}", e),
         }
 
-        // 默认 30 分钟执行一次（后续可改成配置）
-        sleep(Duration::from_secs(30 * 60)).await;
+        sleep(Duration::from_secs(interval_seconds)).await;
     }
 }
 
@@ -23,7 +27,8 @@ async fn run_mrp_suggestion(pool: &PgPool) -> anyhow::Result<()> {
     // 调用数据库中的 MRP 函数
     sqlx::query("SELECT wms.fn_run_mrp()")
         .execute(pool)
-        .await?;
+        .await
+        .map_err(|err| anyhow::anyhow!(map_worker_db_error(err)))?;
 
     info!("MRP 建议生成完成");
 

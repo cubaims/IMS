@@ -143,6 +143,9 @@ pub enum MrpRunStatus {
 
     /// 运行失败
     Failed,
+
+    /// 已取消
+    Cancelled,
 }
 
 /// MRP 建议类型。
@@ -154,14 +157,17 @@ pub enum MrpSuggestionType {
 
     /// 生产建议
     Production,
+
+    /// 调拨建议
+    Transfer,
 }
 
 /// MRP 建议状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MrpSuggestionStatus {
-    /// 新建议
-    New,
+    /// 待处理建议
+    Open,
 
     /// 已确认
     Confirmed,
@@ -176,12 +182,12 @@ pub enum MrpSuggestionStatus {
 impl MrpSuggestionStatus {
     /// 是否允许确认。
     pub fn can_confirm(self) -> bool {
-        matches!(self, Self::New)
+        matches!(self, Self::Open)
     }
 
     /// 是否允许取消。
     pub fn can_cancel(self) -> bool {
-        matches!(self, Self::New | Self::Confirmed)
+        matches!(self, Self::Open | Self::Confirmed)
     }
 
     /// 是否允许转换单据。
@@ -298,6 +304,57 @@ pub struct CreateMrpRun {
     pub remark: Option<String>,
 }
 
+/// MRP 需求输入。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MrpDemand {
+    pub material_id: Option<MaterialId>,
+    pub product_variant_id: Option<ProductVariantId>,
+    pub demand_qty: Decimal,
+    pub demand_date: OffsetDateTime,
+    pub remark: Option<String>,
+}
+
+impl MrpDemand {
+    pub fn new(
+        material_id: Option<MaterialId>,
+        product_variant_id: Option<ProductVariantId>,
+        demand_qty: Decimal,
+        demand_date: OffsetDateTime,
+        remark: Option<String>,
+    ) -> MrpResult<Self> {
+        if demand_qty <= Decimal::ZERO {
+            return Err(MrpError::DemandQtyMustBePositive);
+        }
+
+        if material_id.is_none() && product_variant_id.is_none() {
+            return Err(MrpError::BusinessRuleViolation(
+                "material_id 和 product_variant_id 不能同时为空".to_string(),
+            ));
+        }
+
+        Ok(Self {
+            material_id,
+            product_variant_id,
+            demand_qty,
+            demand_date,
+            remark,
+        })
+    }
+}
+
+/// MRP 短缺读模型。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MrpShortage {
+    pub run_id: MrpRunId,
+    pub material_id: MaterialId,
+    pub required_qty: Decimal,
+    pub available_qty: Decimal,
+    pub shortage_qty: Decimal,
+    pub suggested_qty: Decimal,
+    pub suggestion_type: MrpSuggestionType,
+    pub required_date: OffsetDateTime,
+}
+
 // =============================================================================
 // MRP 建议聚合
 // =============================================================================
@@ -314,8 +371,41 @@ pub struct MrpSuggestion {
     /// 建议物料。
     pub material_id: MaterialId,
 
+    /// BOM 层级。
+    pub bom_level: i32,
+
+    /// 毛需求数量。
+    pub gross_requirement_qty: Decimal,
+
+    /// 需求数量。
+    pub required_qty: Decimal,
+
+    /// 可用库存数量。
+    pub available_qty: Decimal,
+
+    /// 安全库存数量。
+    pub safety_stock_qty: Decimal,
+
+    /// 短缺数量。
+    pub shortage_qty: Decimal,
+
+    /// 净需求数量。
+    pub net_requirement_qty: Decimal,
+
     /// 建议数量。
     pub suggested_qty: Decimal,
+
+    /// 推荐货位。
+    pub recommended_bin: Option<String>,
+
+    /// 推荐批次。
+    pub recommended_batch: Option<String>,
+
+    /// 提前期天数。
+    pub lead_time_days: Option<i32>,
+
+    /// 优先级。
+    pub priority: Option<i32>,
 
     /// 需求日期。
     pub required_date: OffsetDateTime,
@@ -398,5 +488,94 @@ impl MrpSuggestion {
         self.status = MrpSuggestionStatus::Converted;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn now() -> OffsetDateTime {
+        OffsetDateTime::UNIX_EPOCH
+    }
+
+    #[test]
+    fn demand_requires_positive_quantity_and_target() {
+        let err = MrpDemand::new(None, None, Decimal::ONE, now(), None).unwrap_err();
+        assert!(matches!(err, MrpError::BusinessRuleViolation(_)));
+
+        let err = MrpDemand::new(
+            Some(MaterialId::new("FIN001")),
+            None,
+            Decimal::ZERO,
+            now(),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err, MrpError::DemandQtyMustBePositive);
+
+        let demand = MrpDemand::new(
+            Some(MaterialId::new("FIN001")),
+            None,
+            Decimal::ONE,
+            now(),
+            Some("customer demand".to_string()),
+        )
+        .expect("valid demand");
+
+        assert_eq!(demand.material_id.expect("material id").as_str(), "FIN001");
+    }
+
+    #[test]
+    fn suggestion_status_transitions_match_phase9_rules() {
+        let mut suggestion = MrpSuggestion {
+            id: MrpSuggestionId::new("1"),
+            run_id: MrpRunId::new("MRP-1"),
+            suggestion_type: MrpSuggestionType::Purchase,
+            material_id: MaterialId::new("RM001"),
+            bom_level: 1,
+            gross_requirement_qty: Decimal::new(100, 0),
+            required_qty: Decimal::new(100, 0),
+            available_qty: Decimal::new(30, 0),
+            safety_stock_qty: Decimal::new(10, 0),
+            shortage_qty: Decimal::new(70, 0),
+            net_requirement_qty: Decimal::new(70, 0),
+            suggested_qty: Decimal::new(70, 0),
+            recommended_bin: None,
+            recommended_batch: None,
+            lead_time_days: Some(5),
+            priority: Some(1),
+            required_date: now(),
+            suggested_date: now(),
+            supplier_id: None,
+            work_center_id: None,
+            status: MrpSuggestionStatus::Open,
+            created_at: now(),
+            confirmed_by: None,
+            confirmed_at: None,
+            cancelled_by: None,
+            cancelled_at: None,
+            remark: None,
+        };
+
+        suggestion
+            .confirm(Operator::new("planner"), now())
+            .expect("open suggestion can be confirmed");
+        assert_eq!(suggestion.status, MrpSuggestionStatus::Confirmed);
+
+        let err = suggestion
+            .confirm(Operator::new("planner"), now())
+            .expect_err("confirmed suggestion cannot be confirmed twice");
+        assert_eq!(err, MrpError::MrpSuggestionStatusInvalid);
+
+        suggestion
+            .cancel(
+                Operator::new("planner"),
+                now(),
+                "demand cancelled".to_string(),
+            )
+            .expect("confirmed suggestion can be cancelled");
+        assert_eq!(suggestion.status, MrpSuggestionStatus::Cancelled);
+        assert_eq!(suggestion.remark.as_deref(), Some("demand cancelled"));
     }
 }

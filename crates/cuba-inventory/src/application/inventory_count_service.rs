@@ -1,19 +1,15 @@
 use crate::application::common::Page;
 use crate::application::errors::InventoryCountApplicationError;
 use crate::application::inventory_count_model::{
-    ApproveInventoryCountInput, BatchUpdateInventoryCountLinesInput, CancelInventoryCountInput,
-    CloseInventoryCountInput, CreateInventoryCountInput, GenerateInventoryCountLinesInput,
-    GetInventoryCountInput, InventoryCountScopeFilter, ListInventoryCountsInput,
-    PostInventoryCountInput, SubmitInventoryCountInput, UpdateInventoryCountLineInput,
+    BatchUpdateInventoryCountLinesInput, CreateInventoryCountInput,
+    GenerateInventoryCountLinesInput, GetInventoryCountInput, InventoryCountScopeFilter,
+    ListInventoryCountsInput, SubmitInventoryCountInput, UpdateInventoryCountLineInput,
 };
 use crate::application::inventory_count_repository::{
     InventoryCountRepository, InventoryCountSummary,
 };
-use crate::domain::{
-    InventoryCount, InventoryCountLine, InventoryCountMovementType, InventoryCountStatus,
-};
+use crate::domain::{InventoryCount, InventoryCountLine};
 use std::sync::Arc;
-use time::OffsetDateTime;
 
 /// 盘点应用服务
 ///
@@ -60,13 +56,9 @@ where
 
         let scope_filter = Self::scope_filter_from_count(&count);
 
-        let exists_open = self.repo.exists_open_count_for_scope(&scope_filter).await?;
-
-        if exists_open {
-            return Err(InventoryCountApplicationError::DuplicatedScope);
-        }
-
-        self.repo.create_count(&count).await?;
+        self.repo
+            .create_count_transactional(&count, &scope_filter)
+            .await?;
 
         Ok(count)
     }
@@ -85,44 +77,9 @@ where
         &self,
         input: GenerateInventoryCountLinesInput,
     ) -> Result<InventoryCount, InventoryCountApplicationError> {
-        let mut count = self
-            .repo
-            .lock_header_for_update(&input.count_doc_id)
-            .await?;
-
-        if !count.status.can_generate_lines() {
-            return Err(InventoryCountApplicationError::StatusInvalid);
-        }
-
-        let scope_filter = Self::scope_filter_from_count(&count);
-
-        let lines = self
-            .repo
-            .generate_lines_from_scope(&input.count_doc_id, &scope_filter)
-            .await?;
-
-        if lines.is_empty() {
-            return Err(InventoryCountApplicationError::NoLines);
-        }
-
-        // 领域对象负责状态流转校验
-        count.mark_counting(lines.clone())?;
-
-        self.repo.insert_lines(&input.count_doc_id, &lines).await?;
-
         self.repo
-            .update_status(
-                &input.count_doc_id,
-                InventoryCountStatus::Counting,
-                &input.operator,
-                None,
-            )
-            .await?;
-
-        self.get_count(GetInventoryCountInput {
-            count_doc_id: input.count_doc_id,
-        })
-        .await
+            .generate_lines_transactional(&input.count_doc_id, &input.operator)
+            .await
     }
 
     /// 查询盘点单详情
@@ -157,40 +114,14 @@ where
         &self,
         input: UpdateInventoryCountLineInput,
     ) -> Result<InventoryCountLine, InventoryCountApplicationError> {
-        let count = self
-            .repo
-            .lock_header_for_update(&input.count_doc_id)
-            .await?;
-
-        if !count.status.can_update_counted_qty() {
-            return Err(InventoryCountApplicationError::StatusInvalid);
-        }
-
-        let mut lines = self.repo.lock_lines_for_update(&input.count_doc_id).await?;
-
-        let line = lines
-            .iter_mut()
-            .find(|line| line.line_no == input.line_no)
-            .ok_or(InventoryCountApplicationError::CountLineNotFound)?;
-
-        // 领域对象负责差异计算和 701 / 702 判断
-        line.enter_counted_qty(input.counted_qty, input.difference_reason, input.remark)?;
-
-        let difference_qty = line
-            .difference_qty
-            .ok_or(InventoryCountApplicationError::LineNotCounted)?;
-
-        let movement_type = Self::movement_type_code(line);
-
         self.repo
-            .update_line_counted_qty(
+            .update_line_transactional(
                 &input.count_doc_id,
                 input.line_no,
                 input.counted_qty,
-                difference_qty,
-                movement_type,
-                line.difference_reason.clone(),
-                line.remark.clone(),
+                input.difference_reason,
+                input.remark,
+                &input.operator,
             )
             .await
     }
@@ -205,29 +136,8 @@ where
         &self,
         input: BatchUpdateInventoryCountLinesInput,
     ) -> Result<Vec<InventoryCountLine>, InventoryCountApplicationError> {
-        let count = self
-            .repo
-            .lock_header_for_update(&input.count_doc_id)
-            .await?;
-
-        if !count.status.can_update_counted_qty() {
-            return Err(InventoryCountApplicationError::StatusInvalid);
-        }
-
-        let mut existing_lines = self.repo.lock_lines_for_update(&input.count_doc_id).await?;
-
-        for item in input.lines {
-            let line = existing_lines
-                .iter_mut()
-                .find(|line| line.line_no == item.line_no)
-                .ok_or(InventoryCountApplicationError::CountLineNotFound)?;
-
-            // 每一行都走同一个领域方法，避免批量逻辑绕过规则
-            line.enter_counted_qty(item.counted_qty, item.difference_reason, item.remark)?;
-        }
-
         self.repo
-            .batch_update_lines(&input.count_doc_id, &existing_lines)
+            .batch_update_lines_transactional(&input.count_doc_id, &input.lines, &input.operator)
             .await
     }
 
@@ -242,38 +152,13 @@ where
         &self,
         input: SubmitInventoryCountInput,
     ) -> Result<InventoryCount, InventoryCountApplicationError> {
-        let mut count = self
-            .repo
-            .lock_header_for_update(&input.count_doc_id)
-            .await?;
-
-        let lines = self.repo.lock_lines_for_update(&input.count_doc_id).await?;
-
-        if lines.is_empty() {
-            return Err(InventoryCountApplicationError::NoLines);
-        }
-
-        count.lines = lines;
-
-        // 领域对象负责：
-        // - 状态校验
-        // - 是否全部录入
-        // - 差异原因是否必填
-        count.submit()?;
-
         self.repo
-            .update_status(
+            .submit_count_transactional(
                 &input.count_doc_id,
-                InventoryCountStatus::Submitted,
                 &input.operator,
                 input.remark.as_deref(),
             )
-            .await?;
-
-        self.get_count(GetInventoryCountInput {
-            count_doc_id: input.count_doc_id,
-        })
-        .await
+            .await
     }
 
     /// 从盘点单头构造范围过滤条件
@@ -287,14 +172,6 @@ where
         }
     }
 
-    /// 把领域枚举转换成数据库移动类型编码
-    fn movement_type_code(line: &InventoryCountLine) -> Option<String> {
-        line.movement_type
-            .as_ref()
-            .map(InventoryCountMovementType::as_code)
-            .map(str::to_string)
-    }
-
     /// 审核盘点单
     ///
     /// 规则：
@@ -305,54 +182,14 @@ where
         &self,
         input: crate::application::inventory_count_model::ApproveInventoryCountInput,
     ) -> Result<InventoryCount, InventoryCountApplicationError> {
-        let mut count = self
-            .repo
-            .lock_header_for_update(&input.count_doc_id)
-            .await?;
-
-        if !count.status.can_approve() {
-            return Err(InventoryCountApplicationError::StatusInvalid);
-        }
-
-        if input.approved {
-            // 领域对象负责审核状态流转
-            count.approve(input.operator.clone())?;
-
-            self.repo
-                .update_approved_info(
-                    &input.count_doc_id,
-                    &input.operator,
-                    count.approved_at.unwrap_or_else(OffsetDateTime::now_utc),
-                    input.remark.as_deref(),
-                )
-                .await?;
-
-            self.repo
-                .update_status(
-                    &input.count_doc_id,
-                    InventoryCountStatus::Approved,
-                    &input.operator,
-                    input.remark.as_deref(),
-                )
-                .await?;
-        } else {
-            // 审核退回：SUBMITTED -> COUNTING
-            count.reject_to_recount()?;
-
-            self.repo
-                .update_status(
-                    &input.count_doc_id,
-                    InventoryCountStatus::Counting,
-                    &input.operator,
-                    input.remark.as_deref(),
-                )
-                .await?;
-        }
-
-        self.get_count(GetInventoryCountInput {
-            count_doc_id: input.count_doc_id,
-        })
-        .await
+        self.repo
+            .approve_count_transactional(
+                &input.count_doc_id,
+                input.approved,
+                &input.operator,
+                input.remark.as_deref(),
+            )
+            .await
     }
 
     /// 盘点过账
@@ -388,29 +225,13 @@ where
         &self,
         input: crate::application::inventory_count_model::CloseInventoryCountInput,
     ) -> Result<InventoryCount, InventoryCountApplicationError> {
-        let mut count = self
-            .repo
-            .lock_header_for_update(&input.count_doc_id)
-            .await?;
-
-        // 领域对象负责 POSTED -> CLOSED 校验
-        count.close()?;
-
-        let closed_at = count.closed_at.unwrap_or_else(OffsetDateTime::now_utc);
-
         self.repo
-            .close(
+            .close_count_transactional(
                 &input.count_doc_id,
                 &input.operator,
-                closed_at,
                 input.remark.as_deref(),
             )
-            .await?;
-
-        self.get_count(GetInventoryCountInput {
-            count_doc_id: input.count_doc_id,
-        })
-        .await
+            .await
     }
 
     /// 取消盘点单
@@ -423,29 +244,12 @@ where
         &self,
         input: crate::application::inventory_count_model::CancelInventoryCountInput,
     ) -> Result<InventoryCount, InventoryCountApplicationError> {
-        let mut count = self
-            .repo
-            .lock_header_for_update(&input.count_doc_id)
-            .await?;
-
-        if matches!(count.status, InventoryCountStatus::Posted) {
-            return Err(InventoryCountApplicationError::AlreadyPosted);
-        }
-
-        // 领域对象负责 DRAFT / COUNTING / SUBMITTED / APPROVED -> CANCELLED
-        count.cancel()?;
-
         self.repo
-            .cancel(
+            .cancel_count_transactional(
                 &input.count_doc_id,
                 &input.operator,
                 input.remark.as_deref(),
             )
-            .await?;
-
-        self.get_count(GetInventoryCountInput {
-            count_doc_id: input.count_doc_id,
-        })
-        .await
+            .await
     }
 }

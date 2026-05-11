@@ -1,0 +1,14 @@
+meta {
+  name: 13 Validate BOM
+  type: http
+  seq: 13
+}
+
+post {
+  url: {{base_url}}/api/master-data/boms/{{bom_id}}/validate
+  body: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

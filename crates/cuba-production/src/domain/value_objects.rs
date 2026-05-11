@@ -55,8 +55,48 @@ impl ProductionOrderStatus {
         matches!(self, Self::Planned)
     }
 
+    pub fn ensure_can_release(self) -> Result<(), crate::domain::ProductionDomainError> {
+        if self.can_release() {
+            Ok(())
+        } else {
+            Err(crate::domain::ProductionDomainError::ProductionOrderStatusInvalid)
+        }
+    }
+
     pub fn can_complete(self) -> bool {
         matches!(self, Self::Released | Self::InProduction)
+    }
+
+    pub fn ensure_can_complete(self) -> Result<(), crate::domain::ProductionDomainError> {
+        if self.can_complete() {
+            Ok(())
+        } else {
+            Err(crate::domain::ProductionDomainError::ProductionOrderStatusInvalid)
+        }
+    }
+
+    pub fn can_cancel(self) -> bool {
+        matches!(self, Self::Planned | Self::Released)
+    }
+
+    pub fn ensure_can_cancel(self) -> Result<(), crate::domain::ProductionDomainError> {
+        if self.can_cancel() {
+            Ok(())
+        } else {
+            Err(crate::domain::ProductionDomainError::ProductionOrderStatusInvalid)
+        }
+    }
+
+    pub fn can_close(self) -> bool {
+        matches!(self, Self::Completed)
+    }
+
+    pub fn ensure_can_close(self) -> Result<(), crate::domain::ProductionDomainError> {
+        if self.can_close() {
+            Ok(())
+        } else {
+            Err(crate::domain::ProductionDomainError::ProductionOrderStatusInvalid)
+        }
     }
 }
 

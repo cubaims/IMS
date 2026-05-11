@@ -183,3 +183,142 @@ pub struct InventoryPostingResult {
     pub reference_doc: Option<String>,
     pub map_updated: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn material_id() -> MaterialId {
+        MaterialId::new("RM001").expect("test fixture should be valid")
+    }
+
+    fn quantity() -> Quantity {
+        Quantity::from_i32(10).expect("test fixture should be valid")
+    }
+
+    fn bin(value: &str) -> BinCode {
+        BinCode::new(value).expect("test fixture should be valid")
+    }
+
+    fn posting(movement_type: MovementType) -> InventoryPosting {
+        InventoryPosting {
+            material_id: material_id(),
+            movement_type,
+            quantity: quantity(),
+            from_bin: None,
+            to_bin: None,
+            batch_number: None,
+            serial_number: None,
+            reference_doc: Some("MANUAL-001".to_string()),
+            remark: None,
+            quality_status: QualityStatus::Qualified,
+            unit_price: None,
+        }
+    }
+
+    #[test]
+    fn receipt_101_requires_to_bin_and_rejects_from_bin() {
+        let missing_to_bin = posting(MovementType::Receipt101);
+
+        assert!(matches!(
+            missing_to_bin.validate(),
+            Err(InventoryDomainError::ToBinRequired(movement)) if movement == "101"
+        ));
+
+        let mut with_source = posting(MovementType::Receipt101);
+        with_source.from_bin = Some(bin("RM-A01"));
+        with_source.to_bin = Some(bin("RM-A02"));
+
+        assert!(matches!(
+            with_source.validate(),
+            Err(InventoryDomainError::FromBinMustBeEmpty(movement)) if movement == "101"
+        ));
+    }
+
+    #[test]
+    fn outbound_movements_require_from_bin_and_reject_to_bin() {
+        for movement_type in [
+            MovementType::Issue261,
+            MovementType::CountLoss702,
+            MovementType::Scrap999,
+        ] {
+            let missing_from_bin = posting(movement_type);
+            assert!(matches!(
+                missing_from_bin.validate(),
+                Err(InventoryDomainError::FromBinRequired(_))
+            ));
+
+            let mut with_target = posting(movement_type);
+            with_target.from_bin = Some(bin("RM-A01"));
+            with_target.to_bin = Some(bin("RM-A02"));
+            assert!(matches!(
+                with_target.validate(),
+                Err(InventoryDomainError::ToBinMustBeEmpty(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn transfer_311_requires_distinct_source_and_target_bins() {
+        let missing_bins = posting(MovementType::Transfer311);
+        assert!(matches!(
+            missing_bins.validate(),
+            Err(InventoryDomainError::FromBinRequired(movement)) if movement == "311"
+        ));
+
+        let mut same_bins = posting(MovementType::Transfer311);
+        same_bins.from_bin = Some(bin("RM-A01"));
+        same_bins.to_bin = Some(bin("RM-A01"));
+        assert!(matches!(
+            same_bins.validate(),
+            Err(InventoryDomainError::SameSourceAndTargetBin)
+        ));
+
+        let mut valid = posting(MovementType::Transfer311);
+        valid.from_bin = Some(bin("RM-A01"));
+        valid.to_bin = Some(bin("RM-A02"));
+        assert!(valid.validate().is_ok());
+    }
+
+    #[test]
+    fn manual_posting_requires_reference_doc_or_remark() {
+        let mut command = posting(MovementType::Receipt101);
+        command.to_bin = Some(bin("RM-A01"));
+        command.reference_doc = Some("   ".to_string());
+        command.remark = None;
+
+        assert!(matches!(
+            command.validate(),
+            Err(InventoryDomainError::ReferenceDocOrRemarkRequired)
+        ));
+
+        command.remark = Some("manual receipt".to_string());
+        assert!(command.validate().is_ok());
+    }
+
+    #[test]
+    fn outbound_movements_reject_frozen_or_scrapped_quality_status() {
+        for quality_status in [QualityStatus::Frozen, QualityStatus::Scrapped] {
+            let mut command = posting(MovementType::Issue261);
+            command.from_bin = Some(bin("RM-A01"));
+            command.quality_status = quality_status;
+
+            assert!(matches!(
+                command.validate(),
+                Err(InventoryDomainError::InvalidOutboundQualityStatus(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn unit_price_must_be_positive_when_present() {
+        let mut command = posting(MovementType::Receipt101);
+        command.to_bin = Some(bin("RM-A01"));
+        command.unit_price = Some(Decimal::ZERO);
+
+        assert!(matches!(
+            command.validate(),
+            Err(InventoryDomainError::InvalidUnitPrice)
+        ));
+    }
+}

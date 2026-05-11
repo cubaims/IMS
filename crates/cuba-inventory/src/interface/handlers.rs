@@ -1,15 +1,15 @@
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
 };
 use serde_json::Value;
 use std::sync::Arc;
 
-use cuba_shared::{ApiResponse, AppResult, AppState};
+use cuba_shared::{ApiResponse, AppResult, AppState, CurrentUser, write_audit_event};
 
 use crate::{
     application::{
-        BatchRepository, InventoryRepository, InventoryService, MapHistoryRepository,
+        BatchRepository, InventoryRepository, InventoryService, MapHistoryRepository, common::Page,
         inventory_count_service::InventoryCountService,
     },
     infrastructure::{PostgresInventoryCountRepository, PostgresInventoryRepository},
@@ -27,6 +27,7 @@ use crate::{
         InventoryCountLineResponse,
         InventoryCountResponse,
         InventoryTransactionRequest,
+        ListInventoryCountsRequest,
         MapHistoryRequest,
         PickBatchFefoRequest,
         PostInventoryCountRequest,
@@ -53,36 +54,62 @@ fn count_service(state: &AppState) -> InventoryCountService<PostgresInventoryCou
     InventoryCountService::new(repo)
 }
 
-fn operator_from_headers(headers: &axum::http::HeaderMap) -> String {
-    headers
-        .get("x-user-name")
-        .or_else(|| headers.get("x-user-id"))
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or("API")
-        .to_string()
-}
-
 // ====================== 库存核心功能 ======================
 pub async fn post_inventory(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
+    Extension(user): Extension<CurrentUser>,
     Json(request): Json<PostInventoryRequest>,
 ) -> AppResult<Json<ApiResponse<crate::domain::InventoryPostingResult>>> {
     let service = inventory_service(&state);
-    let operator = operator_from_headers(&headers);
+    let operator = user.username.clone();
     let result = service.post_inventory(request.into(), operator).await?;
+    write_audit_event(
+        &state.db_pool,
+        Some(user.user_id),
+        "INVENTORY_POST",
+        Some("wms.wms_transactions"),
+        Some(&result.transaction_id),
+        Some(serde_json::json!({
+            "transaction_id": result.transaction_id,
+            "movement_type": result.movement_type,
+            "material_id": result.material_id,
+            "quantity": result.quantity,
+            "from_bin": result.from_bin,
+            "to_bin": result.to_bin,
+            "batch_number": result.batch_number,
+            "reference_doc": result.reference_doc
+        })),
+    )
+    .await;
     Ok(Json(ApiResponse::ok(result)))
 }
 
 pub async fn transfer_inventory(
     State(state): State<AppState>,
-    headers: axum::http::HeaderMap,
+    Extension(user): Extension<CurrentUser>,
     Json(request): Json<TransferInventoryRequest>,
 ) -> AppResult<Json<ApiResponse<crate::domain::InventoryPostingResult>>> {
     let service = inventory_service(&state);
-    let operator = operator_from_headers(&headers);
+    let operator = user.username.clone();
     let result = service.transfer_inventory(request.into(), operator).await?;
+    write_audit_event(
+        &state.db_pool,
+        Some(user.user_id),
+        "INVENTORY_TRANSFER",
+        Some("wms.wms_transactions"),
+        Some(&result.transaction_id),
+        Some(serde_json::json!({
+            "transaction_id": result.transaction_id,
+            "movement_type": result.movement_type,
+            "material_id": result.material_id,
+            "quantity": result.quantity,
+            "from_bin": result.from_bin,
+            "to_bin": result.to_bin,
+            "batch_number": result.batch_number,
+            "reference_doc": result.reference_doc
+        })),
+    )
+    .await;
     Ok(Json(ApiResponse::ok(result)))
 }
 
@@ -90,8 +117,41 @@ pub async fn transfer_inventory(
 pub async fn list_current_stock(
     State(state): State<AppState>,
     Query(query): Query<CurrentStockRequest>,
-) -> AppResult<Json<ApiResponse<Vec<crate::domain::CurrentStock>>>> {
+) -> AppResult<Json<ApiResponse<Page<crate::domain::CurrentStock>>>> {
     let service = inventory_service(&state);
+    let result = service.list_current_stock(query.into()).await?;
+    Ok(Json(ApiResponse::ok(result)))
+}
+
+pub async fn list_current_stock_by_material(
+    State(state): State<AppState>,
+    Path(material_id): Path<String>,
+    Query(mut query): Query<CurrentStockRequest>,
+) -> AppResult<Json<ApiResponse<Page<crate::domain::CurrentStock>>>> {
+    let service = inventory_service(&state);
+    query.material_id = Some(material_id);
+    let result = service.list_current_stock(query.into()).await?;
+    Ok(Json(ApiResponse::ok(result)))
+}
+
+pub async fn list_current_stock_by_bin(
+    State(state): State<AppState>,
+    Path(bin_code): Path<String>,
+    Query(mut query): Query<CurrentStockRequest>,
+) -> AppResult<Json<ApiResponse<Page<crate::domain::CurrentStock>>>> {
+    let service = inventory_service(&state);
+    query.bin_code = Some(bin_code);
+    let result = service.list_current_stock(query.into()).await?;
+    Ok(Json(ApiResponse::ok(result)))
+}
+
+pub async fn list_current_stock_by_batch(
+    State(state): State<AppState>,
+    Path(batch_number): Path<String>,
+    Query(mut query): Query<CurrentStockRequest>,
+) -> AppResult<Json<ApiResponse<Page<crate::domain::CurrentStock>>>> {
+    let service = inventory_service(&state);
+    query.batch_number = Some(batch_number);
     let result = service.list_current_stock(query.into()).await?;
     Ok(Json(ApiResponse::ok(result)))
 }
@@ -99,16 +159,43 @@ pub async fn list_current_stock(
 pub async fn list_bin_stock(
     State(state): State<AppState>,
     Query(query): Query<CurrentStockRequest>,
-) -> AppResult<Json<ApiResponse<Vec<crate::domain::BinStock>>>> {
+) -> AppResult<Json<ApiResponse<Page<crate::domain::BinStock>>>> {
     let service = inventory_service(&state);
     let result = service.list_bin_stock(query.into()).await?;
+    Ok(Json(ApiResponse::ok(result)))
+}
+
+pub async fn stock_by_zone(
+    State(state): State<AppState>,
+    Query(query): Query<CurrentStockRequest>,
+) -> AppResult<Json<ApiResponse<Value>>> {
+    let service = inventory_service(&state);
+    let result = service.stock_by_zone(query.into()).await?;
+    Ok(Json(ApiResponse::ok(result)))
+}
+
+pub async fn bin_summary(
+    State(state): State<AppState>,
+    Query(query): Query<CurrentStockRequest>,
+) -> AppResult<Json<ApiResponse<Value>>> {
+    let service = inventory_service(&state);
+    let result = service.bin_summary(query.into()).await?;
+    Ok(Json(ApiResponse::ok(result)))
+}
+
+pub async fn batch_summary(
+    State(state): State<AppState>,
+    Query(query): Query<CurrentStockRequest>,
+) -> AppResult<Json<ApiResponse<Value>>> {
+    let service = inventory_service(&state);
+    let result = service.batch_summary(query.into()).await?;
     Ok(Json(ApiResponse::ok(result)))
 }
 
 pub async fn list_transactions(
     State(state): State<AppState>,
     Query(query): Query<InventoryTransactionRequest>,
-) -> AppResult<Json<ApiResponse<Vec<crate::domain::InventoryTransaction>>>> {
+) -> AppResult<Json<ApiResponse<Page<crate::domain::InventoryTransaction>>>> {
     let service = inventory_service(&state);
     let result = service.list_transactions(query.into()).await?;
     Ok(Json(ApiResponse::ok(result)))
@@ -126,7 +213,7 @@ pub async fn get_transaction(
 pub async fn list_batches(
     State(state): State<AppState>,
     Query(query): Query<BatchRequest>,
-) -> AppResult<Json<ApiResponse<Vec<crate::domain::Batch>>>> {
+) -> AppResult<Json<ApiResponse<Page<crate::domain::Batch>>>> {
     let service = inventory_service(&state);
     let result = service.list_batches(query.into()).await?;
     Ok(Json(ApiResponse::ok(result)))
@@ -145,7 +232,7 @@ pub async fn list_batch_history(
     State(state): State<AppState>,
     Path(batch_number): Path<String>,
     Query(query): Query<BatchHistoryRequest>,
-) -> AppResult<Json<ApiResponse<Vec<crate::domain::BatchHistory>>>> {
+) -> AppResult<Json<ApiResponse<Page<crate::domain::BatchHistory>>>> {
     let service = inventory_service(&state);
     let result = service
         .list_batch_history(batch_number, query.into())
@@ -156,7 +243,7 @@ pub async fn list_batch_history(
 pub async fn list_map_history(
     State(state): State<AppState>,
     Query(query): Query<MapHistoryRequest>,
-) -> AppResult<Json<ApiResponse<Vec<crate::domain::MapHistory>>>> {
+) -> AppResult<Json<ApiResponse<Page<crate::domain::MapHistory>>>> {
     let service = inventory_service(&state);
     let result = service.list_map_history(query.into()).await?;
     Ok(Json(ApiResponse::ok(result)))
@@ -166,7 +253,7 @@ pub async fn list_material_map_history(
     State(state): State<AppState>,
     Path(material_id): Path<String>,
     Query(query): Query<MapHistoryRequest>,
-) -> AppResult<Json<ApiResponse<Vec<crate::domain::MapHistory>>>> {
+) -> AppResult<Json<ApiResponse<Page<crate::domain::MapHistory>>>> {
     let service = inventory_service(&state);
     let result = service
         .list_material_map_history(material_id, query.into())
@@ -185,21 +272,33 @@ pub async fn pick_batch_fefo(
 // ====================== 盘点模块功能（真正实现 + 错误转换） ======================
 pub async fn create_inventory_count(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Json(req): Json<CreateInventoryCountRequest>,
 ) -> AppResult<Json<ApiResponse<InventoryCountResponse>>> {
     let service = count_service(&state);
-    let result = service.create_count(req.into()).await?;
+    let result = service
+        .create_count(crate::application::CreateInventoryCountInput {
+            count_type: req.count_type,
+            count_scope: req.count_scope,
+            zone_code: req.zone_code,
+            bin_code: req.bin_code,
+            material_id: req.material_id,
+            batch_number: req.batch_number,
+            operator: user.username,
+            remark: req.remark,
+        })
+        .await?;
     Ok(Json(ApiResponse::ok(result.into())))
 }
 
 pub async fn list_inventory_counts(
     State(state): State<AppState>,
-    Query(query): Query<crate::application::ListInventoryCountsInput>,
+    Query(query): Query<ListInventoryCountsRequest>,
 ) -> AppResult<
     Json<ApiResponse<crate::application::common::Page<crate::application::InventoryCountSummary>>>,
 > {
     let service = count_service(&state);
-    let result = service.list_counts(query).await?;
+    let result = service.list_counts(query.into()).await?;
     Ok(Json(ApiResponse::ok(result)))
 }
 
@@ -216,13 +315,14 @@ pub async fn get_inventory_count(
 
 pub async fn generate_inventory_count_lines(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path(count_doc_id): Path<String>,
 ) -> AppResult<Json<ApiResponse<InventoryCountResponse>>> {
     let service = count_service(&state);
     let result = service
         .generate_lines(crate::application::GenerateInventoryCountLinesInput {
             count_doc_id,
-            operator: "system".to_string(),
+            operator: user.username,
         })
         .await?;
     Ok(Json(ApiResponse::ok(result.into())))
@@ -230,6 +330,7 @@ pub async fn generate_inventory_count_lines(
 
 pub async fn update_inventory_count_line(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path((count_doc_id, line_no)): Path<(String, i32)>,
     Json(req): Json<UpdateInventoryCountLineRequest>,
 ) -> AppResult<Json<ApiResponse<InventoryCountLineResponse>>> {
@@ -241,7 +342,7 @@ pub async fn update_inventory_count_line(
             counted_qty: req.counted_qty,
             difference_reason: req.difference_reason,
             remark: req.remark,
-            operator: "system".to_string(),
+            operator: user.username,
         })
         .await?;
     Ok(Json(ApiResponse::ok(result.into())))
@@ -249,6 +350,7 @@ pub async fn update_inventory_count_line(
 
 pub async fn batch_update_inventory_count_lines(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path(count_doc_id): Path<String>,
     Json(req): Json<BatchUpdateInventoryCountLinesRequest>,
 ) -> AppResult<Json<ApiResponse<Vec<InventoryCountLineResponse>>>> {
@@ -258,11 +360,13 @@ pub async fn batch_update_inventory_count_lines(
     let lines: Vec<crate::application::inventory_count_model::BatchUpdateInventoryCountLineItem> =
         req.lines
             .into_iter()
-            .map(|item| crate::application::inventory_count_model::BatchUpdateInventoryCountLineItem {
-                line_no: item.line_no,
-                counted_qty: item.counted_qty,
-                difference_reason: item.difference_reason,
-                remark: item.remark,
+            .map(|item| {
+                crate::application::inventory_count_model::BatchUpdateInventoryCountLineItem {
+                    line_no: item.line_no,
+                    counted_qty: item.counted_qty,
+                    difference_reason: item.difference_reason,
+                    remark: item.remark,
+                }
             })
             .collect();
 
@@ -270,7 +374,7 @@ pub async fn batch_update_inventory_count_lines(
         .batch_update_lines(crate::application::BatchUpdateInventoryCountLinesInput {
             count_doc_id,
             lines,
-            operator: "system".to_string(),
+            operator: user.username,
         })
         .await?;
 
@@ -284,6 +388,7 @@ pub async fn batch_update_inventory_count_lines(
 
 pub async fn submit_inventory_count(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path(count_doc_id): Path<String>,
     Json(req): Json<SubmitInventoryCountRequest>,
 ) -> AppResult<Json<ApiResponse<InventoryCountResponse>>> {
@@ -292,7 +397,7 @@ pub async fn submit_inventory_count(
         .submit(crate::application::SubmitInventoryCountInput {
             count_doc_id,
             remark: req.remark,
-            operator: "system".to_string(),
+            operator: user.username,
         })
         .await?;
     Ok(Json(ApiResponse::ok(result.into())))
@@ -300,6 +405,7 @@ pub async fn submit_inventory_count(
 
 pub async fn approve_inventory_count(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path(count_doc_id): Path<String>,
     Json(req): Json<ApproveInventoryCountRequest>,
 ) -> AppResult<Json<ApiResponse<InventoryCountResponse>>> {
@@ -309,7 +415,7 @@ pub async fn approve_inventory_count(
             count_doc_id,
             approved: req.approved,
             remark: req.remark,
-            operator: "system".to_string(),
+            operator: user.username,
         })
         .await?;
     Ok(Json(ApiResponse::ok(result.into())))
@@ -317,6 +423,7 @@ pub async fn approve_inventory_count(
 
 pub async fn post_inventory_count(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path(count_doc_id): Path<String>,
     Json(req): Json<PostInventoryCountRequest>,
 ) -> AppResult<Json<ApiResponse<crate::domain::InventoryCountPostingResult>>> {
@@ -326,14 +433,29 @@ pub async fn post_inventory_count(
             count_doc_id,
             posting_date: req.posting_date,
             remark: req.remark,
-            operator: "system".to_string(),
+            operator: user.username,
         })
         .await?;
+    write_audit_event(
+        &state.db_pool,
+        Some(user.user_id),
+        "INVENTORY_COUNT_POST",
+        Some("wms.wms_inventory_count_h"),
+        Some(&result.count_doc_id),
+        Some(serde_json::json!({
+            "count_doc_id": result.count_doc_id,
+            "status": result.status,
+            "transaction_count": result.transactions.len(),
+            "transactions": result.transactions
+        })),
+    )
+    .await;
     Ok(Json(ApiResponse::ok(result)))
 }
 
 pub async fn close_inventory_count(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path(count_doc_id): Path<String>,
     Json(req): Json<CloseInventoryCountRequest>,
 ) -> AppResult<Json<ApiResponse<InventoryCountResponse>>> {
@@ -342,7 +464,7 @@ pub async fn close_inventory_count(
         .close(crate::application::CloseInventoryCountInput {
             count_doc_id,
             remark: req.remark,
-            operator: "system".to_string(),
+            operator: user.username,
         })
         .await?;
     Ok(Json(ApiResponse::ok(result.into())))
@@ -350,6 +472,7 @@ pub async fn close_inventory_count(
 
 pub async fn cancel_inventory_count(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path(count_doc_id): Path<String>,
     Json(req): Json<CancelInventoryCountRequest>,
 ) -> AppResult<Json<ApiResponse<InventoryCountResponse>>> {
@@ -358,7 +481,7 @@ pub async fn cancel_inventory_count(
         .cancel(crate::application::CancelInventoryCountInput {
             count_doc_id,
             remark: req.remark,
-            operator: "system".to_string(),
+            operator: user.username,
         })
         .await?;
     Ok(Json(ApiResponse::ok(result.into())))

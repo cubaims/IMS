@@ -68,6 +68,74 @@ impl Material {
             status: "正常".to_string(),
         })
     }
+
+    pub fn rename(
+        &mut self,
+        material_name: impl Into<String>,
+    ) -> Result<(), MasterDataDomainError> {
+        let material_name = material_name.into().trim().to_string();
+        if material_name.is_empty() {
+            return Err(MasterDataDomainError::NameCannotBeEmpty);
+        }
+        self.material_name = material_name;
+        Ok(())
+    }
+
+    pub fn change_base_unit(
+        &mut self,
+        base_unit: impl Into<String>,
+    ) -> Result<(), MasterDataDomainError> {
+        let base_unit = base_unit.into().trim().to_string();
+        if base_unit.is_empty() {
+            return Err(MasterDataDomainError::NameCannotBeEmpty);
+        }
+        self.base_unit = base_unit;
+        Ok(())
+    }
+
+    pub fn change_default_zone(
+        &mut self,
+        default_zone: impl Into<String>,
+    ) -> Result<(), MasterDataDomainError> {
+        let default_zone = default_zone.into().trim().to_string();
+        if default_zone.is_empty() {
+            return Err(MasterDataDomainError::NameCannotBeEmpty);
+        }
+        self.default_zone = default_zone;
+        Ok(())
+    }
+
+    pub fn change_planning_stock(
+        &mut self,
+        safety_stock: i32,
+        reorder_point: i32,
+    ) -> Result<(), MasterDataDomainError> {
+        if safety_stock < 0 || reorder_point < 0 {
+            return Err(MasterDataDomainError::AmountCannotBeNegative);
+        }
+        self.safety_stock = safety_stock;
+        self.reorder_point = reorder_point;
+        Ok(())
+    }
+
+    pub fn change_standard_price(
+        &mut self,
+        standard_price: Decimal,
+    ) -> Result<(), MasterDataDomainError> {
+        if standard_price < Decimal::ZERO {
+            return Err(MasterDataDomainError::AmountCannotBeNegative);
+        }
+        self.standard_price = standard_price;
+        Ok(())
+    }
+
+    pub fn activate(&mut self) {
+        self.status = "正常".to_string();
+    }
+
+    pub fn deactivate(&mut self) {
+        self.status = "冻结".to_string();
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +166,10 @@ impl StorageBin {
             return Err(MasterDataDomainError::CapacityCannotBeNegative);
         }
 
+        if capacity == 0 {
+            return Err(MasterDataDomainError::BinCapacityInvalid);
+        }
+
         Ok(Self {
             bin_code,
             zone,
@@ -113,12 +185,45 @@ impl StorageBin {
             return Err(MasterDataDomainError::CapacityCannotBeNegative);
         }
 
+        if capacity == 0 {
+            return Err(MasterDataDomainError::BinCapacityInvalid);
+        }
+
         if capacity < self.current_occupied {
             return Err(MasterDataDomainError::CapacityCannotBeLessThanOccupied);
         }
 
         self.capacity = capacity;
         Ok(())
+    }
+
+    pub fn change_zone(&mut self, zone: impl Into<String>) -> Result<(), MasterDataDomainError> {
+        let zone = zone.into().trim().to_string();
+        if zone.is_empty() {
+            return Err(MasterDataDomainError::NameCannotBeEmpty);
+        }
+        self.zone = zone;
+        Ok(())
+    }
+
+    pub fn change_type(
+        &mut self,
+        bin_type: impl Into<String>,
+    ) -> Result<(), MasterDataDomainError> {
+        let bin_type = bin_type.into().trim().to_string();
+        if bin_type.is_empty() {
+            return Err(MasterDataDomainError::NameCannotBeEmpty);
+        }
+        self.bin_type = bin_type;
+        Ok(())
+    }
+
+    pub fn activate(&mut self) {
+        self.status = "正常".to_string();
+    }
+
+    pub fn deactivate(&mut self) {
+        self.status = "冻结".to_string();
     }
 }
 
@@ -156,6 +261,26 @@ impl Supplier {
             is_active: true,
         })
     }
+
+    pub fn rename(
+        &mut self,
+        supplier_name: impl Into<String>,
+    ) -> Result<(), MasterDataDomainError> {
+        let supplier_name = supplier_name.into().trim().to_string();
+        if supplier_name.is_empty() {
+            return Err(MasterDataDomainError::NameCannotBeEmpty);
+        }
+        self.supplier_name = supplier_name;
+        Ok(())
+    }
+
+    pub fn activate(&mut self) {
+        self.is_active = true;
+    }
+
+    pub fn deactivate(&mut self) {
+        self.is_active = false;
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,6 +317,37 @@ impl Customer {
             is_active: true,
         })
     }
+
+    pub fn rename(
+        &mut self,
+        customer_name: impl Into<String>,
+    ) -> Result<(), MasterDataDomainError> {
+        let customer_name = customer_name.into().trim().to_string();
+        if customer_name.is_empty() {
+            return Err(MasterDataDomainError::NameCannotBeEmpty);
+        }
+        self.customer_name = customer_name;
+        Ok(())
+    }
+
+    pub fn change_credit_limit(
+        &mut self,
+        credit_limit: Decimal,
+    ) -> Result<(), MasterDataDomainError> {
+        if credit_limit < Decimal::ZERO {
+            return Err(MasterDataDomainError::AmountCannotBeNegative);
+        }
+        self.credit_limit = credit_limit;
+        Ok(())
+    }
+
+    pub fn activate(&mut self) {
+        self.is_active = true;
+    }
+
+    pub fn deactivate(&mut self) {
+        self.is_active = false;
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,8 +369,12 @@ impl MaterialSupplier {
         lead_time_days: i32,
         moq: i32,
     ) -> Result<Self, MasterDataDomainError> {
-        if lead_time_days < 0 || moq < 0 {
+        if lead_time_days < 0 {
             return Err(MasterDataDomainError::AmountCannotBeNegative);
+        }
+
+        if moq < 1 {
+            return Err(MasterDataDomainError::QuantityMustBeGreaterThanZero);
         }
 
         Ok(Self {
@@ -226,6 +386,30 @@ impl MaterialSupplier {
             moq,
             is_active: true,
         })
+    }
+
+    pub fn change_lead_time(&mut self, lead_time_days: i32) -> Result<(), MasterDataDomainError> {
+        if lead_time_days < 0 {
+            return Err(MasterDataDomainError::AmountCannotBeNegative);
+        }
+        self.lead_time_days = lead_time_days;
+        Ok(())
+    }
+
+    pub fn change_moq(&mut self, moq: i32) -> Result<(), MasterDataDomainError> {
+        if moq < 1 {
+            return Err(MasterDataDomainError::QuantityMustBeGreaterThanZero);
+        }
+        self.moq = moq;
+        Ok(())
+    }
+
+    pub fn mark_primary(&mut self) {
+        self.is_primary = true;
+    }
+
+    pub fn clear_primary(&mut self) {
+        self.is_primary = false;
     }
 }
 
@@ -264,6 +448,38 @@ impl ProductVariant {
             standard_cost,
             is_active: true,
         })
+    }
+
+    pub fn rename(&mut self, variant_name: impl Into<String>) -> Result<(), MasterDataDomainError> {
+        let variant_name = variant_name.into().trim().to_string();
+        if variant_name.is_empty() {
+            return Err(MasterDataDomainError::NameCannotBeEmpty);
+        }
+        self.variant_name = variant_name;
+        Ok(())
+    }
+
+    pub fn bind_bom(&mut self, bom_id: BomId) {
+        self.bom_id = Some(bom_id);
+    }
+
+    pub fn change_standard_cost(
+        &mut self,
+        standard_cost: Decimal,
+    ) -> Result<(), MasterDataDomainError> {
+        if standard_cost < Decimal::ZERO {
+            return Err(MasterDataDomainError::AmountCannotBeNegative);
+        }
+        self.standard_cost = standard_cost;
+        Ok(())
+    }
+
+    pub fn activate(&mut self) {
+        self.is_active = true;
+    }
+
+    pub fn deactivate(&mut self) {
+        self.is_active = false;
     }
 }
 
@@ -349,6 +565,39 @@ impl BomComponent {
             is_critical: false,
         })
     }
+
+    pub fn change_quantity(&mut self, quantity: Decimal) -> Result<(), MasterDataDomainError> {
+        if quantity <= Decimal::ZERO {
+            return Err(MasterDataDomainError::QuantityMustBeGreaterThanZero);
+        }
+        self.quantity = quantity;
+        Ok(())
+    }
+
+    pub fn change_unit(&mut self, unit: impl Into<String>) -> Result<(), MasterDataDomainError> {
+        let unit = unit.into().trim().to_string();
+        if unit.is_empty() {
+            return Err(MasterDataDomainError::NameCannotBeEmpty);
+        }
+        self.unit = unit;
+        Ok(())
+    }
+
+    pub fn change_level(&mut self, bom_level: i32) -> Result<(), MasterDataDomainError> {
+        if bom_level < 1 {
+            return Err(MasterDataDomainError::AmountCannotBeNegative);
+        }
+        self.bom_level = bom_level;
+        Ok(())
+    }
+
+    pub fn change_scrap_rate(&mut self, scrap_rate: Decimal) -> Result<(), MasterDataDomainError> {
+        if scrap_rate < Decimal::ZERO {
+            return Err(MasterDataDomainError::AmountCannotBeNegative);
+        }
+        self.scrap_rate = scrap_rate;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -381,6 +630,45 @@ impl WorkCenter {
             is_active: true,
         })
     }
+
+    pub fn rename(
+        &mut self,
+        work_center_name: impl Into<String>,
+    ) -> Result<(), MasterDataDomainError> {
+        let work_center_name = work_center_name.into().trim().to_string();
+        if work_center_name.is_empty() {
+            return Err(MasterDataDomainError::NameCannotBeEmpty);
+        }
+        self.work_center_name = work_center_name;
+        Ok(())
+    }
+
+    pub fn change_capacity(
+        &mut self,
+        capacity_per_day: Option<i32>,
+    ) -> Result<(), MasterDataDomainError> {
+        if matches!(capacity_per_day, Some(capacity) if capacity <= 0) {
+            return Err(MasterDataDomainError::QuantityMustBeGreaterThanZero);
+        }
+        self.capacity_per_day = capacity_per_day;
+        Ok(())
+    }
+
+    pub fn change_efficiency(&mut self, efficiency: Decimal) -> Result<(), MasterDataDomainError> {
+        if efficiency <= Decimal::ZERO {
+            return Err(MasterDataDomainError::AmountCannotBeNegative);
+        }
+        self.efficiency = efficiency;
+        Ok(())
+    }
+
+    pub fn activate(&mut self) {
+        self.is_active = true;
+    }
+
+    pub fn deactivate(&mut self) {
+        self.is_active = false;
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -395,6 +683,7 @@ pub struct InspectionCharacteristic {
     pub lower_limit: Option<Decimal>,
     pub upper_limit: Option<Decimal>,
     pub is_critical: bool,
+    pub is_active: bool,
 }
 
 impl InspectionCharacteristic {
@@ -419,6 +708,7 @@ impl InspectionCharacteristic {
             lower_limit: None,
             upper_limit: None,
             is_critical: false,
+            is_active: true,
         })
     }
 
@@ -436,6 +726,23 @@ impl InspectionCharacteristic {
         self.lower_limit = lower_limit;
         self.upper_limit = upper_limit;
         Ok(())
+    }
+
+    pub fn rename(&mut self, char_name: impl Into<String>) -> Result<(), MasterDataDomainError> {
+        let char_name = char_name.into().trim().to_string();
+        if char_name.is_empty() {
+            return Err(MasterDataDomainError::NameCannotBeEmpty);
+        }
+        self.char_name = char_name;
+        Ok(())
+    }
+
+    pub fn activate(&mut self) {
+        self.is_active = true;
+    }
+
+    pub fn deactivate(&mut self) {
+        self.is_active = false;
     }
 }
 
@@ -470,6 +777,27 @@ impl DefectCodeMaster {
             is_active: true,
         })
     }
+
+    pub fn rename(&mut self, defect_name: impl Into<String>) -> Result<(), MasterDataDomainError> {
+        let defect_name = defect_name.into().trim().to_string();
+        if defect_name.is_empty() {
+            return Err(MasterDataDomainError::NameCannotBeEmpty);
+        }
+        self.defect_name = defect_name;
+        Ok(())
+    }
+
+    pub fn change_severity(&mut self, severity: DefectSeverity) {
+        self.severity = severity;
+    }
+
+    pub fn activate(&mut self) {
+        self.is_active = true;
+    }
+
+    pub fn deactivate(&mut self) {
+        self.is_active = false;
+    }
 }
 
 // ============================================================
@@ -481,15 +809,15 @@ mod tests {
     use std::str::FromStr;
 
     fn d(s: &str) -> Decimal {
-        Decimal::from_str(s).unwrap()
+        Decimal::from_str(s).expect("test fixture should be valid")
     }
 
     fn mid(s: &str) -> MaterialId {
-        MaterialId::new(s).unwrap()
+        MaterialId::new(s).expect("test fixture should be valid")
     }
 
     fn binc(s: &str) -> BinCode {
-        BinCode::new(s).unwrap()
+        BinCode::new(s).expect("test fixture should be valid")
     }
 
     // -------------------- Material --------------------
@@ -561,7 +889,7 @@ mod tests {
             d("100"),
             d("95.5"),
         )
-        .unwrap();
+        .expect("test fixture should be valid");
         assert_eq!(m.material_id.value(), "M001");
         assert_eq!(m.material_name, "Steel Bar");
         assert_eq!(m.current_stock, 0); // 新物料库存初始 0
@@ -586,8 +914,15 @@ mod tests {
     }
 
     #[test]
+    fn bin_rejects_zero_capacity() {
+        let r = StorageBin::new(binc("A1"), "RM", "RACK", 0);
+        assert!(matches!(r, Err(MasterDataDomainError::BinCapacityInvalid)));
+    }
+
+    #[test]
     fn bin_initial_state() {
-        let b = StorageBin::new(binc("A1"), "RM", "RACK", 100).unwrap();
+        let b =
+            StorageBin::new(binc("A1"), "RM", "RACK", 100).expect("test fixture should be valid");
         assert_eq!(b.capacity, 100);
         assert_eq!(b.current_occupied, 0);
         assert_eq!(b.status, "正常");
@@ -596,7 +931,8 @@ mod tests {
     #[test]
     fn change_capacity_below_occupied_fails() {
         // 计划 §五.2 / §六.2:容量不能小于当前占用
-        let mut b = StorageBin::new(binc("A1"), "RM", "RACK", 100).unwrap();
+        let mut b =
+            StorageBin::new(binc("A1"), "RM", "RACK", 100).expect("test fixture should be valid");
         b.current_occupied = 80;
         let r = b.change_capacity(50);
         assert!(matches!(
@@ -609,7 +945,8 @@ mod tests {
 
     #[test]
     fn change_capacity_to_negative_fails() {
-        let mut b = StorageBin::new(binc("A1"), "RM", "RACK", 100).unwrap();
+        let mut b =
+            StorageBin::new(binc("A1"), "RM", "RACK", 100).expect("test fixture should be valid");
         let r = b.change_capacity(-1);
         assert!(matches!(
             r,
@@ -618,20 +955,40 @@ mod tests {
     }
 
     #[test]
+    fn change_capacity_to_zero_fails() {
+        let mut b =
+            StorageBin::new(binc("A1"), "RM", "RACK", 100).expect("test fixture should be valid");
+        let r = b.change_capacity(0);
+        assert!(matches!(r, Err(MasterDataDomainError::BinCapacityInvalid)));
+        assert_eq!(b.capacity, 100);
+    }
+
+    #[test]
     fn change_capacity_above_occupied_succeeds() {
-        let mut b = StorageBin::new(binc("A1"), "RM", "RACK", 100).unwrap();
+        let mut b =
+            StorageBin::new(binc("A1"), "RM", "RACK", 100).expect("test fixture should be valid");
         b.current_occupied = 30;
-        b.change_capacity(150).unwrap();
+        b.change_capacity(150)
+            .expect("test fixture should be valid");
         assert_eq!(b.capacity, 150);
     }
 
     #[test]
     fn change_capacity_equal_to_occupied_succeeds() {
         // 边界:>= 是允许的
-        let mut b = StorageBin::new(binc("A1"), "RM", "RACK", 100).unwrap();
+        let mut b =
+            StorageBin::new(binc("A1"), "RM", "RACK", 100).expect("test fixture should be valid");
         b.current_occupied = 50;
-        b.change_capacity(50).unwrap();
+        b.change_capacity(50).expect("test fixture should be valid");
         assert_eq!(b.capacity, 50);
+    }
+
+    #[test]
+    fn bin_deactivate_maps_to_db_allowed_frozen_status() {
+        let mut b =
+            StorageBin::new(binc("A1"), "RM", "RACK", 100).expect("test fixture should be valid");
+        b.deactivate();
+        assert_eq!(b.status, "冻结");
     }
 
     // -------------------- ProductVariant --------------------
@@ -640,7 +997,7 @@ mod tests {
     fn product_variant_rejects_empty_name() {
         // 计划 §五.6:变体名称非空
         let r = ProductVariant::new(
-            VariantCode::new("V001").unwrap(),
+            VariantCode::new("V001").expect("test fixture should be valid"),
             "  ",
             mid("M001"),
             d("100"),
@@ -651,7 +1008,7 @@ mod tests {
     #[test]
     fn product_variant_rejects_negative_cost() {
         let r = ProductVariant::new(
-            VariantCode::new("V001").unwrap(),
+            VariantCode::new("V001").expect("test fixture should be valid"),
             "Standard",
             mid("M001"),
             d("-1"),
@@ -665,12 +1022,12 @@ mod tests {
     #[test]
     fn product_variant_default_state() {
         let v = ProductVariant::new(
-            VariantCode::new("V001").unwrap(),
+            VariantCode::new("V001").expect("test fixture should be valid"),
             "Standard",
             mid("M001"),
             d("99.99"),
         )
-        .unwrap();
+        .expect("test fixture should be valid");
         assert_eq!(v.standard_cost, d("99.99"));
         assert!(v.bom_id.is_none()); // 默认未绑定 BOM
         assert!(v.is_active);
@@ -680,13 +1037,23 @@ mod tests {
 
     #[test]
     fn bom_header_rejects_empty_name() {
-        let r = BomHeader::new(BomId::new("B001").unwrap(), "   ", mid("M001"), "v1");
+        let r = BomHeader::new(
+            BomId::new("B001").expect("test fixture should be valid"),
+            "   ",
+            mid("M001"),
+            "v1",
+        );
         assert!(matches!(r, Err(MasterDataDomainError::NameCannotBeEmpty)));
     }
 
     #[test]
     fn bom_header_rejects_empty_version() {
-        let r = BomHeader::new(BomId::new("B001").unwrap(), "Top BOM", mid("M001"), "  ");
+        let r = BomHeader::new(
+            BomId::new("B001").expect("test fixture should be valid"),
+            "Top BOM",
+            mid("M001"),
+            "  ",
+        );
         assert!(matches!(r, Err(MasterDataDomainError::NameCannotBeEmpty)));
     }
 
@@ -694,7 +1061,13 @@ mod tests {
     fn bom_header_initial_state_is_draft() {
         // 计划 §五.7:新建 BOM 默认草稿状态(由 entity 强制),
         // 启用必须经 activate_bom 端点(那里跑组件数 + 循环引用前置)。
-        let h = BomHeader::new(BomId::new("B001").unwrap(), "Top BOM", mid("M001"), "v1").unwrap();
+        let h = BomHeader::new(
+            BomId::new("B001").expect("test fixture should be valid"),
+            "Top BOM",
+            mid("M001"),
+            "v1",
+        )
+        .expect("test fixture should be valid");
         assert!(matches!(h.status, BomStatus::Draft));
         assert!(h.is_active); // 注:这里 is_active 是 entity 默认 true,但 status 是 Draft;
         // 实际启用流程要靠 activate_bom 修改 status='生效'
@@ -708,7 +1081,7 @@ mod tests {
         // 计划 §五 / §六:BOM 禁止自引用
         let m = mid("M100");
         let r = BomComponent::new(
-            BomId::new("BOM01").unwrap(),
+            BomId::new("BOM01").expect("test fixture should be valid"),
             m.clone(),
             m.clone(),
             d("1"),
@@ -727,7 +1100,7 @@ mod tests {
         let child = mid("C");
         for q in [d("0"), d("-1"), d("-0.001")] {
             let r = BomComponent::new(
-                BomId::new("B").unwrap(),
+                BomId::new("B").expect("test fixture should be valid"),
                 parent.clone(),
                 child.clone(),
                 q,
@@ -743,13 +1116,13 @@ mod tests {
     #[test]
     fn bom_component_valid_inputs_succeed() {
         let c = BomComponent::new(
-            BomId::new("B1").unwrap(),
+            BomId::new("B1").expect("test fixture should be valid"),
             mid("P1"),
             mid("C1"),
             d("2.5"),
             "EA",
         )
-        .unwrap();
+        .expect("test fixture should be valid");
         assert_eq!(c.quantity, d("2.5"));
         assert_eq!(c.unit, "EA");
         assert_eq!(c.bom_level, 1);
@@ -759,13 +1132,20 @@ mod tests {
 
     #[test]
     fn supplier_rejects_empty_name() {
-        let r = Supplier::new(SupplierId::new("S001").unwrap(), "  ");
+        let r = Supplier::new(
+            SupplierId::new("S001").expect("test fixture should be valid"),
+            "  ",
+        );
         assert!(matches!(r, Err(MasterDataDomainError::NameCannotBeEmpty)));
     }
 
     #[test]
     fn supplier_default_state() {
-        let s = Supplier::new(SupplierId::new("S001").unwrap(), "ACME").unwrap();
+        let s = Supplier::new(
+            SupplierId::new("S001").expect("test fixture should be valid"),
+            "ACME",
+        )
+        .expect("test fixture should be valid");
         assert_eq!(s.supplier_name, "ACME");
         assert_eq!(s.quality_rating, "A");
         assert!(s.is_active);
@@ -774,7 +1154,11 @@ mod tests {
 
     #[test]
     fn supplier_trims_name() {
-        let s = Supplier::new(SupplierId::new("S001").unwrap(), "  ACME  ").unwrap();
+        let s = Supplier::new(
+            SupplierId::new("S001").expect("test fixture should be valid"),
+            "  ACME  ",
+        )
+        .expect("test fixture should be valid");
         assert_eq!(s.supplier_name, "ACME");
     }
 
@@ -783,16 +1167,38 @@ mod tests {
     #[test]
     fn customer_rejects_empty_name() {
         // 计划 §五.5:客户名称不能为空
-        let r = Customer::new(CustomerId::new("C001").unwrap(), " ");
+        let r = Customer::new(
+            CustomerId::new("C001").expect("test fixture should be valid"),
+            " ",
+        );
         assert!(matches!(r, Err(MasterDataDomainError::NameCannotBeEmpty)));
     }
 
     #[test]
     fn customer_default_state() {
-        let c = Customer::new(CustomerId::new("C001").unwrap(), "Beta Corp").unwrap();
+        let c = Customer::new(
+            CustomerId::new("C001").expect("test fixture should be valid"),
+            "Beta Corp",
+        )
+        .expect("test fixture should be valid");
         assert_eq!(c.customer_name, "Beta Corp");
         assert_eq!(c.credit_limit, Decimal::ZERO);
         assert!(c.is_active);
+    }
+
+    #[test]
+    fn customer_rejects_negative_credit_limit() {
+        let mut c = Customer::new(
+            CustomerId::new("C001").expect("test fixture should be valid"),
+            "Beta Corp",
+        )
+        .expect("test fixture should be valid");
+        let r = c.change_credit_limit(d("-0.01"));
+        assert!(matches!(
+            r,
+            Err(MasterDataDomainError::AmountCannotBeNegative)
+        ));
+        assert_eq!(c.credit_limit, Decimal::ZERO);
     }
 
     // -------------------- MaterialSupplier --------------------
@@ -800,7 +1206,13 @@ mod tests {
     #[test]
     fn material_supplier_rejects_negative_lead_time() {
         // 计划 §五.4:采购提前期不能小于 0
-        let r = MaterialSupplier::new(mid("M001"), SupplierId::new("S001").unwrap(), false, -1, 1);
+        let r = MaterialSupplier::new(
+            mid("M001"),
+            SupplierId::new("S001").expect("test fixture should be valid"),
+            false,
+            -1,
+            1,
+        );
         assert!(matches!(
             r,
             Err(MasterDataDomainError::AmountCannotBeNegative)
@@ -808,19 +1220,49 @@ mod tests {
     }
 
     #[test]
-    fn material_supplier_rejects_negative_moq() {
-        // 计划 §五.4:最小采购量不能小于 0(注:1 是合法最小,验证里只拒 < 0)
-        let r = MaterialSupplier::new(mid("M001"), SupplierId::new("S001").unwrap(), false, 7, -5);
+    fn material_supplier_rejects_zero_moq() {
+        // 执行约定 v1:最小采购量必须大于等于 1
+        let r = MaterialSupplier::new(
+            mid("M001"),
+            SupplierId::new("S001").expect("test fixture should be valid"),
+            false,
+            7,
+            0,
+        );
         assert!(matches!(
             r,
-            Err(MasterDataDomainError::AmountCannotBeNegative)
+            Err(MasterDataDomainError::QuantityMustBeGreaterThanZero)
         ));
+    }
+
+    #[test]
+    fn material_supplier_change_moq_rejects_zero() {
+        let mut ms = MaterialSupplier::new(
+            mid("M001"),
+            SupplierId::new("S001").expect("test fixture should be valid"),
+            false,
+            7,
+            1,
+        )
+        .expect("test fixture should be valid");
+        let r = ms.change_moq(0);
+        assert!(matches!(
+            r,
+            Err(MasterDataDomainError::QuantityMustBeGreaterThanZero)
+        ));
+        assert_eq!(ms.moq, 1);
     }
 
     #[test]
     fn material_supplier_valid_inputs_succeed() {
-        let ms = MaterialSupplier::new(mid("M001"), SupplierId::new("S001").unwrap(), true, 14, 10)
-            .unwrap();
+        let ms = MaterialSupplier::new(
+            mid("M001"),
+            SupplierId::new("S001").expect("test fixture should be valid"),
+            true,
+            14,
+            10,
+        )
+        .expect("test fixture should be valid");
         assert_eq!(ms.lead_time_days, 14);
         assert_eq!(ms.moq, 10);
         assert!(ms.is_primary);
@@ -828,14 +1270,48 @@ mod tests {
         assert!(ms.purchase_price.is_none());
     }
 
+    // -------------------- WorkCenter --------------------
+
+    #[test]
+    fn work_center_rejects_zero_capacity() {
+        let mut wc = WorkCenter::new(
+            WorkCenterId::new("WC001").expect("test fixture should be valid"),
+            "Cutting",
+        )
+        .expect("test fixture should be valid");
+        let r = wc.change_capacity(Some(0));
+        assert!(matches!(
+            r,
+            Err(MasterDataDomainError::QuantityMustBeGreaterThanZero)
+        ));
+        assert_eq!(wc.capacity_per_day, None);
+    }
+
+    #[test]
+    fn work_center_rejects_zero_efficiency() {
+        let mut wc = WorkCenter::new(
+            WorkCenterId::new("WC001").expect("test fixture should be valid"),
+            "Cutting",
+        )
+        .expect("test fixture should be valid");
+        let r = wc.change_efficiency(Decimal::ZERO);
+        assert!(matches!(
+            r,
+            Err(MasterDataDomainError::AmountCannotBeNegative)
+        ));
+        assert_eq!(wc.efficiency, Decimal::new(10000, 2));
+    }
+
     // -------------------- InspectionCharacteristic --------------------
 
     #[test]
     fn inspection_limits_inverted_fails() {
         // 计划 §五 / §六:检验上下限合法 — upper >= lower
-        let mut ic =
-            InspectionCharacteristic::new(InspectionCharId::new("IC001").unwrap(), "Length")
-                .unwrap();
+        let mut ic = InspectionCharacteristic::new(
+            InspectionCharId::new("IC001").expect("test fixture should be valid"),
+            "Length",
+        )
+        .expect("test fixture should be valid");
         let r = ic.set_limits(Some(d("10")), Some(d("5")));
         assert!(matches!(
             r,
@@ -845,10 +1321,13 @@ mod tests {
 
     #[test]
     fn inspection_limits_equal_succeeds() {
-        let mut ic =
-            InspectionCharacteristic::new(InspectionCharId::new("IC001").unwrap(), "Length")
-                .unwrap();
-        ic.set_limits(Some(d("5")), Some(d("5"))).unwrap();
+        let mut ic = InspectionCharacteristic::new(
+            InspectionCharId::new("IC001").expect("test fixture should be valid"),
+            "Length",
+        )
+        .expect("test fixture should be valid");
+        ic.set_limits(Some(d("5")), Some(d("5")))
+            .expect("test fixture should be valid");
         assert_eq!(ic.lower_limit, Some(d("5")));
         assert_eq!(ic.upper_limit, Some(d("5")));
     }
@@ -856,10 +1335,14 @@ mod tests {
     #[test]
     fn inspection_one_sided_limits_succeed() {
         // 仅一侧上限或下限,无 lower-vs-upper 比较问题
-        let mut ic =
-            InspectionCharacteristic::new(InspectionCharId::new("IC001").unwrap(), "Length")
-                .unwrap();
-        ic.set_limits(None, Some(d("100"))).unwrap();
-        ic.set_limits(Some(d("0")), None).unwrap();
+        let mut ic = InspectionCharacteristic::new(
+            InspectionCharId::new("IC001").expect("test fixture should be valid"),
+            "Length",
+        )
+        .expect("test fixture should be valid");
+        ic.set_limits(None, Some(d("100")))
+            .expect("test fixture should be valid");
+        ic.set_limits(Some(d("0")), None)
+            .expect("test fixture should be valid");
     }
 }

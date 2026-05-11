@@ -5,7 +5,7 @@ BASE_URL="${IMS_BASE_URL:-http://localhost:8080}"
 TOKEN="${IMS_AUTH_TOKEN:-}"
 SUFFIX="$(date +%Y%m%d%H%M%S)"
 MATERIAL_ID="${IMS_TEST_MATERIAL_ID:-CG001}"
-BATCH_NUMBER="B-PH4-${SUFFIX}"
+BATCH_NUMBER="${IMS_TEST_BATCH_NUMBER:-B-CG-20260401}"
 
 auth_header=()
 if [[ -n "$TOKEN" ]]; then

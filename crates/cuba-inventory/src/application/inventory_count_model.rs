@@ -47,6 +47,7 @@ pub struct ListInventoryCountsInput {
     pub date_from: Option<OffsetDateTime>,
     pub date_to: Option<OffsetDateTime>,
 
+    #[serde(flatten)]
     pub page: PageQuery,
 }
 

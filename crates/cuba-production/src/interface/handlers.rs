@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
 };
-use cuba_shared::{ApiResponse, AppResult, AppState};
+use cuba_shared::{ApiResponse, AppResult, AppState, CurrentUser, write_audit_event};
 
 use crate::{
     application::{
@@ -58,6 +58,7 @@ pub async fn preview_bom_explosion(
 
 pub async fn create_production_order(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Json(req): Json<CreateProductionOrderRequest>,
 ) -> AppResult<Json<ApiResponse<CreatedProductionOrderResponse>>> {
     let service = production_service(&state);
@@ -72,12 +73,13 @@ pub async fn create_production_order(
             planned_start_date: req.planned_start_date,
             planned_end_date: req.planned_end_date,
             remark: req.remark,
-            created_by: Some("API".to_string()),
+            created_by: Some(user.username),
         })
         .await?;
 
     Ok(Json(ApiResponse::ok(CreatedProductionOrderResponse {
         order_id: order_id.0,
+        status: ProductionOrderStatus::Planned.as_db_text().to_string(),
     })))
 }
 
@@ -123,6 +125,7 @@ pub async fn get_production_order_components(
 
 pub async fn release_production_order(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path(order_id): Path<String>,
     Json(req): Json<ReleaseProductionOrderRequest>,
 ) -> AppResult<Json<ApiResponse<ProductionActionResponse>>> {
@@ -132,7 +135,7 @@ pub async fn release_production_order(
         .release_order(ReleaseProductionOrderCommand {
             order_id,
             remark: req.remark,
-            operator: Some("API".to_string()),
+            operator: Some(user.username),
         })
         .await?;
 
@@ -144,14 +147,13 @@ pub async fn release_production_order(
 
 pub async fn cancel_production_order(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path(order_id): Path<String>,
     Json(_req): Json<CancelProductionOrderRequest>,
 ) -> AppResult<Json<ApiResponse<ProductionActionResponse>>> {
     let service = production_service(&state);
 
-    let result = service
-        .cancel_order(&order_id, Some("API".to_string()))
-        .await?;
+    let result = service.cancel_order(&order_id, Some(user.username)).await?;
 
     Ok(Json(ApiResponse::ok(ProductionActionResponse {
         order_id: result.order_id.0,
@@ -161,14 +163,13 @@ pub async fn cancel_production_order(
 
 pub async fn close_production_order(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path(order_id): Path<String>,
     Json(_req): Json<CloseProductionOrderRequest>,
 ) -> AppResult<Json<ApiResponse<ProductionActionResponse>>> {
     let service = production_service(&state);
 
-    let result = service
-        .close_order(&order_id, Some("API".to_string()))
-        .await?;
+    let result = service.close_order(&order_id, Some(user.username)).await?;
 
     Ok(Json(ApiResponse::ok(ProductionActionResponse {
         order_id: result.order_id.0,
@@ -178,6 +179,7 @@ pub async fn close_production_order(
 
 pub async fn complete_production_order(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path(order_id): Path<String>,
     Json(req): Json<CompleteProductionOrderRequest>,
 ) -> AppResult<Json<ApiResponse<crate::domain::ProductionCompleteResult>>> {
@@ -192,9 +194,25 @@ pub async fn complete_production_order(
             posting_date: req.posting_date,
             pick_strategy: req.pick_strategy,
             remark: req.remark,
-            operator: Some("API".to_string()),
+            operator: Some(user.username),
         })
         .await?;
+    let record_id = result.order_id.0.clone();
+    write_audit_event(
+        &state.db_pool,
+        Some(user.user_id),
+        "PRODUCTION_COMPLETE_POST",
+        Some("wms.wms_production_orders_h"),
+        Some(&record_id),
+        Some(serde_json::json!({
+            "order_id": record_id,
+            "status": status_text(result.status),
+            "completed_qty": result.completed_qty,
+            "finished_transaction": result.finished_transaction,
+            "component_transactions": result.component_transactions
+        })),
+    )
+    .await;
 
     Ok(Json(ApiResponse::ok(result)))
 }

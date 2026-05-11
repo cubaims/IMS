@@ -15,7 +15,6 @@ pub enum MasterDataDomainError {
     // ============================================================
     // 字段校验类(→ AppError::Validation,无 business code)
     // ============================================================
-
     #[error("名称不能为空")]
     NameCannotBeEmpty,
 
@@ -71,7 +70,7 @@ pub enum MasterDataDomainError {
     #[error("不良代码长度超限(最长 20)")]
     DefectCodeTooLong,
 
-    // ----- 业务字段约束(仍归 Validation) -----
+    // ----- 业务字段约束 -----
     #[error("货位容量不能为负数")]
     CapacityCannotBeNegative,
 
@@ -192,6 +191,7 @@ impl MasterDataDomainError {
             Self::BinAlreadyExists => "BIN_ALREADY_EXISTS",
             Self::BinInactive => "BIN_INACTIVE",
             Self::BinHasStock => "BIN_HAS_STOCK",
+            Self::BinCapacityInvalid => "BIN_CAPACITY_INVALID",
             // Supplier
             Self::SupplierNotFound => "SUPPLIER_NOT_FOUND",
             Self::SupplierAlreadyExists => "SUPPLIER_ALREADY_EXISTS",
@@ -220,6 +220,7 @@ impl MasterDataDomainError {
             // InspectionChar
             Self::InspectionCharNotFound => "INSPECTION_CHAR_NOT_FOUND",
             Self::InspectionCharAlreadyExists => "INSPECTION_CHAR_ALREADY_EXISTS",
+            Self::InspectionLimitInvalid => "INSPECTION_LIMIT_INVALID",
             // DefectCode
             Self::DefectCodeNotFound => "DEFECT_CODE_NOT_FOUND",
             Self::DefectCodeAlreadyExists => "DEFECT_CODE_ALREADY_EXISTS",
@@ -252,15 +253,43 @@ mod tests {
 
     #[test]
     fn validation_errors_have_no_business_code() {
-        assert_eq!(MasterDataDomainError::NameCannotBeEmpty.business_code(), None);
-        assert_eq!(MasterDataDomainError::MaterialIdTooLong.business_code(), None);
-        assert_eq!(MasterDataDomainError::InspectionLimitInvalid.business_code(), None);
-        assert_eq!(MasterDataDomainError::CapacityCannotBeNegative.business_code(), None);
+        assert_eq!(
+            MasterDataDomainError::NameCannotBeEmpty.business_code(),
+            None
+        );
+        assert_eq!(
+            MasterDataDomainError::MaterialIdTooLong.business_code(),
+            None
+        );
+        assert_eq!(
+            MasterDataDomainError::CapacityCannotBeNegative.business_code(),
+            None
+        );
+    }
+
+    #[test]
+    fn bad_request_business_errors_have_codes() {
+        assert_eq!(
+            MasterDataDomainError::InspectionLimitInvalid.business_code(),
+            Some("INSPECTION_LIMIT_INVALID")
+        );
+        assert_eq!(
+            MasterDataDomainError::BinCapacityInvalid.business_code(),
+            Some("BIN_CAPACITY_INVALID")
+        );
     }
 
     #[test]
     fn display_messages_are_chinese() {
-        assert!(MasterDataDomainError::MaterialNotFound.to_string().contains("物料"));
-        assert!(MasterDataDomainError::BomCycleDetected.to_string().contains("循环"));
+        assert!(
+            MasterDataDomainError::MaterialNotFound
+                .to_string()
+                .contains("物料")
+        );
+        assert!(
+            MasterDataDomainError::BomCycleDetected
+                .to_string()
+                .contains("循环")
+        );
     }
 }

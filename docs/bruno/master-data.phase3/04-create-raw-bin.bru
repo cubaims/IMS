@@ -1,0 +1,25 @@
+meta {
+  name: 04 Create Raw Bin
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{base_url}}/api/master-data/bins
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "bin_code": "{{raw_bin}}",
+    "zone": "RM",
+    "bin_type": "普通货位",
+    "capacity": 10000,
+    "notes": "Bruno raw bin"
+  }
+}

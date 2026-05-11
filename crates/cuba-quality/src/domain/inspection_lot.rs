@@ -105,7 +105,11 @@ impl InspectionLot {
     }
 
     /// 标记为检验中。
-    pub fn mark_in_progress(&mut self, operator: Operator, now: OffsetDateTime) -> QualityResult<()> {
+    pub fn mark_in_progress(
+        &mut self,
+        operator: Operator,
+        now: OffsetDateTime,
+    ) -> QualityResult<()> {
         if !self.status.can_enter_result() {
             return Err(QualityError::InspectionLotStatusInvalid);
         }

@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 use crate::application::common::Page;
 use crate::application::errors::InventoryCountApplicationError;
 use crate::application::inventory_count_model::{
-    InventoryCountScopeFilter, ListInventoryCountsInput,
+    BatchUpdateInventoryCountLineItem, InventoryCountScopeFilter, ListInventoryCountsInput,
 };
 use crate::domain::{
     InventoryCount, InventoryCountLine, InventoryCountPostedTransaction,
@@ -14,7 +14,7 @@ use crate::domain::{
 };
 
 /// 盘点单列表摘要
-#[derive(Debug, Clone, Serialize)]   // ← 必须加上 Serialize
+#[derive(Debug, Clone, Serialize)] // ← 必须加上 Serialize
 pub struct InventoryCountSummary {
     pub count_doc_id: String,
     pub count_type: InventoryCountType,
@@ -47,6 +47,12 @@ pub struct InventoryCountSummary {
 /// - 关闭 / 取消
 #[async_trait]
 pub trait InventoryCountRepository: Send + Sync {
+    /// 以下非事务方法是 PostgreSQL adapter 内部复用的低层 helper 契约。
+    ///
+    /// Application service 不应直接编排这些方法来完成命令；新增或修改盘点命令
+    /// 必须优先使用后面的 `*_transactional` 方法，确保状态流转、库存过账和
+    /// transaction_id 回写处于同一个数据库事务边界。
+
     /// 生成盘点单号
     ///
     /// 例如：COUNT-20260504-000001
@@ -210,6 +216,87 @@ pub trait InventoryCountRepository: Send + Sync {
         &self,
         scope: &InventoryCountScopeFilter,
     ) -> Result<bool, InventoryCountApplicationError>;
+
+    /// 创建盘点单事务方法。
+    ///
+    /// 这个方法内部必须完成：
+    /// 1. BEGIN
+    /// 2. 检查同一范围是否存在未关闭盘点单
+    /// 3. 插入盘点单头
+    /// 4. COMMIT
+    async fn create_count_transactional(
+        &self,
+        count: &InventoryCount,
+        scope: &InventoryCountScopeFilter,
+    ) -> Result<String, InventoryCountApplicationError>;
+
+    /// 生成盘点明细事务方法。
+    ///
+    /// 这个方法内部必须完成：
+    /// 1. BEGIN
+    /// 2. 锁定盘点单头
+    /// 3. 校验状态 = DRAFT
+    /// 4. 从 wms.wms_bin_stock 生成账面库存快照
+    /// 5. 插入盘点明细
+    /// 6. 更新状态 = COUNTING
+    /// 7. COMMIT
+    async fn generate_lines_transactional(
+        &self,
+        count_doc_id: &str,
+        operator: &str,
+    ) -> Result<InventoryCount, InventoryCountApplicationError>;
+
+    /// 录入单行实盘数量事务方法。
+    async fn update_line_transactional(
+        &self,
+        count_doc_id: &str,
+        line_no: i32,
+        counted_qty: Decimal,
+        difference_reason: Option<String>,
+        remark: Option<String>,
+        operator: &str,
+    ) -> Result<InventoryCountLine, InventoryCountApplicationError>;
+
+    /// 批量录入实盘数量事务方法。
+    async fn batch_update_lines_transactional(
+        &self,
+        count_doc_id: &str,
+        updates: &[BatchUpdateInventoryCountLineItem],
+        operator: &str,
+    ) -> Result<Vec<InventoryCountLine>, InventoryCountApplicationError>;
+
+    /// 提交盘点单事务方法。
+    async fn submit_count_transactional(
+        &self,
+        count_doc_id: &str,
+        operator: &str,
+        remark: Option<&str>,
+    ) -> Result<InventoryCount, InventoryCountApplicationError>;
+
+    /// 审核盘点单事务方法。
+    async fn approve_count_transactional(
+        &self,
+        count_doc_id: &str,
+        approved: bool,
+        operator: &str,
+        remark: Option<&str>,
+    ) -> Result<InventoryCount, InventoryCountApplicationError>;
+
+    /// 关闭盘点单事务方法。
+    async fn close_count_transactional(
+        &self,
+        count_doc_id: &str,
+        operator: &str,
+        remark: Option<&str>,
+    ) -> Result<InventoryCount, InventoryCountApplicationError>;
+
+    /// 取消盘点单事务方法。
+    async fn cancel_count_transactional(
+        &self,
+        count_doc_id: &str,
+        operator: &str,
+        remark: Option<&str>,
+    ) -> Result<InventoryCount, InventoryCountApplicationError>;
 
     /// 盘点过账事务方法
     ///

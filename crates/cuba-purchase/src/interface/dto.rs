@@ -3,11 +3,8 @@ use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime};
 
 use crate::application::{
-    CreatePurchaseOrderCommand,
-    CreatePurchaseOrderLineCommand,
-    PostPurchaseReceiptCommand,
+    CreatePurchaseOrderCommand, CreatePurchaseOrderLineCommand, PostPurchaseReceiptCommand,
     PostPurchaseReceiptLineCommand,
-    PurchaseOrderQuery,
 };
 
 #[derive(Debug, Clone, Deserialize)]

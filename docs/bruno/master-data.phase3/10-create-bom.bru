@@ -1,0 +1,30 @@
+meta {
+  name: 10 Create BOM
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{base_url}}/api/master-data/boms
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "bom_id": "{{bom_id}}",
+    "bom_name": "Bruno BOM",
+    "parent_material_id": "{{finished_material_id}}",
+    "variant_code": null,
+    "version": "1.0",
+    "base_quantity": "1.00",
+    "valid_from": "2026-05-01",
+    "valid_to": null,
+    "status": "草稿",
+    "notes": "Bruno BOM"
+  }
+}

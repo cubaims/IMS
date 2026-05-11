@@ -1,0 +1,30 @@
+meta {
+  name: 18 Create Inspection Characteristic
+  type: http
+  seq: 18
+}
+
+post {
+  url: {{base_url}}/api/master-data/inspection-chars
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "char_id": "{{char_id}}",
+    "char_name": "Bruno Dimension",
+    "material_type": "原材料",
+    "inspection_type": "来料检验",
+    "method": "Caliper",
+    "standard": "10 plus/minus 0.2",
+    "unit": "mm",
+    "lower_limit": "9.80",
+    "upper_limit": "10.20",
+    "is_critical": true
+  }
+}

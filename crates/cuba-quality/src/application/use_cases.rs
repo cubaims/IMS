@@ -3,13 +3,11 @@ use crate::application::ports::{
     QualityIdGenerator, QualityMasterRepository, QualityNotificationRepository,
 };
 use crate::domain::{
-    BatchNumber, BatchQualityAction, BatchQualityHistory, BatchQualityStatus,
-    CreateInspectionLot, CreateInspectionResult, CreateQualityNotification,
-    DefectCode, InspectionCharId, InspectionDecision, InspectionLot,
-    InspectionLotId, InspectionLotType, InspectionResult, InspectionResultId,
-    InspectionResultStatus, MaterialId, Operator, QualityError,
-    QualityNotification, QualityNotificationId, QualityNotificationSeverity,
-    QualityResult,
+    BatchNumber, BatchQualityAction, BatchQualityHistory, BatchQualityStatus, CreateInspectionLot,
+    CreateInspectionResult, CreateQualityNotification, DefectCode, InspectionCharId,
+    InspectionDecision, InspectionLot, InspectionLotId, InspectionLotType, InspectionResult,
+    InspectionResultId, InspectionResultStatus, MaterialId, Operator, QualityError,
+    QualityNotification, QualityNotificationId, QualityNotificationSeverity, QualityResult,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -67,12 +65,7 @@ where
     M: QualityMasterRepository,
     G: QualityIdGenerator,
 {
-    pub fn new(
-        lot_repo: L,
-        batch_repo: B,
-        master_repo: M,
-        id_generator: G,
-    ) -> Self {
+    pub fn new(lot_repo: L, batch_repo: B, master_repo: M, id_generator: G) -> Self {
         Self {
             lot_repo,
             batch_repo,
@@ -209,6 +202,31 @@ pub struct AddInspectionResultOutput {
     pub result_status: InspectionResultStatus,
 }
 
+/// 批量录入检验结果命令。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchAddInspectionResultsCommand {
+    pub inspection_lot_id: InspectionLotId,
+    pub results: Vec<BatchAddInspectionResultItem>,
+    pub inspector: Operator,
+}
+
+/// 批量录入检验结果明细。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchAddInspectionResultItem {
+    pub char_id: InspectionCharId,
+    pub measured_value: Option<Decimal>,
+    pub qualitative_result: Option<InspectionResultStatus>,
+    pub defect_code: Option<DefectCode>,
+    pub defect_qty: Decimal,
+    pub remark: Option<String>,
+}
+
+/// 批量录入检验结果输出。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchAddInspectionResultsOutput {
+    pub results: Vec<AddInspectionResultOutput>,
+}
+
 /// 录入检验结果用例。
 pub struct AddInspectionResultUseCase<L, R, M, G>
 where
@@ -230,12 +248,7 @@ where
     M: QualityMasterRepository,
     G: QualityIdGenerator,
 {
-    pub fn new(
-        lot_repo: L,
-        result_repo: R,
-        master_repo: M,
-        id_generator: G,
-    ) -> Self {
+    pub fn new(lot_repo: L, result_repo: R, master_repo: M, id_generator: G) -> Self {
         Self {
             lot_repo,
             result_repo,
@@ -251,10 +264,7 @@ where
     ) -> QualityResult<AddInspectionResultOutput> {
         let now = OffsetDateTime::now_utc();
 
-        let mut lot = self
-            .lot_repo
-            .lock_by_id(&command.inspection_lot_id)
-            .await?;
+        let mut lot = self.lot_repo.lock_by_id(&command.inspection_lot_id).await?;
 
         if !lot.status.can_enter_result() {
             return Err(QualityError::InspectionLotStatusInvalid);
@@ -282,10 +292,11 @@ where
             }
         }
 
-        let result_id = self.id_generator.next_inspection_result_id();
+        // 先生成临时领域 ID。真实入库 ID 由 PostgreSQL BIGSERIAL 返回。
+        let temp_result_id = self.id_generator.next_inspection_result_id();
 
         let result = InspectionResult::create(CreateInspectionResult {
-            id: result_id.clone(),
+            id: temp_result_id,
             inspection_lot_id: command.inspection_lot_id.clone(),
             char_id: command.char_id,
             measured_value: command.measured_value,
@@ -302,7 +313,7 @@ where
 
         let result_status = result.result_status;
 
-        self.result_repo.create(&result).await?;
+        let result_id = self.result_repo.create(&result).await?;
 
         if lot.status.can_enter_result() {
             lot.mark_in_progress(command.inspector, now)?;
@@ -313,6 +324,117 @@ where
             result_id,
             result_status,
         })
+    }
+}
+
+/// 批量录入检验结果用例。
+pub struct BatchAddInspectionResultsUseCase<L, R, M, G>
+where
+    L: InspectionLotRepository,
+    R: InspectionResultRepository,
+    M: QualityMasterRepository,
+    G: QualityIdGenerator,
+{
+    pub lot_repo: L,
+    pub result_repo: R,
+    pub master_repo: M,
+    pub id_generator: G,
+}
+
+impl<L, R, M, G> BatchAddInspectionResultsUseCase<L, R, M, G>
+where
+    L: InspectionLotRepository,
+    R: InspectionResultRepository,
+    M: QualityMasterRepository,
+    G: QualityIdGenerator,
+{
+    pub fn new(lot_repo: L, result_repo: R, master_repo: M, id_generator: G) -> Self {
+        Self {
+            lot_repo,
+            result_repo,
+            master_repo,
+            id_generator,
+        }
+    }
+
+    /// 执行批量录入检验结果。
+    pub async fn execute(
+        &self,
+        command: BatchAddInspectionResultsCommand,
+    ) -> QualityResult<BatchAddInspectionResultsOutput> {
+        if command.results.is_empty() {
+            return Err(QualityError::InspectionResultRequired);
+        }
+
+        let now = OffsetDateTime::now_utc();
+
+        let mut lot = self.lot_repo.lock_by_id(&command.inspection_lot_id).await?;
+
+        if !lot.status.can_enter_result() {
+            return Err(QualityError::InspectionLotStatusInvalid);
+        }
+
+        let mut results = Vec::with_capacity(command.results.len());
+        let mut result_statuses = Vec::with_capacity(command.results.len());
+
+        for item in command.results {
+            let inspection_char = self
+                .master_repo
+                .find_inspection_char(&item.char_id)
+                .await?
+                .ok_or(QualityError::InspectionCharNotFound)?;
+
+            if !inspection_char.is_active {
+                return Err(QualityError::InspectionCharInactive);
+            }
+
+            if let Some(defect_code) = &item.defect_code {
+                let defect = self
+                    .master_repo
+                    .find_defect_code(defect_code)
+                    .await?
+                    .ok_or(QualityError::DefectCodeNotFound)?;
+
+                if !defect.is_active {
+                    return Err(QualityError::DefectCodeInactive);
+                }
+            }
+
+            let result = InspectionResult::create(CreateInspectionResult {
+                id: self.id_generator.next_inspection_result_id(),
+                inspection_lot_id: command.inspection_lot_id.clone(),
+                char_id: item.char_id,
+                measured_value: item.measured_value,
+                qualitative_result: item.qualitative_result,
+                lower_limit: inspection_char.lower_limit,
+                upper_limit: inspection_char.upper_limit,
+                unit: inspection_char.unit,
+                defect_code: item.defect_code,
+                defect_qty: item.defect_qty,
+                inspector: command.inspector.clone(),
+                now,
+                remark: item.remark,
+            })?;
+
+            result_statuses.push(result.result_status);
+            results.push(result);
+        }
+
+        let result_ids = self.result_repo.batch_create(&results).await?;
+
+        lot.submit_results(command.inspector, now)?;
+        self.lot_repo.update(&lot).await?;
+
+        let results = result_ids
+            .into_iter()
+            .zip(result_statuses)
+            .map(|(result_id, result_status)| AddInspectionResultOutput {
+                result_id,
+                result_status,
+            })
+            .collect();
+
+        Ok(BatchAddInspectionResultsOutput { results })
     }
 }
 
@@ -409,10 +531,7 @@ where
             }
         }
 
-        let mut lot = self
-            .lot_repo
-            .lock_by_id(&command.inspection_lot_id)
-            .await?;
+        let mut lot = self.lot_repo.lock_by_id(&command.inspection_lot_id).await?;
 
         if !lot.status.can_make_decision() {
             return Err(QualityError::InspectionLotStatusInvalid);
@@ -446,7 +565,12 @@ where
         let old_status = batch.status;
         let new_status = command.decision.target_batch_status();
 
-        lot.make_decision(command.decision, command.decided_by.clone(), now)?;
+        lot.make_decision_with_reason(
+            command.decision,
+            command.reason.clone(),
+            command.decided_by.clone(),
+            now,
+        )?;
         batch.status = new_status;
 
         self.lot_repo.update(&lot).await?;
@@ -543,10 +667,7 @@ where
         Self { batch_repo }
     }
 
-    pub async fn execute(
-        &self,
-        command: FreezeBatchCommand,
-    ) -> QualityResult<FreezeBatchOutput> {
+    pub async fn execute(&self, command: FreezeBatchCommand) -> QualityResult<FreezeBatchOutput> {
         if command.reason.trim().is_empty() {
             return Err(QualityError::RequiredFieldEmpty("reason"));
         }
@@ -712,10 +833,7 @@ where
     /// 注意：
     /// 这里只改变批次质量状态，不扣减库存。
     /// 实际扣库存应走库存模块的 999 报废出库。
-    pub async fn execute(
-        &self,
-        command: ScrapBatchCommand,
-    ) -> QualityResult<ScrapBatchOutput> {
+    pub async fn execute(&self, command: ScrapBatchCommand) -> QualityResult<ScrapBatchOutput> {
         if command.reason.trim().is_empty() {
             return Err(QualityError::RequiredFieldEmpty("reason"));
         }

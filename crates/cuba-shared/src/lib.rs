@@ -15,10 +15,17 @@ pub mod state;
 // ====================== 公开导出 ======================
 // 显式导出,避免通配符在多个子模块之间撞名。
 
-pub use audit::AuditInfo;
-pub use config::Settings;
+pub use audit::{
+    AuditCategory, AuditInfo, audit_category_for_action, audit_module_for_event,
+    audit_module_for_table, write_audit_change, write_audit_event,
+};
+pub use config::{ConfigError, Settings, WorkerSettings};
 pub use context::CurrentUser;
-pub use db_error::{map_inventory_db_error, map_master_data_db_error, map_production_db_error};
+pub use db_error::{
+    map_auth_db_error, map_inventory_db_error, map_master_data_db_error, map_mrp_db_error,
+    map_production_db_error, map_purchase_db_error, map_quality_db_error, map_reporting_db_error,
+    map_sales_db_error, map_traceability_db_error, map_worker_db_error,
+};
 pub use error::{AppError, AppResult};
 pub use pagination::{Page, PageQuery, SortOrder};
 pub use response::ApiResponse;

@@ -1,11 +1,12 @@
-use rust_decimal::Decimal;
+use rust_decimal::{Decimal, prelude::ToPrimitive};
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 use crate::application::common::Page;
 use crate::application::errors::InventoryCountApplicationError;
 use crate::application::inventory_count_model::{
-    InventoryCountScopeFilter, ListInventoryCountsInput,
+    BatchUpdateInventoryCountLineItem, InventoryCountScopeFilter, ListInventoryCountsInput,
 };
 use crate::application::inventory_count_repository::{
     InventoryCountRepository, InventoryCountSummary,
@@ -26,6 +27,44 @@ pub struct PostgresInventoryCountRepository {
 }
 
 impl PostgresInventoryCountRepository {
+    fn next_transaction_id(prefix: &str) -> String {
+        let raw = format!("{}-{}", prefix, Uuid::now_v7());
+        raw.chars().take(30).collect()
+    }
+
+    fn decimal_to_posting_qty(
+        quantity: Decimal,
+        line_no: i32,
+    ) -> Result<i32, InventoryCountApplicationError> {
+        if quantity <= Decimal::ZERO || quantity.trunc() != quantity {
+            return Err(InventoryCountApplicationError::DifferencePostFailed(
+                format!("盘点过账数量必须为正整数，line_no={line_no}, quantity={quantity}"),
+            ));
+        }
+
+        quantity.to_i32().ok_or_else(|| {
+            InventoryCountApplicationError::DifferencePostFailed(format!(
+                "盘点过账数量超出整数范围，line_no={line_no}, quantity={quantity}"
+            ))
+        })
+    }
+
+    fn decimal_to_db_qty(
+        quantity: Decimal,
+        field: &str,
+        line_no: i32,
+    ) -> Result<i32, InventoryCountApplicationError> {
+        if quantity.trunc() != quantity {
+            return Err(InventoryCountApplicationError::CountedQtyInvalid);
+        }
+
+        quantity.to_i32().ok_or_else(|| {
+            InventoryCountApplicationError::DifferencePostFailed(format!(
+                "盘点数量字段超出整数范围，field={field}, line_no={line_no}, quantity={quantity}"
+            ))
+        })
+    }
+
     /// 调用数据库库存过账函数
     ///
     /// 这里集中封装 wms.post_inventory_transaction()。
@@ -35,57 +74,56 @@ impl PostgresInventoryCountRepository {
         movement_type: &str,
         material_id: &str,
         batch_number: Option<&str>,
-        quantity: Decimal,
+        quantity: i32,
         from_bin: Option<&str>,
         to_bin: Option<&str>,
         quality_status: Option<&str>,
         operator: &str,
         posting_date: OffsetDateTime,
         reference_doc: Option<&str>,
-        reference_line_no: Option<i32>,
         remark: Option<&str>,
     ) -> Result<String, InventoryCountApplicationError> {
-        let row = sqlx::query(
+        let transaction_id = Self::next_transaction_id(movement_type);
+
+        sqlx::query(
             r#"
             SELECT wms.post_inventory_transaction(
-                p_movement_type     => $1,
-                p_material_id       => $2,
-                p_batch_number      => $3,
-                p_quantity          => $4,
-                p_from_bin          => $5,
-                p_to_bin            => $6,
-                p_quality_status    => $7,
-                p_operator          => $8,
-                p_posting_date      => $9,
-                p_reference_doc     => $10,
-                p_reference_line_no => $11,
-                p_remark            => $12
-            ) AS transaction_id
+                $1,
+                $2::wms.movement_type,
+                $3,
+                $4,
+                $5,
+                $6,
+                $7,
+                NULL,
+                $8,
+                $9::mdm.quality_status,
+                $10,
+                $11,
+                $12,
+                NULL
+            )
             "#,
         )
+        .bind(&transaction_id)
         .bind(movement_type)
         .bind(material_id)
-        .bind(batch_number)
         .bind(quantity)
         .bind(from_bin)
         .bind(to_bin)
-        .bind(quality_status)
+        .bind(batch_number)
         .bind(operator)
-        .bind(posting_date)
+        .bind(quality_status.unwrap_or("合格"))
         .bind(reference_doc)
-        .bind(reference_line_no)
         .bind(remark)
-        .fetch_one(&self.pool)
+        .bind(posting_date)
+        .execute(&self.pool)
         .await
         .map_err(|err| {
             InventoryCountApplicationError::DifferencePostFailed(format!(
                 "调用 wms.post_inventory_transaction({movement_type}) 失败: {err}"
             ))
         })?;
-
-        let transaction_id: String = row
-            .try_get("transaction_id")
-            .map_err(InventoryCountApplicationError::database)?;
 
         Ok(transaction_id)
     }
@@ -96,47 +134,50 @@ impl PostgresInventoryCountRepository {
         movement_type: &str,
         material_id: &str,
         batch_number: Option<&str>,
-        quantity: Decimal,
+        quantity: i32,
         from_bin: Option<&str>,
         to_bin: Option<&str>,
         quality_status: Option<&str>,
         operator: &str,
         posting_date: OffsetDateTime,
         reference_doc: Option<&str>,
-        reference_line_no: Option<i32>,
         remark: Option<&str>,
     ) -> Result<String, InventoryCountApplicationError> {
-        let row = sqlx::query(
+        let transaction_id = Self::next_transaction_id(movement_type);
+
+        sqlx::query(
             r#"
             SELECT wms.post_inventory_transaction(
-                p_movement_type     => $1,
-                p_material_id       => $2,
-                p_batch_number      => $3,
-                p_quantity          => $4,
-                p_from_bin          => $5,
-                p_to_bin            => $6,
-                p_quality_status    => $7,
-                p_operator          => $8,
-                p_posting_date      => $9,
-                p_reference_doc     => $10,
-                p_reference_line_no => $11,
-                p_remark            => $12
-            ) AS transaction_id
+                $1,
+                $2::wms.movement_type,
+                $3,
+                $4,
+                $5,
+                $6,
+                $7,
+                NULL,
+                $8,
+                $9::mdm.quality_status,
+                $10,
+                $11,
+                $12,
+                NULL
+            )
             "#,
         )
+        .bind(&transaction_id)
         .bind(movement_type)
         .bind(material_id)
-        .bind(batch_number)
         .bind(quantity)
         .bind(from_bin)
         .bind(to_bin)
-        .bind(quality_status)
+        .bind(batch_number)
         .bind(operator)
-        .bind(posting_date)
+        .bind(quality_status.unwrap_or("合格"))
         .bind(reference_doc)
-        .bind(reference_line_no)
         .bind(remark)
-        .fetch_one(&mut **tx)
+        .bind(posting_date)
+        .execute(&mut **tx)
         .await
         .map_err(|err| {
             InventoryCountApplicationError::DifferencePostFailed(format!(
@@ -144,11 +185,406 @@ impl PostgresInventoryCountRepository {
             ))
         })?;
 
-        let transaction_id: String = row
-            .try_get("transaction_id")
-            .map_err(InventoryCountApplicationError::database)?;
-
         Ok(transaction_id)
+    }
+
+    async fn lock_header_for_update_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        count_doc_id: &str,
+    ) -> Result<InventoryCount, InventoryCountApplicationError> {
+        let row = sqlx::query_as::<_, InventoryCountHeaderRow>(
+            r#"
+            SELECT
+                count_doc_id,
+                count_type,
+                count_scope,
+                zone_code,
+                bin_code,
+                material_id,
+                batch_number,
+                status,
+                created_by,
+                approved_by,
+                posted_by,
+                created_at,
+                approved_at,
+                posted_at,
+                closed_at,
+                remark
+            FROM wms.wms_inventory_count_h
+            WHERE count_doc_id = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(count_doc_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(InventoryCountApplicationError::database)?
+        .ok_or(InventoryCountApplicationError::CountNotFound)?;
+
+        InventoryCount::try_from(row)
+    }
+
+    async fn lock_lines_for_update_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        count_doc_id: &str,
+    ) -> Result<Vec<InventoryCountLine>, InventoryCountApplicationError> {
+        let rows = sqlx::query_as::<_, InventoryCountLineRow>(
+            r#"
+            SELECT
+                count_doc_id,
+                line_no,
+                material_id,
+                bin_code,
+                batch_number,
+                quality_status::TEXT AS quality_status,
+                system_qty::NUMERIC AS system_qty,
+                counted_qty::NUMERIC AS counted_qty,
+                difference_qty::NUMERIC AS difference_qty,
+                difference_reason,
+                movement_type::TEXT AS movement_type,
+                transaction_id,
+                status,
+                remark
+            FROM wms.wms_inventory_count_d
+            WHERE count_doc_id = $1
+            ORDER BY line_no
+            FOR UPDATE
+            "#,
+        )
+        .bind(count_doc_id)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(InventoryCountApplicationError::database)?;
+
+        rows.into_iter()
+            .map(InventoryCountLine::try_from)
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    async fn exists_open_count_for_scope_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        scope: &InventoryCountScopeFilter,
+    ) -> Result<bool, InventoryCountApplicationError> {
+        let count_scope = count_scope_to_db(&scope.count_scope);
+
+        sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM wms.wms_inventory_count_h
+                WHERE count_scope = $1
+                  AND status NOT IN ('CLOSED', 'CANCELLED')
+                  AND ($2::text IS NULL OR zone_code = $2)
+                  AND ($3::text IS NULL OR bin_code = $3)
+                  AND ($4::text IS NULL OR material_id = $4)
+                  AND ($5::text IS NULL OR batch_number = $5)
+            )
+            "#,
+        )
+        .bind(count_scope)
+        .bind(&scope.zone_code)
+        .bind(&scope.bin_code)
+        .bind(&scope.material_id)
+        .bind(&scope.batch_number)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(InventoryCountApplicationError::database)
+    }
+
+    async fn create_count_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        count: &InventoryCount,
+    ) -> Result<(), InventoryCountApplicationError> {
+        sqlx::query(
+            r#"
+            INSERT INTO wms.wms_inventory_count_h (
+                count_doc_id,
+                count_type,
+                count_scope,
+                zone_code,
+                bin_code,
+                material_id,
+                batch_number,
+                status,
+                created_by,
+                created_at,
+                remark
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11
+            )
+            "#,
+        )
+        .bind(&count.count_doc_id)
+        .bind(count_type_to_db(&count.count_type))
+        .bind(count_scope_to_db(&count.count_scope))
+        .bind(&count.zone_code)
+        .bind(&count.bin_code)
+        .bind(&count.material_id)
+        .bind(&count.batch_number)
+        .bind(count_status_to_db(&count.status))
+        .bind(&count.created_by)
+        .bind(count.created_at)
+        .bind(&count.remark)
+        .execute(&mut **tx)
+        .await
+        .map_err(InventoryCountApplicationError::database)?;
+
+        Ok(())
+    }
+
+    async fn generate_lines_from_scope_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        count_doc_id: &str,
+        scope: &InventoryCountScopeFilter,
+    ) -> Result<Vec<InventoryCountLine>, InventoryCountApplicationError> {
+        let rows = match scope.count_scope {
+            InventoryCountScope::Bin => {
+                sqlx::query_as::<_, GeneratedCountLineRow>(
+                    r#"
+                    SELECT
+                        ROW_NUMBER() OVER (ORDER BY material_id, batch_number, quality_status)::int * 10 AS line_no,
+                        material_id,
+                        bin_code,
+                        batch_number,
+                        quality_status::TEXT AS quality_status,
+                        qty::NUMERIC AS system_qty
+                    FROM wms.wms_bin_stock
+                    WHERE bin_code = $1
+                      AND qty <> 0
+                    ORDER BY material_id, batch_number, quality_status
+                    "#,
+                )
+                .bind(scope.bin_code.as_deref())
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(InventoryCountApplicationError::database)?
+            }
+            InventoryCountScope::Material => {
+                sqlx::query_as::<_, GeneratedCountLineRow>(
+                    r#"
+                    SELECT
+                        ROW_NUMBER() OVER (ORDER BY bin_code, batch_number, quality_status)::int * 10 AS line_no,
+                        material_id,
+                        bin_code,
+                        batch_number,
+                        quality_status::TEXT AS quality_status,
+                        qty::NUMERIC AS system_qty
+                    FROM wms.wms_bin_stock
+                    WHERE material_id = $1
+                      AND qty <> 0
+                    ORDER BY bin_code, batch_number, quality_status
+                    "#,
+                )
+                .bind(scope.material_id.as_deref())
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(InventoryCountApplicationError::database)?
+            }
+            InventoryCountScope::Zone => {
+                sqlx::query_as::<_, GeneratedCountLineRow>(
+                    r#"
+                    SELECT
+                        ROW_NUMBER() OVER (ORDER BY bs.bin_code, bs.material_id, bs.batch_number, bs.quality_status)::int * 10 AS line_no,
+                        bs.material_id,
+                        bs.bin_code,
+                        bs.batch_number,
+                        bs.quality_status::TEXT AS quality_status,
+                        bs.qty::NUMERIC AS system_qty
+                    FROM wms.wms_bin_stock bs
+                    INNER JOIN mdm.mdm_storage_bins b
+                        ON b.bin_code = bs.bin_code
+                    WHERE b.zone = $1
+                      AND bs.qty <> 0
+                    ORDER BY bs.bin_code, bs.material_id, bs.batch_number, bs.quality_status
+                    "#,
+                )
+                .bind(scope.zone_code.as_deref())
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(InventoryCountApplicationError::database)?
+            }
+            _ => return Err(InventoryCountApplicationError::ScopeInvalid),
+        };
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                InventoryCountLine::from_stock_snapshot(
+                    count_doc_id.to_string(),
+                    row.line_no,
+                    row.material_id,
+                    row.bin_code,
+                    row.batch_number,
+                    row.quality_status,
+                    row.system_qty,
+                )
+            })
+            .collect())
+    }
+
+    async fn insert_lines_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        count_doc_id: &str,
+        lines: &[InventoryCountLine],
+    ) -> Result<(), InventoryCountApplicationError> {
+        for line in lines {
+            let system_qty = Self::decimal_to_db_qty(line.system_qty, "system_qty", line.line_no)?;
+            let counted_qty = line
+                .counted_qty
+                .map(|qty| Self::decimal_to_db_qty(qty, "counted_qty", line.line_no))
+                .transpose()?;
+            let difference_qty = line
+                .difference_qty
+                .map(|qty| Self::decimal_to_db_qty(qty, "difference_qty", line.line_no))
+                .transpose()?;
+
+            sqlx::query(
+                r#"
+                INSERT INTO wms.wms_inventory_count_d (
+                    count_doc_id,
+                    line_no,
+                    material_id,
+                    bin_code,
+                    batch_number,
+                    quality_status,
+                    system_qty,
+                    counted_qty,
+                    difference_qty,
+                    difference_reason,
+                    movement_type,
+                    transaction_id,
+                    status,
+                    remark
+                )
+                VALUES (
+                    $1, $2, $3, $4, $5, $6::mdm.quality_status,
+                    $7::INTEGER, $8::INTEGER, $9::INTEGER, $10, $11::wms.movement_type, $12,
+                    $13, $14
+                )
+                "#,
+            )
+            .bind(count_doc_id)
+            .bind(line.line_no)
+            .bind(&line.material_id)
+            .bind(&line.bin_code)
+            .bind(&line.batch_number)
+            .bind(&line.quality_status)
+            .bind(system_qty)
+            .bind(counted_qty)
+            .bind(difference_qty)
+            .bind(&line.difference_reason)
+            .bind(
+                line.movement_type
+                    .as_ref()
+                    .map(InventoryCountMovementType::as_code),
+            )
+            .bind(&line.transaction_id)
+            .bind(line_status_to_db(&line.status))
+            .bind(&line.remark)
+            .execute(&mut **tx)
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+        }
+
+        Ok(())
+    }
+
+    async fn update_status_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        count_doc_id: &str,
+        status: InventoryCountStatus,
+        remark: Option<&str>,
+    ) -> Result<(), InventoryCountApplicationError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE wms.wms_inventory_count_h
+            SET
+                status = $2,
+                remark = COALESCE($3, remark)
+            WHERE count_doc_id = $1
+            "#,
+        )
+        .bind(count_doc_id)
+        .bind(count_status_to_db(&status))
+        .bind(remark)
+        .execute(&mut **tx)
+        .await
+        .map_err(InventoryCountApplicationError::database)?;
+
+        if result.rows_affected() == 0 {
+            return Err(InventoryCountApplicationError::CountNotFound);
+        }
+
+        Ok(())
+    }
+
+    async fn update_line_counted_qty_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        count_doc_id: &str,
+        line: &InventoryCountLine,
+    ) -> Result<InventoryCountLine, InventoryCountApplicationError> {
+        let counted_qty = line
+            .counted_qty
+            .ok_or(InventoryCountApplicationError::LineNotCounted)?;
+        let difference_qty = line
+            .difference_qty
+            .ok_or(InventoryCountApplicationError::LineNotCounted)?;
+        let counted_qty_i32 = Self::decimal_to_db_qty(counted_qty, "counted_qty", line.line_no)?;
+        let difference_qty_i32 =
+            Self::decimal_to_db_qty(difference_qty, "difference_qty", line.line_no)?;
+        let movement_type = line
+            .movement_type
+            .as_ref()
+            .map(InventoryCountMovementType::as_code);
+
+        let row = sqlx::query_as::<_, InventoryCountLineRow>(
+            r#"
+            UPDATE wms.wms_inventory_count_d
+            SET
+                counted_qty = $3::INTEGER,
+                difference_qty = $4::INTEGER,
+                movement_type = $5::wms.movement_type,
+                difference_reason = $6,
+                remark = $7,
+                status = 'COUNTED',
+                adjusted = FALSE,
+                updated_at = NOW()
+            WHERE count_doc_id = $1
+              AND line_no = $2
+            RETURNING
+                count_doc_id,
+                line_no,
+                material_id,
+                bin_code,
+                batch_number,
+                quality_status::TEXT AS quality_status,
+                system_qty::NUMERIC AS system_qty,
+                counted_qty::NUMERIC AS counted_qty,
+                difference_qty::NUMERIC AS difference_qty,
+                difference_reason,
+                movement_type::TEXT AS movement_type,
+                transaction_id,
+                status,
+                remark
+            "#,
+        )
+        .bind(count_doc_id)
+        .bind(line.line_no)
+        .bind(counted_qty_i32)
+        .bind(difference_qty_i32)
+        .bind(movement_type)
+        .bind(&line.difference_reason)
+        .bind(&line.remark)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(InventoryCountApplicationError::database)?
+        .ok_or(InventoryCountApplicationError::CountLineNotFound)?;
+
+        InventoryCountLine::try_from(row)
     }
 }
 
@@ -310,6 +746,359 @@ impl TryFrom<InventoryCountSummaryRow> for InventoryCountSummary {
 
 #[async_trait::async_trait]
 impl InventoryCountRepository for PostgresInventoryCountRepository {
+    async fn create_count_transactional(
+        &self,
+        count: &InventoryCount,
+        scope: &InventoryCountScopeFilter,
+    ) -> Result<String, InventoryCountApplicationError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+        if Self::exists_open_count_for_scope_tx(&mut tx, scope).await? {
+            return Err(InventoryCountApplicationError::DuplicatedScope);
+        }
+
+        Self::create_count_tx(&mut tx, count).await?;
+
+        tx.commit()
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+        Ok(count.count_doc_id.clone())
+    }
+
+    async fn generate_lines_transactional(
+        &self,
+        count_doc_id: &str,
+        _operator: &str,
+    ) -> Result<InventoryCount, InventoryCountApplicationError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+        let mut count = Self::lock_header_for_update_tx(&mut tx, count_doc_id).await?;
+
+        if !count.status.can_generate_lines() {
+            return Err(InventoryCountApplicationError::StatusInvalid);
+        }
+
+        let scope_filter = InventoryCountScopeFilter {
+            count_scope: count.count_scope.clone(),
+            zone_code: count.zone_code.clone(),
+            bin_code: count.bin_code.clone(),
+            material_id: count.material_id.clone(),
+            batch_number: count.batch_number.clone(),
+        };
+
+        let lines = self
+            .generate_lines_from_scope_tx(&mut tx, count_doc_id, &scope_filter)
+            .await?;
+
+        if lines.is_empty() {
+            return Err(InventoryCountApplicationError::NoLines);
+        }
+
+        count.mark_counting(lines.clone())?;
+        Self::insert_lines_tx(&mut tx, count_doc_id, &lines).await?;
+        Self::update_status_tx(&mut tx, count_doc_id, InventoryCountStatus::Counting, None).await?;
+
+        tx.commit()
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+        self.find_by_id(count_doc_id)
+            .await?
+            .ok_or(InventoryCountApplicationError::CountNotFound)
+    }
+
+    async fn update_line_transactional(
+        &self,
+        count_doc_id: &str,
+        line_no: i32,
+        counted_qty: Decimal,
+        difference_reason: Option<String>,
+        remark: Option<String>,
+        _operator: &str,
+    ) -> Result<InventoryCountLine, InventoryCountApplicationError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+        let count = Self::lock_header_for_update_tx(&mut tx, count_doc_id).await?;
+        if !count.status.can_update_counted_qty() {
+            return Err(InventoryCountApplicationError::StatusInvalid);
+        }
+
+        let mut lines = Self::lock_lines_for_update_tx(&mut tx, count_doc_id).await?;
+        let line = lines
+            .iter_mut()
+            .find(|line| line.line_no == line_no)
+            .ok_or(InventoryCountApplicationError::CountLineNotFound)?;
+
+        line.enter_counted_qty(counted_qty, difference_reason, remark)?;
+        let updated = Self::update_line_counted_qty_tx(&mut tx, count_doc_id, line).await?;
+
+        tx.commit()
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+        Ok(updated)
+    }
+
+    async fn batch_update_lines_transactional(
+        &self,
+        count_doc_id: &str,
+        updates: &[BatchUpdateInventoryCountLineItem],
+        _operator: &str,
+    ) -> Result<Vec<InventoryCountLine>, InventoryCountApplicationError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+        let count = Self::lock_header_for_update_tx(&mut tx, count_doc_id).await?;
+        if !count.status.can_update_counted_qty() {
+            return Err(InventoryCountApplicationError::StatusInvalid);
+        }
+
+        let mut existing_lines = Self::lock_lines_for_update_tx(&mut tx, count_doc_id).await?;
+
+        for item in updates {
+            let line = existing_lines
+                .iter_mut()
+                .find(|line| line.line_no == item.line_no)
+                .ok_or(InventoryCountApplicationError::CountLineNotFound)?;
+
+            line.enter_counted_qty(
+                item.counted_qty,
+                item.difference_reason.clone(),
+                item.remark.clone(),
+            )?;
+        }
+
+        let mut result = Vec::with_capacity(existing_lines.len());
+        for line in &existing_lines {
+            if line.counted_qty.is_some() {
+                result.push(Self::update_line_counted_qty_tx(&mut tx, count_doc_id, line).await?);
+            } else {
+                result.push(line.clone());
+            }
+        }
+
+        tx.commit()
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+        Ok(result)
+    }
+
+    async fn submit_count_transactional(
+        &self,
+        count_doc_id: &str,
+        _operator: &str,
+        remark: Option<&str>,
+    ) -> Result<InventoryCount, InventoryCountApplicationError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+        let mut count = Self::lock_header_for_update_tx(&mut tx, count_doc_id).await?;
+        let lines = Self::lock_lines_for_update_tx(&mut tx, count_doc_id).await?;
+
+        if lines.is_empty() {
+            return Err(InventoryCountApplicationError::NoLines);
+        }
+
+        count.lines = lines;
+        count.submit()?;
+        Self::update_status_tx(
+            &mut tx,
+            count_doc_id,
+            InventoryCountStatus::Submitted,
+            remark,
+        )
+        .await?;
+
+        tx.commit()
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+        self.find_by_id(count_doc_id)
+            .await?
+            .ok_or(InventoryCountApplicationError::CountNotFound)
+    }
+
+    async fn approve_count_transactional(
+        &self,
+        count_doc_id: &str,
+        approved: bool,
+        operator: &str,
+        remark: Option<&str>,
+    ) -> Result<InventoryCount, InventoryCountApplicationError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+        let mut count = Self::lock_header_for_update_tx(&mut tx, count_doc_id).await?;
+
+        if approved {
+            count.approve(operator.to_string())?;
+            let approved_at = count.approved_at.unwrap_or_else(OffsetDateTime::now_utc);
+
+            let updated = sqlx::query(
+                r#"
+                UPDATE wms.wms_inventory_count_h
+                SET
+                    approved_by = $2,
+                    approved_at = $3,
+                    remark = COALESCE($4, remark)
+                WHERE count_doc_id = $1
+                "#,
+            )
+            .bind(count_doc_id)
+            .bind(operator)
+            .bind(approved_at)
+            .bind(remark)
+            .execute(&mut *tx)
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+            if updated.rows_affected() == 0 {
+                return Err(InventoryCountApplicationError::CountNotFound);
+            }
+
+            Self::update_status_tx(
+                &mut tx,
+                count_doc_id,
+                InventoryCountStatus::Approved,
+                remark,
+            )
+            .await?;
+        } else {
+            count.reject_to_recount()?;
+            Self::update_status_tx(
+                &mut tx,
+                count_doc_id,
+                InventoryCountStatus::Counting,
+                remark,
+            )
+            .await?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+        self.find_by_id(count_doc_id)
+            .await?
+            .ok_or(InventoryCountApplicationError::CountNotFound)
+    }
+
+    async fn close_count_transactional(
+        &self,
+        count_doc_id: &str,
+        _operator: &str,
+        remark: Option<&str>,
+    ) -> Result<InventoryCount, InventoryCountApplicationError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+        let mut count = Self::lock_header_for_update_tx(&mut tx, count_doc_id).await?;
+        count.close()?;
+        let closed_at = count.closed_at.unwrap_or_else(OffsetDateTime::now_utc);
+
+        let updated = sqlx::query(
+            r#"
+            UPDATE wms.wms_inventory_count_h
+            SET
+                status = 'CLOSED',
+                closed_at = $2,
+                remark = COALESCE($3, remark)
+            WHERE count_doc_id = $1
+            "#,
+        )
+        .bind(count_doc_id)
+        .bind(closed_at)
+        .bind(remark)
+        .execute(&mut *tx)
+        .await
+        .map_err(InventoryCountApplicationError::database)?;
+
+        if updated.rows_affected() == 0 {
+            return Err(InventoryCountApplicationError::CountNotFound);
+        }
+
+        tx.commit()
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+        self.find_by_id(count_doc_id)
+            .await?
+            .ok_or(InventoryCountApplicationError::CountNotFound)
+    }
+
+    async fn cancel_count_transactional(
+        &self,
+        count_doc_id: &str,
+        _operator: &str,
+        remark: Option<&str>,
+    ) -> Result<InventoryCount, InventoryCountApplicationError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+        let mut count = Self::lock_header_for_update_tx(&mut tx, count_doc_id).await?;
+        if matches!(count.status, InventoryCountStatus::Posted) {
+            return Err(InventoryCountApplicationError::AlreadyPosted);
+        }
+
+        count.cancel()?;
+
+        let updated = sqlx::query(
+            r#"
+            UPDATE wms.wms_inventory_count_h
+            SET
+                status = 'CANCELLED',
+                remark = COALESCE($2, remark)
+            WHERE count_doc_id = $1
+            "#,
+        )
+        .bind(count_doc_id)
+        .bind(remark)
+        .execute(&mut *tx)
+        .await
+        .map_err(InventoryCountApplicationError::database)?;
+
+        if updated.rows_affected() == 0 {
+            return Err(InventoryCountApplicationError::CountNotFound);
+        }
+
+        tx.commit()
+            .await
+            .map_err(InventoryCountApplicationError::database)?;
+
+        self.find_by_id(count_doc_id)
+            .await?
+            .ok_or(InventoryCountApplicationError::CountNotFound)
+    }
+
     /// 生成盘点单号
     ///
     /// 这里用数据库时间 + sequence。
@@ -379,12 +1168,12 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                 material_id,
                 bin_code,
                 batch_number,
-                quality_status,
-                system_qty,
-                counted_qty,
-                difference_qty,
+                quality_status::TEXT AS quality_status,
+                system_qty::NUMERIC AS system_qty,
+                counted_qty::NUMERIC AS counted_qty,
+                difference_qty::NUMERIC AS difference_qty,
                 difference_reason,
-                movement_type,
+                movement_type::TEXT AS movement_type,
                 transaction_id,
                 status,
                 remark
@@ -421,7 +1210,10 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                 let updated = sqlx::query(
                     r#"
                     UPDATE wms.wms_inventory_count_d
-                    SET status = 'POSTED'
+                    SET
+                        status = 'POSTED',
+                        adjusted = TRUE,
+                        updated_at = NOW()
                     WHERE count_doc_id = $1
                       AND line_no = $2
                     "#,
@@ -444,6 +1236,7 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
             line.validate_before_submit()?;
 
             let posting_qty = line.posting_qty();
+            let posting_qty_i32 = Self::decimal_to_posting_qty(posting_qty, line.line_no)?;
 
             if posting_qty <= Decimal::ZERO {
                 return Err(InventoryCountApplicationError::DifferencePostFailed(
@@ -469,14 +1262,13 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                     movement_type,
                     &line.material_id,
                     line.batch_number.as_deref(),
-                    posting_qty,
+                    posting_qty_i32,
                     from_bin.as_deref(),
                     to_bin.as_deref(),
                     line.quality_status.as_deref(),
                     operator,
                     posting_date,
                     Some(count_doc_id),
-                    Some(line.line_no),
                     remark,
                 )
                 .await?;
@@ -487,7 +1279,9 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                 UPDATE wms.wms_inventory_count_d
                 SET
                     transaction_id = $3,
-                    status = 'POSTED'
+                    status = 'POSTED',
+                    adjusted = TRUE,
+                    updated_at = NOW()
                 WHERE count_doc_id = $1
                   AND line_no = $2
                 "#,
@@ -776,16 +1570,19 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
         let mut updated_lines = Vec::with_capacity(lines.len());
 
         for line in lines {
+            if line.counted_qty.is_none() {
+                updated_lines.push(line.clone());
+                continue;
+            }
+
             let movement_type = line
                 .movement_type
                 .as_ref()
                 .map(InventoryCountMovementType::as_code)
                 .map(str::to_string);
-
             let counted_qty = line
                 .counted_qty
                 .ok_or(InventoryCountApplicationError::LineNotCounted)?;
-
             let difference_qty = line
                 .difference_qty
                 .ok_or(InventoryCountApplicationError::LineNotCounted)?;
@@ -852,16 +1649,22 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
         difference_reason: Option<String>,
         remark: Option<String>,
     ) -> Result<InventoryCountLine, InventoryCountApplicationError> {
+        let counted_qty_i32 = Self::decimal_to_db_qty(counted_qty, "counted_qty", line_no)?;
+        let difference_qty_i32 =
+            Self::decimal_to_db_qty(difference_qty, "difference_qty", line_no)?;
+
         let row = sqlx::query_as::<_, InventoryCountLineRow>(
             r#"
             UPDATE wms.wms_inventory_count_d
             SET
-                counted_qty = $3,
-                difference_qty = $4,
-                movement_type = $5,
+                counted_qty = $3::INTEGER,
+                difference_qty = $4::INTEGER,
+                movement_type = $5::wms.movement_type,
                 difference_reason = $6,
                 remark = $7,
-                status = 'COUNTED'
+                status = 'COUNTED',
+                adjusted = FALSE,
+                updated_at = NOW()
             WHERE count_doc_id = $1
               AND line_no = $2
             RETURNING
@@ -870,12 +1673,12 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                 material_id,
                 bin_code,
                 batch_number,
-                quality_status,
-                system_qty,
-                counted_qty,
-                difference_qty,
+                quality_status::TEXT AS quality_status,
+                system_qty::NUMERIC AS system_qty,
+                counted_qty::NUMERIC AS counted_qty,
+                difference_qty::NUMERIC AS difference_qty,
                 difference_reason,
-                movement_type,
+                movement_type::TEXT AS movement_type,
                 transaction_id,
                 status,
                 remark
@@ -883,8 +1686,8 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
         )
         .bind(count_doc_id)
         .bind(line_no)
-        .bind(counted_qty)
-        .bind(difference_qty)
+        .bind(counted_qty_i32)
+        .bind(difference_qty_i32)
         .bind(movement_type)
         .bind(difference_reason)
         .bind(remark)
@@ -1005,12 +1808,12 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                 material_id,
                 bin_code,
                 batch_number,
-                quality_status,
-                system_qty,
-                counted_qty,
-                difference_qty,
+                quality_status::TEXT AS quality_status,
+                system_qty::NUMERIC AS system_qty,
+                counted_qty::NUMERIC AS counted_qty,
+                difference_qty::NUMERIC AS difference_qty,
                 difference_reason,
-                movement_type,
+                movement_type::TEXT AS movement_type,
                 transaction_id,
                 status,
                 remark
@@ -1208,12 +2011,12 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                 material_id,
                 bin_code,
                 batch_number,
-                quality_status,
-                system_qty,
-                counted_qty,
-                difference_qty,
+                quality_status::TEXT AS quality_status,
+                system_qty::NUMERIC AS system_qty,
+                counted_qty::NUMERIC AS counted_qty,
+                difference_qty::NUMERIC AS difference_qty,
                 difference_reason,
-                movement_type,
+                movement_type::TEXT AS movement_type,
                 transaction_id,
                 status,
                 remark
@@ -1248,8 +2051,8 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                         material_id,
                         bin_code,
                         batch_number,
-                        quality_status,
-                        qty AS system_qty
+                        quality_status::TEXT AS quality_status,
+                        qty::NUMERIC AS system_qty
                     FROM wms.wms_bin_stock
                     WHERE bin_code = $1
                       AND qty <> 0
@@ -1270,8 +2073,8 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                         material_id,
                         bin_code,
                         batch_number,
-                        quality_status,
-                        qty AS system_qty
+                        quality_status::TEXT AS quality_status,
+                        qty::NUMERIC AS system_qty
                     FROM wms.wms_bin_stock
                     WHERE material_id = $1
                       AND qty <> 0
@@ -1286,21 +2089,21 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
 
             InventoryCountScope::Zone => {
                 sqlx::query_as::<_, GeneratedCountLineRow>(
-                    r#"
-                    SELECT
-                        ROW_NUMBER() OVER (ORDER BY bs.bin_code, bs.material_id, bs.batch_number, bs.quality_status)::int * 10 AS line_no,
+            r#"
+            SELECT
+                ROW_NUMBER() OVER (ORDER BY bs.bin_code, bs.material_id, bs.batch_number, bs.quality_status)::int * 10 AS line_no,
                         bs.material_id,
                         bs.bin_code,
                         bs.batch_number,
-                        bs.quality_status,
-                        bs.qty AS system_qty
-                    FROM wms.wms_bin_stock bs
-                    INNER JOIN wms.wms_bins b
-                        ON b.bin_code = bs.bin_code
-                    WHERE b.zone_code = $1
-                      AND bs.qty <> 0
-                    ORDER BY bs.bin_code, bs.material_id, bs.batch_number, bs.quality_status
-                    "#,
+                        bs.quality_status::TEXT AS quality_status,
+                        bs.qty::NUMERIC AS system_qty
+            FROM wms.wms_bin_stock bs
+            INNER JOIN mdm.mdm_storage_bins b
+                ON b.bin_code = bs.bin_code
+            WHERE b.zone = $1
+              AND bs.qty <> 0
+            ORDER BY bs.bin_code, bs.material_id, bs.batch_number, bs.quality_status
+            "#,
                 )
                 .bind(scope.zone_code.as_deref())
                 .fetch_all(&self.pool)
@@ -1337,6 +2140,16 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
         lines: &[InventoryCountLine],
     ) -> Result<(), InventoryCountApplicationError> {
         for line in lines {
+            let system_qty = Self::decimal_to_db_qty(line.system_qty, "system_qty", line.line_no)?;
+            let counted_qty = line
+                .counted_qty
+                .map(|qty| Self::decimal_to_db_qty(qty, "counted_qty", line.line_no))
+                .transpose()?;
+            let difference_qty = line
+                .difference_qty
+                .map(|qty| Self::decimal_to_db_qty(qty, "difference_qty", line.line_no))
+                .transpose()?;
+
             sqlx::query(
                 r#"
                 INSERT INTO wms.wms_inventory_count_d (
@@ -1356,8 +2169,8 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                     remark
                 )
                 VALUES (
-                    $1, $2, $3, $4, $5, $6,
-                    $7, $8, $9, $10, $11, $12,
+                    $1, $2, $3, $4, $5, $6::mdm.quality_status,
+                    $7::INTEGER, $8::INTEGER, $9::INTEGER, $10, $11::wms.movement_type, $12,
                     $13, $14
                 )
                 "#,
@@ -1368,9 +2181,9 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
             .bind(&line.bin_code)
             .bind(&line.batch_number)
             .bind(&line.quality_status)
-            .bind(line.system_qty)
-            .bind(line.counted_qty)
-            .bind(line.difference_qty)
+            .bind(system_qty)
+            .bind(counted_qty)
+            .bind(difference_qty)
             .bind(&line.difference_reason)
             .bind(
                 line.movement_type
@@ -1413,6 +2226,7 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
         remark: Option<&str>,
     ) -> Result<InventoryCountPostedTransaction, InventoryCountApplicationError> {
         let qty = line.posting_qty();
+        let posting_qty = Self::decimal_to_posting_qty(qty, line.line_no)?;
 
         if qty <= Decimal::ZERO {
             return Err(InventoryCountApplicationError::DifferencePostFailed(
@@ -1425,14 +2239,13 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                 "701",
                 &line.material_id,
                 line.batch_number.as_deref(),
-                qty,
+                posting_qty,
                 None,
                 Some(&line.bin_code),
                 line.quality_status.as_deref(),
                 operator,
                 posting_date,
                 Some(&line.count_doc_id),
-                Some(line.line_no),
                 remark,
             )
             .await?;
@@ -1468,6 +2281,7 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
         remark: Option<&str>,
     ) -> Result<InventoryCountPostedTransaction, InventoryCountApplicationError> {
         let qty = line.posting_qty();
+        let posting_qty = Self::decimal_to_posting_qty(qty, line.line_no)?;
 
         if qty <= Decimal::ZERO {
             return Err(InventoryCountApplicationError::DifferencePostFailed(
@@ -1480,14 +2294,13 @@ impl InventoryCountRepository for PostgresInventoryCountRepository {
                 "702",
                 &line.material_id,
                 line.batch_number.as_deref(),
-                qty,
+                posting_qty,
                 Some(&line.bin_code),
                 None,
                 line.quality_status.as_deref(),
                 operator,
                 posting_date,
                 Some(&line.count_doc_id),
-                Some(line.line_no),
                 remark,
             )
             .await?;

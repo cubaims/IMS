@@ -1,4 +1,5 @@
 use anyhow::Result;
+use cuba_shared::{Settings, map_worker_db_error};
 use cuba_worker::tasks;
 use sqlx::postgres::PgPoolOptions;
 use std::time::Duration;
@@ -9,47 +10,31 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     init_tracing();
 
-    // ====================== Worker 配置（临时硬编码） ======================
-    let db_url = std::env::var("DATABASE_URL")
-        .expect("请设置 DATABASE_URL 环境变量");
-
-    let audit_cleanup_days: u32 = std::env::var("WORKER_AUDIT_CLEANUP_DAYS")
-        .unwrap_or_else(|_| "90".to_string())
-        .parse()
-        .unwrap_or(90);
-
-    let materialized_refresh_minutes: u64 = std::env::var("WORKER_MATERIALIZED_VIEW_REFRESH_MINUTES")
-        .unwrap_or_else(|_| "5".to_string())
-        .parse()
-        .unwrap_or(5) * 60;
-
-    let low_stock_check_minutes: u64 = std::env::var("WORKER_LOW_STOCK_CHECK_MINUTES")
-        .unwrap_or_else(|_| "10".to_string())
-        .parse()
-        .unwrap_or(10) * 60;
-
-    let mrp_run_minutes: u64 = std::env::var("WORKER_MRP_RUN_MINUTES")
-        .unwrap_or_else(|_| "30".to_string())
-        .parse()
-        .unwrap_or(30) * 60;
+    let settings = Settings::from_env()?;
+    let worker_settings = settings.worker.clone();
 
     // ====================== 数据库连接池 ======================
     let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .acquire_timeout(Duration::from_secs(10))
-        .connect(&db_url)
-        .await?;
+        .max_connections(settings.db_max_conn)
+        .min_connections(settings.db_min_conn)
+        .acquire_timeout(Duration::from_secs(settings.db_acquire_timeout_secs))
+        .idle_timeout(Some(Duration::from_secs(settings.db_idle_timeout_secs)))
+        .max_lifetime(Some(Duration::from_secs(settings.db_max_lifetime_secs)))
+        .test_before_acquire(true)
+        .connect(&settings.database_url)
+        .await
+        .map_err(|err| anyhow::anyhow!(map_worker_db_error(err)))?;
 
-    info!("✅ cuba-worker 启动成功 | 审计日志保留 {} 天", audit_cleanup_days);
+    info!(
+        "✅ cuba-worker 启动成功 | 审计日志保留 {} 天 | 物化视图刷新 {} 分钟 | 低库存检查 {} 分钟 | MRP {} 分钟",
+        worker_settings.audit_cleanup_days,
+        worker_settings.materialized_view_refresh_minutes,
+        worker_settings.low_stock_check_minutes,
+        worker_settings.mrp_run_minutes
+    );
 
     // 启动所有任务（传入需要的参数）
-    let worker_handle = tokio::spawn(tasks::start_all_tasks(
-        pool,
-        audit_cleanup_days,
-        materialized_refresh_minutes,
-        low_stock_check_minutes,
-        mrp_run_minutes,
-    ));
+    let worker_handle = tokio::spawn(tasks::start_all_tasks(pool, worker_settings));
 
     // 优雅关闭
     tokio::select! {
@@ -71,5 +56,7 @@ fn init_tracing() {
 }
 
 async fn shutdown_signal() {
-    tokio::signal::ctrl_c().await.expect("failed to listen for Ctrl+C");
+    tokio::signal::ctrl_c()
+        .await
+        .expect("failed to listen for Ctrl+C");
 }

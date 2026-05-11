@@ -63,7 +63,7 @@ pub struct CreateStorageBinCommand {
     #[validate(length(min = 1, max = 20))]
     pub bin_type: String,
 
-    #[validate(range(min = 1))]
+    #[validate(range(min = 0))]
     pub capacity: i32,
 
     pub notes: Option<String>,
@@ -77,7 +77,7 @@ pub struct UpdateStorageBinCommand {
     #[validate(length(min = 1, max = 20))]
     pub bin_type: Option<String>,
 
-    #[validate(range(min = 1))]
+    #[validate(range(min = 0))]
     pub capacity: Option<i32>,
 
     pub status: Option<String>,

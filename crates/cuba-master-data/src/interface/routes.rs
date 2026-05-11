@@ -158,6 +158,14 @@ pub fn write_routes() -> Router<AppState> {
             post(handlers::add_bom_component),
         )
         .route(
+            "/boms/{bom_id}/components/{component_id}",
+            patch(handlers::update_bom_component_for_bom),
+        )
+        .route(
+            "/boms/{bom_id}/components/{component_id}",
+            delete(handlers::remove_bom_component_for_bom),
+        )
+        .route(
             "/boms/components/{component_id}",
             patch(handlers::update_bom_component),
         )
@@ -166,6 +174,10 @@ pub fn write_routes() -> Router<AppState> {
             delete(handlers::remove_bom_component),
         )
         .route("/boms/{bom_id}/validate", post(handlers::validate_bom))
+        .route(
+            "/boms/{bom_id}/explode-preview",
+            post(handlers::preview_bom_explosion_for_bom),
+        )
         // work centers
         .route("/work-centers", post(handlers::create_work_center))
         .route(
@@ -185,6 +197,14 @@ pub fn write_routes() -> Router<AppState> {
         .route(
             "/inspection-chars/{char_id}",
             patch(handlers::update_inspection_char),
+        )
+        .route(
+            "/inspection-chars/{char_id}/activate",
+            post(handlers::activate_inspection_char),
+        )
+        .route(
+            "/inspection-chars/{char_id}/deactivate",
+            post(handlers::deactivate_inspection_char),
         )
         // defect codes
         .route("/defect-codes", post(handlers::create_defect_code))

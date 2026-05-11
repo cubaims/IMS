@@ -1,0 +1,29 @@
+meta {
+  name: 07 Bind Material Supplier
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{base_url}}/api/master-data/materials/{{material_id}}/suppliers
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "material_id": "{{material_id}}",
+    "supplier_id": "{{supplier_id}}",
+    "is_primary": false,
+    "supplier_material_code": "SUP-{{material_id}}",
+    "purchase_price": "9.50",
+    "currency": "CNY",
+    "lead_time_days": 7,
+    "moq": 100,
+    "quality_rating": "A"
+  }
+}

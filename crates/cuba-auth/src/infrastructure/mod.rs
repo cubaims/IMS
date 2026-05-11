@@ -1,3 +1,3 @@
 mod postgres_auth_repository;
 
-pub use postgres_auth_repository::PostgresAuthRepository;
+pub use postgres_auth_repository::{PostgresAuthRepository, StoredRefreshToken};

@@ -17,6 +17,9 @@ pub enum InventoryDomainError {
     #[error("quantity must be greater than zero")]
     InvalidQuantity,
 
+    #[error("quantity must be a positive whole number")]
+    QuantityMustBePositiveInteger,
+
     #[error("unit price must be greater than zero")]
     InvalidUnitPrice,
 

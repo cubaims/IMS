@@ -74,6 +74,23 @@ impl PostInventoryCommand {
 
         Ok(posting)
     }
+
+    pub fn validate_manual_posting_type(&self) -> Result<(), String> {
+        let movement_type =
+            MovementType::from_str(&self.movement_type).map_err(|err| err.to_string())?;
+
+        if movement_type.is_manual_posting() {
+            Ok(())
+        } else {
+            Err("movement type 311 must use the transfer endpoint".to_string())
+        }
+    }
+
+    pub fn quantity_as_i32(&self) -> Result<i32, String> {
+        Quantity::new(self.quantity)
+            .and_then(Quantity::to_i32)
+            .map_err(|err| err.to_string())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
@@ -125,4 +142,53 @@ pub struct PickBatchFefoCommand {
 
     pub from_zone: Option<String>,
     pub quality_status: Option<String>,
+}
+
+impl PickBatchFefoCommand {
+    pub fn quantity_as_i32(&self) -> Result<i32, String> {
+        Quantity::new(self.quantity)
+            .and_then(Quantity::to_i32)
+            .map_err(|err| err.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn post_command(movement_type: &str) -> PostInventoryCommand {
+        PostInventoryCommand {
+            material_id: "RM001".to_string(),
+            movement_type: movement_type.to_string(),
+            quantity: Decimal::ONE,
+            from_bin: None,
+            to_bin: Some("RM-A01".to_string()),
+            batch_number: Some("BATCH-001".to_string()),
+            serial_number: None,
+            reference_doc: Some("MANUAL-001".to_string()),
+            quality_status: Some("合格".to_string()),
+            remark: None,
+            unit_price: None,
+            posting_date: None,
+        }
+    }
+
+    #[test]
+    fn manual_posting_type_rejects_transfer_311() {
+        let command = post_command("311");
+
+        assert_eq!(
+            command.validate_manual_posting_type(),
+            Err("movement type 311 must use the transfer endpoint".to_string())
+        );
+    }
+
+    #[test]
+    fn manual_posting_type_accepts_non_transfer_movements() {
+        for movement_type in ["101", "261", "701", "702", "999"] {
+            let command = post_command(movement_type);
+
+            assert!(command.validate_manual_posting_type().is_ok());
+        }
+    }
 }

@@ -1,4 +1,5 @@
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use super::InventoryDomainError;
@@ -109,6 +110,17 @@ impl Quantity {
 
     pub fn from_i32(value: i32) -> Result<Self, InventoryDomainError> {
         Self::new(Decimal::from(value))
+    }
+
+    pub fn to_i32(self) -> Result<i32, InventoryDomainError> {
+        if self.0 <= Decimal::ZERO || self.0.fract() != Decimal::ZERO {
+            return Err(InventoryDomainError::QuantityMustBePositiveInteger);
+        }
+
+        self.0
+            .to_i32()
+            .filter(|value| *value > 0)
+            .ok_or(InventoryDomainError::QuantityMustBePositiveInteger)
     }
 
     pub fn value(&self) -> Decimal {

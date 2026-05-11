@@ -6,6 +6,7 @@ use super::{
     BatchNumber, BinCode, BomId, MaterialId, ProductionOrderId, ProductionOrderStatus, VariantCode,
     WorkCenterId,
 };
+use crate::domain::ProductionDomainError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProductionOrder {
@@ -23,6 +24,73 @@ pub struct ProductionOrder {
     pub created_by: Option<String>,
     pub created_at: Option<OffsetDateTime>,
     pub updated_at: Option<OffsetDateTime>,
+}
+
+impl ProductionOrder {
+    pub fn release(&mut self, component_count: usize) -> Result<(), ProductionDomainError> {
+        self.status.ensure_can_release()?;
+
+        if component_count == 0 {
+            return Err(ProductionDomainError::BomNoComponents);
+        }
+
+        self.status = ProductionOrderStatus::Released;
+        Ok(())
+    }
+
+    pub fn start_or_complete(
+        &mut self,
+        completed_qty: i32,
+    ) -> Result<ProductionCompletionDecision, ProductionDomainError> {
+        self.status.ensure_can_complete()?;
+
+        if completed_qty <= 0 {
+            return Err(ProductionDomainError::ProductionQuantityInvalid);
+        }
+
+        let new_completed_qty = self
+            .completed_qty
+            .checked_add(completed_qty)
+            .ok_or(ProductionDomainError::ProductionQuantityExceeded)?;
+
+        if new_completed_qty > self.planned_qty {
+            return Err(ProductionDomainError::ProductionQuantityExceeded);
+        }
+
+        self.completed_qty = new_completed_qty;
+        self.status = if self.completed_qty >= self.planned_qty {
+            ProductionOrderStatus::Completed
+        } else {
+            ProductionOrderStatus::InProduction
+        };
+
+        Ok(ProductionCompletionDecision {
+            completed_qty,
+            new_completed_qty: self.completed_qty,
+            status: self.status,
+            is_fully_completed: self.status == ProductionOrderStatus::Completed,
+        })
+    }
+
+    pub fn cancel(&mut self) -> Result<(), ProductionDomainError> {
+        self.status.ensure_can_cancel()?;
+        self.status = ProductionOrderStatus::Cancelled;
+        Ok(())
+    }
+
+    pub fn close(&mut self) -> Result<(), ProductionDomainError> {
+        self.status.ensure_can_close()?;
+        self.status = ProductionOrderStatus::Completed;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductionCompletionDecision {
+    pub completed_qty: i32,
+    pub new_completed_qty: i32,
+    pub status: ProductionOrderStatus,
+    pub is_fully_completed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,4 +177,90 @@ pub struct ProductionVariance {
     pub overhead_variance: Decimal,
     pub total_variance: Decimal,
     pub variance_pct: Option<Decimal>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn production_order(
+        status: ProductionOrderStatus,
+        planned_qty: i32,
+        completed_qty: i32,
+    ) -> ProductionOrder {
+        ProductionOrder {
+            order_id: ProductionOrderId("MO-001".to_string()),
+            variant_code: VariantCode("VAR-A".to_string()),
+            finished_material_id: MaterialId("MAT-FG".to_string()),
+            bom_id: BomId("BOM-001".to_string()),
+            planned_qty,
+            completed_qty,
+            work_center_id: WorkCenterId("WC-001".to_string()),
+            planned_start_date: None,
+            planned_end_date: None,
+            status,
+            remark: None,
+            created_by: None,
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn release_requires_planned_order_with_components() {
+        let mut order = production_order(ProductionOrderStatus::Planned, 100, 0);
+
+        order.release(1).expect("planned order can release");
+
+        assert_eq!(order.status, ProductionOrderStatus::Released);
+    }
+
+    #[test]
+    fn release_without_components_is_rejected() {
+        let mut order = production_order(ProductionOrderStatus::Planned, 100, 0);
+
+        let err = order.release(0).expect_err("components are required");
+
+        assert!(matches!(err, ProductionDomainError::BomNoComponents));
+    }
+
+    #[test]
+    fn partial_completion_moves_order_to_in_production() {
+        let mut order = production_order(ProductionOrderStatus::Released, 100, 0);
+
+        let decision = order
+            .start_or_complete(30)
+            .expect("released order can be partially completed");
+
+        assert_eq!(order.completed_qty, 30);
+        assert_eq!(decision.status, ProductionOrderStatus::InProduction);
+        assert!(!decision.is_fully_completed);
+    }
+
+    #[test]
+    fn final_completion_completes_order() {
+        let mut order = production_order(ProductionOrderStatus::InProduction, 100, 70);
+
+        let decision = order
+            .start_or_complete(30)
+            .expect("remaining quantity can be completed");
+
+        assert_eq!(order.completed_qty, 100);
+        assert_eq!(decision.status, ProductionOrderStatus::Completed);
+        assert!(decision.is_fully_completed);
+    }
+
+    #[test]
+    fn completion_cannot_exceed_planned_quantity() {
+        let mut order = production_order(ProductionOrderStatus::Released, 100, 70);
+
+        let err = order
+            .start_or_complete(31)
+            .expect_err("completion cannot exceed remaining quantity");
+
+        assert!(matches!(
+            err,
+            ProductionDomainError::ProductionQuantityExceeded
+        ));
+    }
 }

@@ -1,0 +1,14 @@
+meta {
+  name: 02 Generate Lines
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{base_url}}/api/inventory/counts/{{count_doc_id}}/generate-lines
+  body: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

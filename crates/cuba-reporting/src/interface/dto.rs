@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReportingRequest {
@@ -9,6 +10,25 @@ pub struct ReportingRequest {
 pub struct ReportingResponse {
     pub module: &'static str,
     pub status: &'static str,
+}
+
+/// 报表物化视图刷新请求。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefreshReportsRequest {
+    pub mode: Option<String>,
+    pub concurrently: Option<bool>,
+    pub remark: Option<String>,
+}
+
+/// 报表物化视图刷新响应。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefreshReportsResponse {
+    pub refreshed: bool,
+    pub refreshed_at: OffsetDateTime,
+    pub mode: String,
+    pub concurrently: bool,
+    pub views: Vec<String>,
+    pub remark: Option<String>,
 }
 
 /// 当前库存报表查询参数。
@@ -146,6 +166,20 @@ pub struct InventoryValueExportQuery {
     pub include_headers: Option<bool>,
 }
 
+/// 质量状态报表导出参数。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QualityStatusExportQuery {
+    pub material_id: Option<String>,
+    pub quality_status: Option<String>,
+    pub batch_number: Option<String>,
+
+    /// MVP 仅支持 csv。
+    pub format: Option<String>,
+
+    /// 是否包含表头，默认 true。
+    pub include_headers: Option<bool>,
+}
+
 /// MRP 短缺报表导出参数。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MrpShortageExportQuery {
@@ -169,6 +203,34 @@ pub struct LowStockAlertExportQuery {
     pub material_id: Option<String>,
     pub material_type: Option<String>,
     pub severity: Option<String>,
+
+    /// MVP 仅支持 csv。
+    pub format: Option<String>,
+
+    /// 是否包含表头，默认 true。
+    pub include_headers: Option<bool>,
+}
+
+/// 区域库存矩阵报表导出参数。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StockByZoneExportQuery {
+    pub material_id: Option<String>,
+    pub material_type: Option<String>,
+
+    /// MVP 仅支持 csv。
+    pub format: Option<String>,
+
+    /// 是否包含表头，默认 true。
+    pub include_headers: Option<bool>,
+}
+
+/// 货位库存汇总报表导出参数。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinStockSummaryExportQuery {
+    pub bin_code: Option<String>,
+    pub zone_code: Option<String>,
+    pub only_over_capacity: Option<bool>,
+    pub only_occupied: Option<bool>,
 
     /// MVP 仅支持 csv。
     pub format: Option<String>,

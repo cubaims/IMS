@@ -7,7 +7,7 @@ use crate::{
     application::{
         BatchHistoryQuery, BatchQuery, CurrentStockQuery, InventoryRepository,
         InventoryTransactionQuery, MapHistoryQuery, MapHistoryRepository, PickBatchFefoCommand,
-        PostInventoryCommand, TransferInventoryCommand,
+        PostInventoryCommand, TransferInventoryCommand, common::Page,
     },
     domain::{
         Batch, BatchHistory, BinStock, CurrentStock, InventoryPostingResult, InventoryTransaction,
@@ -47,10 +47,16 @@ impl InventoryService {
             .map_err(|err| AppError::Validation(err.to_string()))?;
 
         command
+            .validate_manual_posting_type()
+            .map_err(|message| AppError::business("INVALID_MOVEMENT_TYPE", message))?;
+
+        command
             .to_domain()
             .map_err(AppError::Validation)?
             .validate()
             .map_err(|err| AppError::Validation(err.to_string()))?;
+
+        command.quantity_as_i32().map_err(AppError::Validation)?;
 
         self.inventory_repo
             .post_inventory_transaction(command, operator)
@@ -80,6 +86,10 @@ impl InventoryService {
             .validate()
             .map_err(|err| AppError::Validation(err.to_string()))?;
 
+        post_command
+            .quantity_as_i32()
+            .map_err(AppError::Validation)?;
+
         self.inventory_repo
             .post_inventory_transaction(post_command, operator)
             .await
@@ -88,18 +98,30 @@ impl InventoryService {
     pub async fn list_current_stock(
         &self,
         query: CurrentStockQuery,
-    ) -> AppResult<Vec<CurrentStock>> {
+    ) -> AppResult<Page<CurrentStock>> {
         self.inventory_repo.list_current_stock(query).await
     }
 
-    pub async fn list_bin_stock(&self, query: CurrentStockQuery) -> AppResult<Vec<BinStock>> {
+    pub async fn list_bin_stock(&self, query: CurrentStockQuery) -> AppResult<Page<BinStock>> {
         self.inventory_repo.list_bin_stock(query).await
+    }
+
+    pub async fn stock_by_zone(&self, query: CurrentStockQuery) -> AppResult<serde_json::Value> {
+        self.inventory_repo.stock_by_zone(query).await
+    }
+
+    pub async fn bin_summary(&self, query: CurrentStockQuery) -> AppResult<serde_json::Value> {
+        self.inventory_repo.bin_summary(query).await
+    }
+
+    pub async fn batch_summary(&self, query: CurrentStockQuery) -> AppResult<serde_json::Value> {
+        self.inventory_repo.batch_summary(query).await
     }
 
     pub async fn list_transactions(
         &self,
         query: InventoryTransactionQuery,
-    ) -> AppResult<Vec<InventoryTransaction>> {
+    ) -> AppResult<Page<InventoryTransaction>> {
         self.inventory_repo.list_transactions(query).await
     }
 
@@ -115,7 +137,7 @@ impl InventoryService {
             })
     }
 
-    pub async fn list_batches(&self, query: BatchQuery) -> AppResult<Vec<Batch>> {
+    pub async fn list_batches(&self, query: BatchQuery) -> AppResult<Page<Batch>> {
         self.batch_repo.list_batches(query).await
     }
 
@@ -130,13 +152,13 @@ impl InventoryService {
         &self,
         batch_number: String,
         query: BatchHistoryQuery,
-    ) -> AppResult<Vec<BatchHistory>> {
+    ) -> AppResult<Page<BatchHistory>> {
         self.batch_repo
             .list_batch_history(batch_number, query)
             .await
     }
 
-    pub async fn list_map_history(&self, query: MapHistoryQuery) -> AppResult<Vec<MapHistory>> {
+    pub async fn list_map_history(&self, query: MapHistoryQuery) -> AppResult<Page<MapHistory>> {
         self.map_history_repo.list_map_history(query).await
     }
 
@@ -144,7 +166,7 @@ impl InventoryService {
         &self,
         material_id: String,
         query: MapHistoryQuery,
-    ) -> AppResult<Vec<MapHistory>> {
+    ) -> AppResult<Page<MapHistory>> {
         self.map_history_repo
             .list_material_map_history(material_id, query)
             .await
@@ -157,6 +179,8 @@ impl InventoryService {
         command
             .validate()
             .map_err(|err| AppError::Validation(err.to_string()))?;
+
+        command.quantity_as_i32().map_err(AppError::Validation)?;
 
         self.batch_repo.pick_batch_fefo(command).await
     }

@@ -1,0 +1,275 @@
+{
+  "info": {
+    "name": "IMS Phase 3 Master Data",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "material_id",
+      "value": "RMPOST001"
+    },
+    {
+      "key": "finished_material_id",
+      "value": "FNPOST001"
+    },
+    {
+      "key": "supplier_id",
+      "value": "SUPPOST001"
+    },
+    {
+      "key": "customer_id",
+      "value": "CUSTPOST001"
+    },
+    {
+      "key": "raw_bin",
+      "value": "RMP001"
+    },
+    {
+      "key": "fg_bin",
+      "value": "FGP001"
+    },
+    {
+      "key": "bom_id",
+      "value": "BOMPOST001"
+    },
+    {
+      "key": "variant_code",
+      "value": "VARPOST001"
+    },
+    {
+      "key": "work_center_id",
+      "value": "WCPOST001"
+    },
+    {
+      "key": "char_id",
+      "value": "CHARPOST001"
+    },
+    {
+      "key": "defect_code",
+      "value": "DEFPOST001"
+    }
+  ],
+  "item": [
+    {
+      "name": "OpenAPI",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/api/openapi/master-data.json"
+      }
+    },
+    {
+      "name": "Create Raw Material",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"material_id\": \"{{material_id}}\",\n  \"material_name\": \"Postman Raw Material\",\n  \"material_type\": \"原材料\",\n  \"base_unit\": \"PCS\",\n  \"default_zone\": \"RM\",\n  \"safety_stock\": 100,\n  \"reorder_point\": 50,\n  \"standard_price\": \"10.00\",\n  \"map_price\": \"10.00\"\n}"
+        },
+        "url": "{{base_url}}/api/master-data/materials"
+      }
+    },
+    {
+      "name": "Create Finished Material",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"material_id\": \"{{finished_material_id}}\",\n  \"material_name\": \"Postman Finished Material\",\n  \"material_type\": \"成品\",\n  \"base_unit\": \"PCS\",\n  \"default_zone\": \"FG\",\n  \"safety_stock\": 20,\n  \"reorder_point\": 10,\n  \"standard_price\": \"100.00\",\n  \"map_price\": \"100.00\"\n}"
+        },
+        "url": "{{base_url}}/api/master-data/materials"
+      }
+    },
+    {
+      "name": "Create Raw Bin",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"bin_code\": \"{{raw_bin}}\",\n  \"zone\": \"RM\",\n  \"bin_type\": \"普通货位\",\n  \"capacity\": 10000,\n  \"notes\": \"Postman raw bin\"\n}"
+        },
+        "url": "{{base_url}}/api/master-data/bins"
+      }
+    },
+    {
+      "name": "Create Finished Bin",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"bin_code\": \"{{fg_bin}}\",\n  \"zone\": \"FG\",\n  \"bin_type\": \"普通货位\",\n  \"capacity\": 10000,\n  \"notes\": \"Postman finished bin\"\n}"
+        },
+        "url": "{{base_url}}/api/master-data/bins"
+      }
+    },
+    {
+      "name": "Create Supplier",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"supplier_id\": \"{{supplier_id}}\",\n  \"supplier_name\": \"Postman Supplier\",\n  \"contact_person\": \"Tester\",\n  \"phone\": \"13800000000\",\n  \"email\": \"supplier@example.com\",\n  \"address\": \"Test Address\",\n  \"quality_rating\": \"A\"\n}"
+        },
+        "url": "{{base_url}}/api/master-data/suppliers"
+      }
+    },
+    {
+      "name": "Bind Material Supplier",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"material_id\": \"{{material_id}}\",\n  \"supplier_id\": \"{{supplier_id}}\",\n  \"is_primary\": false,\n  \"supplier_material_code\": \"SUP-{{material_id}}\",\n  \"purchase_price\": \"9.50\",\n  \"currency\": \"CNY\",\n  \"lead_time_days\": 7,\n  \"moq\": 100,\n  \"quality_rating\": \"A\"\n}"
+        },
+        "url": "{{base_url}}/api/master-data/materials/{{material_id}}/suppliers"
+      }
+    },
+    {
+      "name": "Set Primary Supplier",
+      "request": {
+        "method": "POST",
+        "url": "{{base_url}}/api/master-data/materials/{{material_id}}/suppliers/{{supplier_id}}/primary"
+      }
+    },
+    {
+      "name": "Create Customer",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"customer_id\": \"{{customer_id}}\",\n  \"customer_name\": \"Postman Customer\",\n  \"contact_person\": \"Buyer\",\n  \"phone\": \"13900000000\",\n  \"email\": \"customer@example.com\",\n  \"address\": \"Customer Address\",\n  \"credit_limit\": \"100000.00\"\n}"
+        },
+        "url": "{{base_url}}/api/master-data/customers"
+      }
+    },
+    {
+      "name": "Create BOM",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"bom_id\": \"{{bom_id}}\",\n  \"bom_name\": \"Postman BOM\",\n  \"parent_material_id\": \"{{finished_material_id}}\",\n  \"variant_code\": null,\n  \"version\": \"1.0\",\n  \"base_quantity\": \"1.00\",\n  \"valid_from\": \"2026-05-01\",\n  \"valid_to\": null,\n  \"status\": \"草稿\",\n  \"notes\": \"Postman BOM\"\n}"
+        },
+        "url": "{{base_url}}/api/master-data/boms"
+      }
+    },
+    {
+      "name": "Add BOM Component",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"bom_id\": \"{{bom_id}}\",\n  \"parent_material_id\": \"{{finished_material_id}}\",\n  \"component_material_id\": \"{{material_id}}\",\n  \"quantity\": \"2.00\",\n  \"unit\": \"PCS\",\n  \"bom_level\": 1,\n  \"scrap_rate\": \"0.00\",\n  \"is_critical\": true\n}"
+        },
+        "url": "{{base_url}}/api/master-data/boms/{{bom_id}}/components"
+      }
+    },
+    {
+      "name": "Activate BOM",
+      "request": {
+        "method": "POST",
+        "url": "{{base_url}}/api/master-data/boms/{{bom_id}}/activate"
+      }
+    },
+    {
+      "name": "Validate BOM",
+      "request": {
+        "method": "POST",
+        "url": "{{base_url}}/api/master-data/boms/{{bom_id}}/validate"
+      }
+    },
+    {
+      "name": "Get BOM Tree",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/api/master-data/boms/{{bom_id}}/tree"
+      }
+    },
+    {
+      "name": "Preview BOM Explosion",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"quantity\": 5\n}"
+        },
+        "url": "{{base_url}}/api/master-data/boms/{{bom_id}}/explode-preview"
+      }
+    },
+    {
+      "name": "Create Product Variant",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"variant_code\": \"{{variant_code}}\",\n  \"variant_name\": \"Postman Variant\",\n  \"base_material_id\": \"{{finished_material_id}}\",\n  \"bom_id\": \"{{bom_id}}\",\n  \"standard_cost\": \"120.00\"\n}"
+        },
+        "url": "{{base_url}}/api/master-data/product-variants"
+      }
+    },
+    {
+      "name": "Create Work Center",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"work_center_id\": \"{{work_center_id}}\",\n  \"work_center_name\": \"Postman Work Center\",\n  \"location\": \"Workshop A\",\n  \"capacity_per_day\": 1000,\n  \"efficiency\": \"100.00\"\n}"
+        },
+        "url": "{{base_url}}/api/master-data/work-centers"
+      }
+    },
+    {
+      "name": "Create Inspection Characteristic",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"char_id\": \"{{char_id}}\",\n  \"char_name\": \"Postman Dimension\",\n  \"material_type\": \"原材料\",\n  \"inspection_type\": \"来料检验\",\n  \"method\": \"Caliper\",\n  \"standard\": \"10 plus/minus 0.2\",\n  \"unit\": \"mm\",\n  \"lower_limit\": \"9.80\",\n  \"upper_limit\": \"10.20\",\n  \"is_critical\": true\n}"
+        },
+        "url": "{{base_url}}/api/master-data/inspection-chars"
+      }
+    },
+    {
+      "name": "Create Defect Code",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"defect_code\": \"{{defect_code}}\",\n  \"defect_name\": \"Postman Scratch\",\n  \"category\": \"外观\",\n  \"severity\": \"一般\",\n  \"description\": \"Postman defect code\"\n}"
+        },
+        "url": "{{base_url}}/api/master-data/defect-codes"
+      }
+    }
+  ]
+}

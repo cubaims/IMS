@@ -1,9 +1,9 @@
 use argon2::{
     Argon2,
-    password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
+    password_hash::{Error, PasswordHasher, SaltString, rand_core::OsRng},
 };
 
-fn main() {
+fn main() -> Result<(), Error> {
     let args: Vec<String> = std::env::args().collect();
     let password = if args.len() > 1 {
         &args[1]
@@ -15,10 +15,11 @@ fn main() {
     let argon2 = Argon2::default();
 
     let password_hash = argon2
-        .hash_password(password.as_bytes(), &salt)
-        .unwrap()
+        .hash_password(password.as_bytes(), &salt)?
         .to_string();
 
-    println!("Password: {}", password);
-    println!("Hash: {}", password_hash);
+    println!("Password: {password}");
+    println!("Hash: {password_hash}");
+
+    Ok(())
 }

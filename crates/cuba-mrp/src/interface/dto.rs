@@ -31,6 +31,12 @@ pub struct RunMrpRequest {
 pub struct RunMrpResponse {
     pub run_id: MrpRunId,
     pub status: MrpRunStatus,
+    pub variant_code: Option<String>,
+    pub finished_material_id: Option<String>,
+    pub demand_qty: Decimal,
+    pub demand_date: Date,
+    pub suggestion_count: u64,
+    pub shortage_count: u64,
 }
 
 /// MRP 运行记录查询参数。
@@ -45,7 +51,6 @@ pub struct MrpRunsQueryRequest {
     pub page_size: Option<u64>,
 }
 
-
 /// MRP 建议查询参数。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MrpSuggestionsQueryRequest {
@@ -55,10 +60,28 @@ pub struct MrpSuggestionsQueryRequest {
     pub status: Option<MrpSuggestionStatus>,
     pub date_from: Option<time::OffsetDateTime>,
     pub date_to: Option<time::OffsetDateTime>,
+    pub only_shortage: Option<bool>,
     pub page: Option<u64>,
     pub page_size: Option<u64>,
 }
 
+/// MRP 建议导出参数。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MrpSuggestionsExportQueryRequest {
+    pub run_id: Option<String>,
+    pub material_id: Option<String>,
+    pub suggestion_type: Option<MrpSuggestionType>,
+    pub status: Option<MrpSuggestionStatus>,
+    pub date_from: Option<time::OffsetDateTime>,
+    pub date_to: Option<time::OffsetDateTime>,
+    pub only_shortage: Option<bool>,
+
+    /// MVP 仅支持 csv。
+    pub format: Option<String>,
+
+    /// 是否包含表头，默认 true。
+    pub include_headers: Option<bool>,
+}
 
 /// 确认 MRP 建议请求。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,7 +95,6 @@ pub struct ConfirmMrpSuggestionResponse {
     pub suggestion_id: crate::domain::MrpSuggestionId,
     pub status: crate::domain::MrpSuggestionStatus,
 }
-
 
 /// 取消 MRP 建议请求。
 #[derive(Debug, Clone, Serialize, Deserialize)]

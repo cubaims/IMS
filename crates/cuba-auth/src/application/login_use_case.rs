@@ -1,7 +1,7 @@
 use crate::domain::{JwtClaims, User};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use cuba_shared::{AppError, CurrentUser};
-use jsonwebtoken::{encode, EncodingKey, Header};
+use jsonwebtoken::{EncodingKey, Header, encode};
 use time::{Duration, OffsetDateTime};
 use tracing::info;
 
@@ -38,25 +38,7 @@ impl LoginUseCase {
             return Err(AppError::PermissionDenied("用户已被禁用".to_string()));
         }
 
-        let now = OffsetDateTime::now_utc();
-        let exp = now + Duration::seconds(self.jwt_expires_seconds);
-
-        let claims = JwtClaims {
-            sub: user.user_id,
-            username: user.username.clone(),
-            roles: roles.clone(),
-            permissions: permissions.clone(),
-            exp: exp.unix_timestamp() as usize,
-            iat: now.unix_timestamp() as usize,
-            iss: self.jwt_issuer.clone(),
-        };
-
-        let token = encode(
-            &Header::default(),
-            &claims,
-            &EncodingKey::from_secret(self.jwt_secret.as_bytes()),
-        )
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let token = self.issue_access_token(user, &roles, &permissions)?;
 
         let current_user = CurrentUser {
             user_id: user.user_id,
@@ -70,5 +52,33 @@ impl LoginUseCase {
         info!(user_id = %user.user_id, username = %user.username, "用户登录成功");
 
         Ok((token, current_user))
+    }
+
+    pub fn issue_access_token(
+        &self,
+        user: &User,
+        roles: &[String],
+        permissions: &[String],
+    ) -> Result<String, AppError> {
+        let now = OffsetDateTime::now_utc();
+        let exp = now + Duration::seconds(self.jwt_expires_seconds);
+
+        let claims = JwtClaims {
+            sub: user.user_id,
+            username: user.username.clone(),
+            roles: roles.to_vec(),
+            permissions: permissions.to_vec(),
+            token_type: "access".to_string(),
+            exp: exp.unix_timestamp() as usize,
+            iat: now.unix_timestamp() as usize,
+            iss: self.jwt_issuer.clone(),
+        };
+
+        encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(self.jwt_secret.as_bytes()),
+        )
+        .map_err(|e| AppError::Internal(e.to_string()))
     }
 }

@@ -13,6 +13,8 @@ use crate::{
     },
 };
 
+use super::Page;
+
 #[async_trait]
 pub trait InventoryRepository: Send + Sync {
     async fn post_inventory_transaction(
@@ -21,14 +23,20 @@ pub trait InventoryRepository: Send + Sync {
         operator: String,
     ) -> AppResult<InventoryPostingResult>;
 
-    async fn list_current_stock(&self, query: CurrentStockQuery) -> AppResult<Vec<CurrentStock>>;
+    async fn list_current_stock(&self, query: CurrentStockQuery) -> AppResult<Page<CurrentStock>>;
 
-    async fn list_bin_stock(&self, query: CurrentStockQuery) -> AppResult<Vec<BinStock>>;
+    async fn list_bin_stock(&self, query: CurrentStockQuery) -> AppResult<Page<BinStock>>;
+
+    async fn stock_by_zone(&self, query: CurrentStockQuery) -> AppResult<serde_json::Value>;
+
+    async fn bin_summary(&self, query: CurrentStockQuery) -> AppResult<serde_json::Value>;
+
+    async fn batch_summary(&self, query: CurrentStockQuery) -> AppResult<serde_json::Value>;
 
     async fn list_transactions(
         &self,
         query: InventoryTransactionQuery,
-    ) -> AppResult<Vec<InventoryTransaction>>;
+    ) -> AppResult<Page<InventoryTransaction>>;
 
     async fn get_transaction(
         &self,
@@ -38,7 +46,7 @@ pub trait InventoryRepository: Send + Sync {
 
 #[async_trait]
 pub trait BatchRepository: Send + Sync {
-    async fn list_batches(&self, query: BatchQuery) -> AppResult<Vec<Batch>>;
+    async fn list_batches(&self, query: BatchQuery) -> AppResult<Page<Batch>>;
 
     async fn get_batch(&self, batch_number: String) -> AppResult<Option<Batch>>;
 
@@ -46,18 +54,18 @@ pub trait BatchRepository: Send + Sync {
         &self,
         batch_number: String,
         query: BatchHistoryQuery,
-    ) -> AppResult<Vec<BatchHistory>>;
+    ) -> AppResult<Page<BatchHistory>>;
 
     async fn pick_batch_fefo(&self, command: PickBatchFefoCommand) -> AppResult<serde_json::Value>;
 }
 
 #[async_trait]
 pub trait MapHistoryRepository: Send + Sync {
-    async fn list_map_history(&self, query: MapHistoryQuery) -> AppResult<Vec<MapHistory>>;
+    async fn list_map_history(&self, query: MapHistoryQuery) -> AppResult<Page<MapHistory>>;
 
     async fn list_material_map_history(
         &self,
         material_id: String,
         query: MapHistoryQuery,
-    ) -> AppResult<Vec<MapHistory>>;
+    ) -> AppResult<Page<MapHistory>>;
 }

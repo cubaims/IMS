@@ -7,9 +7,9 @@ use crate::domain::{
     MrpSuggestionId, MrpSuggestionStatus, MrpSuggestionType, Operator, ProductVariantId,
 };
 use async_trait::async_trait;
-use cuba_shared::Page;
-use rust_decimal::prelude::ToPrimitive;
+use cuba_shared::{AppError, Page};
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use time::{Date, OffsetDateTime, Time};
@@ -31,6 +31,35 @@ impl PostgresMrpStore {
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    pub async fn count_suggestions_for_run(&self, run_id: &MrpRunId) -> MrpResult<(u64, u64)> {
+        let suggestion_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM wms.wms_mrp_suggestions
+            WHERE run_id = $1
+            "#,
+        )
+        .bind(run_id.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_mrp_db_error)?;
+
+        let shortage_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM wms.wms_mrp_suggestions
+            WHERE run_id = $1
+              AND COALESCE(shortage_qty, 0) > 0
+            "#,
+        )
+        .bind(run_id.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_mrp_db_error)?;
+
+        Ok((suggestion_count.max(0) as u64, shortage_count.max(0) as u64))
     }
 }
 
@@ -67,8 +96,39 @@ impl MrpIdGenerator for PostgresMrpIdGenerator {
 // 通用错误映射
 // =============================================================================
 
-fn map_sqlx_error(error: sqlx::Error) -> MrpError {
-    MrpError::BusinessRuleViolation(format!("数据库错误：{error}"))
+fn map_mrp_db_error(error: sqlx::Error) -> MrpError {
+    match cuba_shared::map_mrp_db_error(error) {
+        AppError::Business {
+            code: "MRP_RUN_NOT_FOUND",
+            ..
+        } => MrpError::MrpRunNotFound,
+        AppError::Business {
+            code: "MRP_SUGGESTION_NOT_FOUND",
+            ..
+        } => MrpError::MrpSuggestionNotFound,
+        AppError::Business {
+            code: "MRP_SUGGESTION_STATUS_INVALID",
+            ..
+        } => MrpError::MrpSuggestionStatusInvalid,
+        AppError::Business {
+            code: "MRP_MATERIAL_NOT_FOUND_OR_INACTIVE",
+            ..
+        } => MrpError::MaterialNotFoundOrInactive,
+        AppError::Business {
+            code: "MRP_VARIANT_NOT_FOUND",
+            ..
+        } => MrpError::ProductVariantNotFound,
+        AppError::Business {
+            code: "MRP_RUN_FAILED",
+            ..
+        } => MrpError::MrpRunFailed,
+        AppError::Business { code, message } => {
+            MrpError::BusinessRuleViolation(format!("{code}: {message}"))
+        }
+        AppError::Validation(message) => MrpError::BusinessRuleViolation(message),
+        AppError::Database { .. } | AppError::Internal(_) => MrpError::MrpRunFailed,
+        other => MrpError::BusinessRuleViolation(other.public_message()),
+    }
 }
 
 // =============================================================================
@@ -98,6 +158,7 @@ fn run_status_to_db(status: MrpRunStatus) -> &'static str {
         MrpRunStatus::Running => "运行中",
         MrpRunStatus::Completed => "完成",
         MrpRunStatus::Failed => "取消",
+        MrpRunStatus::Cancelled => "取消",
     }
 }
 
@@ -105,7 +166,7 @@ fn run_status_from_db(value: &str) -> MrpRunStatus {
     match value {
         "运行中" => MrpRunStatus::Running,
         "完成" => MrpRunStatus::Completed,
-        "取消" => MrpRunStatus::Failed,
+        "取消" => MrpRunStatus::Cancelled,
         _ => MrpRunStatus::Running,
     }
 }
@@ -114,7 +175,7 @@ fn suggestion_type_from_db(value: Option<String>) -> MrpSuggestionType {
     match value.as_deref() {
         Some("生产订单") => MrpSuggestionType::Production,
         Some("采购申请") => MrpSuggestionType::Purchase,
-        Some("转储建议") => MrpSuggestionType::Purchase,
+        Some("转储建议") | Some("调拨建议") => MrpSuggestionType::Transfer,
         _ => MrpSuggestionType::Purchase,
     }
 }
@@ -123,12 +184,13 @@ fn suggestion_type_to_db(value: MrpSuggestionType) -> &'static str {
     match value {
         MrpSuggestionType::Purchase => "采购申请",
         MrpSuggestionType::Production => "生产订单",
+        MrpSuggestionType::Transfer => "转储建议",
     }
 }
 
 fn suggestion_status_to_code(value: MrpSuggestionStatus) -> &'static str {
     match value {
-        MrpSuggestionStatus::New => "NEW",
+        MrpSuggestionStatus::Open => "OPEN",
         MrpSuggestionStatus::Confirmed => "CONFIRMED",
         MrpSuggestionStatus::Cancelled => "CANCELLED",
         MrpSuggestionStatus::Converted => "CONVERTED",
@@ -140,7 +202,8 @@ fn suggestion_status_from_code(value: Option<&str>) -> MrpSuggestionStatus {
         Some("CONFIRMED") => MrpSuggestionStatus::Confirmed,
         Some("CANCELLED") => MrpSuggestionStatus::Cancelled,
         Some("CONVERTED") => MrpSuggestionStatus::Converted,
-        _ => MrpSuggestionStatus::New,
+        Some("NEW") | Some("OPEN") | None => MrpSuggestionStatus::Open,
+        _ => MrpSuggestionStatus::Open,
     }
 }
 
@@ -253,10 +316,24 @@ fn mrp_suggestion_from_row(row: &sqlx::postgres::PgRow) -> MrpResult<MrpSuggesti
             row.get::<Option<String>, _>("suggested_order_type"),
         ),
         material_id: MaterialId::new(row.get::<String, _>("material_id")),
+        bom_level: row.get::<Option<i32>, _>("bom_level").unwrap_or(0),
+        gross_requirement_qty: Decimal::from(
+            row.get::<Option<i32>, _>("gross_requirement_qty")
+                .unwrap_or(0),
+        ),
+        required_qty: Decimal::from(row.get::<Option<i32>, _>("required_qty").unwrap_or(0)),
+        available_qty: Decimal::from(row.get::<Option<i32>, _>("available_qty").unwrap_or(0)),
+        safety_stock_qty: Decimal::from(row.get::<Option<i32>, _>("safety_stock_qty").unwrap_or(0)),
+        shortage_qty: Decimal::from(row.get::<Option<i32>, _>("shortage_qty").unwrap_or(0)),
+        net_requirement_qty: Decimal::from(row.get::<Option<i32>, _>("shortage_qty").unwrap_or(0)),
         suggested_qty: Decimal::from(
             row.get::<Option<i32>, _>("suggested_order_qty")
                 .unwrap_or(0),
         ),
+        recommended_bin: row.get::<Option<String>, _>("recommended_bin"),
+        recommended_batch: row.get::<Option<String>, _>("recommended_batch"),
+        lead_time_days: row.get::<Option<i32>, _>("lead_time_days"),
+        priority: row.get::<Option<i32>, _>("priority"),
         required_date,
         suggested_date,
         supplier_id: None,
@@ -324,7 +401,7 @@ impl MrpRunRepository for PostgresMrpStore {
         .bind(run.created_at)
         .execute(&self.pool)
         .await
-        .map_err(map_sqlx_error)?;
+        .map_err(map_mrp_db_error)?;
 
         Ok(run.id.clone())
     }
@@ -349,7 +426,7 @@ impl MrpRunRepository for PostgresMrpStore {
         .bind(run_id.as_str())
         .fetch_optional(&self.pool)
         .await
-        .map_err(map_sqlx_error)?;
+        .map_err(map_mrp_db_error)?;
 
         match row {
             Some(row) => Ok(Some(mrp_run_from_row(&row)?)),
@@ -378,7 +455,7 @@ impl MrpRunRepository for PostgresMrpStore {
         .bind(run_id.as_str())
         .fetch_optional(&self.pool)
         .await
-        .map_err(map_sqlx_error)?;
+        .map_err(map_mrp_db_error)?;
 
         let Some(row) = row else {
             return Err(MrpError::MrpRunNotFound);
@@ -402,7 +479,7 @@ impl MrpRunRepository for PostgresMrpStore {
         .bind(run.started_at)
         .execute(&self.pool)
         .await
-        .map_err(map_sqlx_error)?;
+        .map_err(map_mrp_db_error)?;
 
         if result.rows_affected() == 0 {
             return Err(MrpError::MrpRunNotFound);
@@ -439,7 +516,7 @@ impl MrpRunRepository for PostgresMrpStore {
         .bind(query.date_to)
         .fetch_one(&self.pool)
         .await
-        .map_err(map_sqlx_error)?;
+        .map_err(map_mrp_db_error)?;
 
         let rows = sqlx::query(
             r#"
@@ -470,7 +547,7 @@ impl MrpRunRepository for PostgresMrpStore {
         .bind(offset)
         .fetch_all(&self.pool)
         .await
-        .map_err(map_sqlx_error)?;
+        .map_err(map_mrp_db_error)?;
 
         let mut items = Vec::with_capacity(rows.len());
 
@@ -534,7 +611,7 @@ impl MrpSuggestionRepository for PostgresMrpStore {
         .bind(id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(map_sqlx_error)?;
+        .map_err(map_mrp_db_error)?;
 
         match row {
             Some(row) => Ok(Some(mrp_suggestion_from_row(&row)?)),
@@ -576,7 +653,7 @@ impl MrpSuggestionRepository for PostgresMrpStore {
         .bind(id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(map_sqlx_error)?;
+        .map_err(map_mrp_db_error)?;
 
         let Some(row) = row else {
             return Err(MrpError::MrpSuggestionNotFound);
@@ -612,7 +689,7 @@ impl MrpSuggestionRepository for PostgresMrpStore {
             .bind(remarks)
             .execute(&self.pool)
             .await
-            .map_err(map_sqlx_error)?;
+            .map_err(map_mrp_db_error)?;
 
         if result.rows_affected() == 0 {
             return Err(MrpError::MrpSuggestionNotFound);
@@ -669,7 +746,7 @@ impl MrpSuggestionRepository for PostgresMrpStore {
         .bind(suggestion_type)
         .fetch_all(&self.pool)
         .await
-        .map_err(map_sqlx_error)?;
+        .map_err(map_mrp_db_error)?;
 
         let mut filtered = Vec::with_capacity(rows.len());
 
@@ -694,16 +771,16 @@ impl MrpSuggestionRepository for PostgresMrpStore {
                 }
             }
 
+            if query.only_shortage.unwrap_or(false) && suggestion.shortage_qty <= Decimal::ZERO {
+                continue;
+            }
+
             filtered.push(suggestion);
         }
 
         let total = filtered.len() as u64;
 
-        let items = filtered
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .collect();
+        let items = filtered.into_iter().skip(offset).take(limit).collect();
 
         Ok(Page::new(items, total, page, page_size))
     }
@@ -752,7 +829,7 @@ impl MrpPlannerGateway for PostgresMrpStore {
         .bind(run.created_by.as_str())
         .fetch_one(&self.pool)
         .await
-        .map_err(map_sqlx_error)?;
+        .map_err(map_mrp_db_error)?;
 
         Ok(MrpRunId::new(db_run_id))
     }
@@ -778,7 +855,7 @@ impl MrpMasterRepository for PostgresMrpStore {
         .bind(material_id.as_str())
         .fetch_one(&self.pool)
         .await
-        .map_err(map_sqlx_error)?;
+        .map_err(map_mrp_db_error)?;
 
         Ok(exists)
     }
@@ -800,8 +877,32 @@ impl MrpMasterRepository for PostgresMrpStore {
         .bind(product_variant_id.as_str())
         .fetch_one(&self.pool)
         .await
-        .map_err(map_sqlx_error)?;
+        .map_err(map_mrp_db_error)?;
 
         Ok(exists)
+    }
+
+    async fn find_active_variant_by_material(
+        &self,
+        material_id: &MaterialId,
+    ) -> MrpResult<Option<ProductVariantId>> {
+        let variant_code: Option<String> = sqlx::query_scalar(
+            r#"
+            SELECT variant_code
+            FROM mdm.mdm_product_variants
+            WHERE base_material_id = $1
+              AND is_active = TRUE
+            ORDER BY
+                CASE WHEN bom_id IS NULL THEN 1 ELSE 0 END,
+                variant_code ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(material_id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_mrp_db_error)?;
+
+        Ok(variant_code.map(ProductVariantId::new))
     }
 }

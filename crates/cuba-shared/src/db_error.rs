@@ -17,41 +17,126 @@ use sqlx::Error as SqlxError;
 /// 我们按 SQLSTATE 把常见约束转成对前端友好的 `Validation`(可在 UI 上提示用户修正),
 /// 其余的(连接错、解码错等)走通用 `Database`,进 INTERNAL_SERVER_ERROR 并落日志。
 pub fn map_master_data_db_error(err: SqlxError) -> AppError {
+    if let Some(mapped) = map_common_db_error(&err) {
+        return mapped;
+    }
+
+    AppError::raw_database(err)
+}
+
+pub fn map_auth_db_error(err: SqlxError) -> AppError {
+    if let Some(mapped) = map_common_db_error(&err) {
+        return mapped;
+    }
+
+    AppError::raw_database(err)
+}
+
+pub fn map_purchase_db_error(err: SqlxError) -> AppError {
+    map_inventory_or_common_db_error(err)
+}
+
+pub fn map_sales_db_error(err: SqlxError) -> AppError {
+    map_inventory_or_common_db_error(err)
+}
+
+pub fn map_quality_db_error(err: SqlxError) -> AppError {
     if let SqlxError::Database(db_err) = &err {
         if let Some(code) = db_err.code() {
-            // 真实约束细节(包含表名、约束名)落日志,不进响应
             match code.as_ref() {
-                // unique_violation
-                "23505" => {
-                    tracing::warn!(error = %db_err.message(), "unique constraint violated");
-                    return AppError::Validation(
-                        "记录已存在:违反唯一约束(主键或唯一字段重复)".to_string(),
+                "INSPECTION_LOT_NOT_FOUND" => {
+                    return AppError::business("INSPECTION_LOT_NOT_FOUND", "检验批不存在");
+                }
+                "INSPECTION_CHAR_NOT_FOUND" => {
+                    return AppError::business("INSPECTION_CHAR_NOT_FOUND", "检验特性不存在");
+                }
+                "DEFECT_CODE_NOT_FOUND" => {
+                    return AppError::business("DEFECT_CODE_NOT_FOUND", "不良代码不存在");
+                }
+                "BATCH_FROZEN" => return AppError::business("BATCH_FROZEN", "批次已冻结"),
+                "BATCH_SCRAPPED" => return AppError::business("BATCH_SCRAPPED", "批次已报废"),
+                _ => {}
+            }
+        }
+    }
+
+    let message = err.to_string();
+    if message.contains("检验批") && message.contains("不存在") {
+        return AppError::business("INSPECTION_LOT_NOT_FOUND", "检验批不存在");
+    }
+    if message.contains("检验特性") && message.contains("不存在") {
+        return AppError::business("INSPECTION_CHAR_NOT_FOUND", "检验特性不存在");
+    }
+    if message.contains("不良代码") && message.contains("不存在") {
+        return AppError::business("DEFECT_CODE_NOT_FOUND", "不良代码不存在");
+    }
+
+    map_inventory_db_error(err)
+}
+
+pub fn map_traceability_db_error(err: SqlxError) -> AppError {
+    if let Some(mapped) = map_common_db_error(&err) {
+        return mapped;
+    }
+
+    AppError::business("TRACE_QUERY_FAILED", "追溯查询失败")
+}
+
+pub fn map_mrp_db_error(err: SqlxError) -> AppError {
+    if let SqlxError::Database(db_err) = &err {
+        if let Some(code) = db_err.code() {
+            match code.as_ref() {
+                "MRP_RUN_NOT_FOUND" => {
+                    return AppError::business("MRP_RUN_NOT_FOUND", "MRP 运行记录不存在");
+                }
+                "MRP_SUGGESTION_NOT_FOUND" => {
+                    return AppError::business("MRP_SUGGESTION_NOT_FOUND", "MRP 建议不存在");
+                }
+                "MRP_VARIANT_NOT_FOUND" => {
+                    return AppError::business("MRP_VARIANT_NOT_FOUND", "产品变体不存在");
+                }
+                "MRP_MATERIAL_NOT_FOUND_OR_INACTIVE" => {
+                    return AppError::business(
+                        "MRP_MATERIAL_NOT_FOUND_OR_INACTIVE",
+                        "物料不存在或未启用",
                     );
                 }
-                // foreign_key_violation
-                "23503" => {
-                    tracing::warn!(error = %db_err.message(), "fk constraint violated");
-                    return AppError::Validation(
-                        "外键约束失败:引用的关联记录不存在,或本记录正被其他数据引用而无法删除"
-                            .to_string(),
-                    );
-                }
-                // not_null_violation
-                "23502" => {
-                    tracing::warn!(error = %db_err.message(), "not null constraint violated");
-                    return AppError::Validation("必填字段缺失".to_string());
-                }
-                // check_violation
-                "23514" => {
-                    tracing::warn!(error = %db_err.message(), "check constraint violated");
-                    return AppError::Validation(
-                        "数据值不符合约束规则,请检查取值范围或格式".to_string(),
+                "MRP_SUGGESTION_STATUS_INVALID" => {
+                    return AppError::business(
+                        "MRP_SUGGESTION_STATUS_INVALID",
+                        "MRP 建议状态不允许当前操作",
                     );
                 }
                 _ => {}
             }
         }
     }
+
+    let message = err.to_string();
+    if message.contains("MRP") && message.contains("不存在") {
+        return AppError::business("MRP_RUN_NOT_FOUND", "MRP 运行记录不存在");
+    }
+
+    if let Some(mapped) = map_common_db_error(&err) {
+        return mapped;
+    }
+
+    AppError::business("MRP_RUN_FAILED", "MRP 数据库操作失败")
+}
+
+pub fn map_reporting_db_error(err: SqlxError) -> AppError {
+    if let Some(mapped) = map_common_db_error(&err) {
+        return mapped;
+    }
+
+    AppError::business("REPORT_QUERY_FAILED", "报表数据库操作失败")
+}
+
+pub fn map_worker_db_error(err: SqlxError) -> AppError {
+    if let Some(mapped) = map_common_db_error(&err) {
+        return mapped;
+    }
+
     AppError::raw_database(err)
 }
 
@@ -127,6 +212,10 @@ pub fn map_inventory_db_error(err: SqlxError) -> AppError {
         return AppError::business("BATCH_NOT_FOUND", "批次不存在");
     }
 
+    if let Some(mapped) = map_common_db_error(&err) {
+        return mapped;
+    }
+
     AppError::raw_database(err)
 }
 
@@ -174,4 +263,184 @@ pub fn map_production_db_error(err: SqlxError) -> AppError {
     }
 
     map_inventory_db_error(err)
+}
+
+fn map_inventory_or_common_db_error(err: SqlxError) -> AppError {
+    map_inventory_db_error(err)
+}
+
+fn map_common_db_error(err: &SqlxError) -> Option<AppError> {
+    if matches!(err, SqlxError::RowNotFound) {
+        return Some(AppError::NotFound("记录不存在".to_string()));
+    }
+
+    let SqlxError::Database(db_err) = err else {
+        return None;
+    };
+
+    let code = db_err.code()?;
+
+    // 真实约束细节(包含表名、约束名)落日志,不进响应
+    match code.as_ref() {
+        // unique_violation
+        "23505" => {
+            tracing::warn!(error = %db_err.message(), "unique constraint violated");
+            Some(AppError::business(
+                "DUPLICATE_RECORD",
+                "记录已存在:违反唯一约束(主键或唯一字段重复)",
+            ))
+        }
+        // foreign_key_violation
+        "23503" => {
+            tracing::warn!(error = %db_err.message(), "fk constraint violated");
+            Some(AppError::Validation(
+                "外键约束失败:引用的关联记录不存在,或本记录正被其他数据引用而无法删除".to_string(),
+            ))
+        }
+        // not_null_violation
+        "23502" => {
+            tracing::warn!(error = %db_err.message(), "not null constraint violated");
+            Some(AppError::Validation("必填字段缺失".to_string()))
+        }
+        // check_violation
+        "23514" => {
+            tracing::warn!(error = %db_err.message(), "check constraint violated");
+            Some(AppError::Validation(
+                "数据值不符合约束规则,请检查取值范围或格式".to_string(),
+            ))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        borrow::Cow,
+        error::Error as StdError,
+        fmt::{self, Display, Formatter},
+    };
+
+    use super::*;
+    use sqlx::error::ErrorKind;
+
+    #[derive(Debug)]
+    struct StubDbError {
+        code: Option<&'static str>,
+        message: &'static str,
+    }
+
+    impl Display for StubDbError {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            f.write_str(self.message)
+        }
+    }
+
+    impl StdError for StubDbError {}
+
+    impl sqlx::error::DatabaseError for StubDbError {
+        fn message(&self) -> &str {
+            self.message
+        }
+
+        fn code(&self) -> Option<Cow<'_, str>> {
+            self.code.map(Cow::Borrowed)
+        }
+
+        fn as_error(&self) -> &(dyn StdError + Send + Sync + 'static) {
+            self
+        }
+
+        fn as_error_mut(&mut self) -> &mut (dyn StdError + Send + Sync + 'static) {
+            self
+        }
+
+        fn into_error(self: Box<Self>) -> Box<dyn StdError + Send + Sync + 'static> {
+            self
+        }
+
+        fn kind(&self) -> ErrorKind {
+            match self.code {
+                Some("23505") => ErrorKind::UniqueViolation,
+                Some("23503") => ErrorKind::ForeignKeyViolation,
+                Some("23502") => ErrorKind::NotNullViolation,
+                Some("23514") => ErrorKind::CheckViolation,
+                _ => ErrorKind::Other,
+            }
+        }
+    }
+
+    fn db_error(code: Option<&'static str>, message: &'static str, _kind: ErrorKind) -> SqlxError {
+        SqlxError::Database(Box::new(StubDbError { code, message }))
+    }
+
+    #[test]
+    fn row_not_found_maps_to_not_found() {
+        let err = map_master_data_db_error(SqlxError::RowNotFound);
+
+        assert!(matches!(err, AppError::NotFound(_)));
+        assert_eq!(err.error_code(), "NOT_FOUND");
+        assert_eq!(err.http_status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn duplicate_constraint_maps_to_business_conflict() {
+        let err = map_master_data_db_error(db_error(
+            Some("23505"),
+            "duplicate key value violates unique constraint",
+            ErrorKind::UniqueViolation,
+        ));
+
+        assert!(matches!(
+            err,
+            AppError::Business {
+                code: "DUPLICATE_RECORD",
+                ..
+            }
+        ));
+        assert_eq!(err.http_status(), axum::http::StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn foreign_key_constraint_maps_to_validation() {
+        let err = map_master_data_db_error(db_error(
+            Some("23503"),
+            "insert or update violates foreign key constraint",
+            ErrorKind::ForeignKeyViolation,
+        ));
+
+        assert!(matches!(err, AppError::Validation(_)));
+        assert_eq!(err.error_code(), "VALIDATION_ERROR");
+        assert_eq!(err.http_status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn check_constraint_maps_to_validation() {
+        let err = map_master_data_db_error(db_error(
+            Some("23514"),
+            "new row violates check constraint",
+            ErrorKind::CheckViolation,
+        ));
+
+        assert!(matches!(err, AppError::Validation(_)));
+        assert_eq!(err.http_status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn inventory_business_sqlstate_maps_to_business_conflict() {
+        let err = map_inventory_db_error(db_error(
+            Some("INSUFFICIENT_STOCK"),
+            "库存不足",
+            ErrorKind::Other,
+        ));
+
+        assert!(matches!(
+            err,
+            AppError::Business {
+                code: "INSUFFICIENT_STOCK",
+                ..
+            }
+        ));
+        assert_eq!(err.http_status(), axum::http::StatusCode::CONFLICT);
+    }
 }

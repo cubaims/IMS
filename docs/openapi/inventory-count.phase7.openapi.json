@@ -1,0 +1,421 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "IMS Inventory Count API",
+    "version": "phase7",
+    "description": "Phase 7 inventory count endpoints and acceptance contract."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/inventory/counts": {
+      "get": {
+        "summary": "List inventory counts",
+        "x-permission": "inventory-count:read",
+        "responses": {
+          "200": {
+            "description": "Count page"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create inventory count",
+        "x-permission": "inventory-count:write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInventoryCountRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created DRAFT count"
+          },
+          "409": {
+            "$ref": "#/components/responses/DuplicatedScope"
+          }
+        }
+      }
+    },
+    "/api/inventory/counts/{count_doc_id}": {
+      "get": {
+        "summary": "Get inventory count detail",
+        "x-permission": "inventory-count:read",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/count_doc_id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Count detail"
+          },
+          "404": {
+            "$ref": "#/components/responses/CountNotFound"
+          }
+        }
+      }
+    },
+    "/api/inventory/counts/{count_doc_id}/generate-lines": {
+      "post": {
+        "summary": "Generate count lines from scope snapshot",
+        "x-permission": "inventory-count:write",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/count_doc_id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "COUNTING count with generated lines"
+          },
+          "409": {
+            "$ref": "#/components/responses/StatusInvalid"
+          }
+        }
+      }
+    },
+    "/api/inventory/counts/{count_doc_id}/lines/{line_no}": {
+      "patch": {
+        "summary": "Enter counted quantity for one count line",
+        "x-permission": "inventory-count:write",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/count_doc_id"
+          },
+          {
+            "$ref": "#/components/parameters/line_no"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateInventoryCountLineRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated count line"
+          },
+          "400": {
+            "$ref": "#/components/responses/CountedQtyInvalid"
+          },
+          "409": {
+            "$ref": "#/components/responses/StatusInvalid"
+          }
+        }
+      }
+    },
+    "/api/inventory/counts/{count_doc_id}/submit": {
+      "post": {
+        "summary": "Submit count",
+        "x-permission": "inventory-count:submit",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/count_doc_id"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/RemarkBody"
+        },
+        "responses": {
+          "200": {
+            "description": "SUBMITTED count"
+          },
+          "409": {
+            "$ref": "#/components/responses/StatusInvalid"
+          }
+        }
+      }
+    },
+    "/api/inventory/counts/{count_doc_id}/approve": {
+      "post": {
+        "summary": "Approve or reject count",
+        "x-permission": "inventory-count:approve",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/count_doc_id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveInventoryCountRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "APPROVED or COUNTING count"
+          },
+          "409": {
+            "$ref": "#/components/responses/StatusInvalid"
+          }
+        }
+      }
+    },
+    "/api/inventory/counts/{count_doc_id}/post": {
+      "post": {
+        "summary": "Post count differences as 701/702 inventory transactions",
+        "x-permission": "inventory-count:post",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/count_doc_id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostInventoryCountRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "POSTED count and transaction list"
+          },
+          "409": {
+            "$ref": "#/components/responses/StatusInvalid"
+          },
+          "500": {
+            "$ref": "#/components/responses/DifferencePostFailed"
+          }
+        }
+      }
+    },
+    "/api/inventory/counts/{count_doc_id}/close": {
+      "post": {
+        "summary": "Close posted count",
+        "x-permission": "inventory-count:close",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/count_doc_id"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/RemarkBody"
+        },
+        "responses": {
+          "200": {
+            "description": "CLOSED count"
+          },
+          "409": {
+            "$ref": "#/components/responses/StatusInvalid"
+          }
+        }
+      }
+    },
+    "/api/inventory/counts/{count_doc_id}/cancel": {
+      "post": {
+        "summary": "Cancel unposted count",
+        "x-permission": "inventory-count:write",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/count_doc_id"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/RemarkBody"
+        },
+        "responses": {
+          "200": {
+            "description": "CANCELLED count"
+          },
+          "409": {
+            "description": "Already posted, closed, cancelled, or invalid status"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "parameters": {
+      "count_doc_id": {
+        "name": "count_doc_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "line_no": {
+        "name": "line_no",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer"
+        }
+      }
+    },
+    "requestBodies": {
+      "RemarkBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "remark": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "CreateInventoryCountRequest": {
+        "type": "object",
+        "required": [
+          "count_type",
+          "count_scope"
+        ],
+        "properties": {
+          "count_type": {
+            "enum": [
+              "REGULAR",
+              "CYCLE",
+              "ADJUSTMENT",
+              "YEAR_END"
+            ]
+          },
+          "count_scope": {
+            "enum": [
+              "BIN",
+              "MATERIAL",
+              "ZONE"
+            ]
+          },
+          "zone_code": {
+            "type": "string"
+          },
+          "bin_code": {
+            "type": "string"
+          },
+          "material_id": {
+            "type": "string"
+          },
+          "batch_number": {
+            "type": "string"
+          },
+          "remark": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateInventoryCountLineRequest": {
+        "type": "object",
+        "required": [
+          "counted_qty"
+        ],
+        "properties": {
+          "counted_qty": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "difference_reason": {
+            "type": "string"
+          },
+          "remark": {
+            "type": "string"
+          }
+        }
+      },
+      "ApproveInventoryCountRequest": {
+        "type": "object",
+        "required": [
+          "approved"
+        ],
+        "properties": {
+          "approved": {
+            "type": "boolean"
+          },
+          "remark": {
+            "type": "string"
+          }
+        }
+      },
+      "PostInventoryCountRequest": {
+        "type": "object",
+        "required": [
+          "posting_date"
+        ],
+        "properties": {
+          "posting_date": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "remark": {
+            "type": "string"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "error_code",
+          "message"
+        ],
+        "properties": {
+          "success": {
+            "const": false
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "responses": {
+      "CountNotFound": {
+        "description": "INVENTORY_COUNT_NOT_FOUND"
+      },
+      "CountedQtyInvalid": {
+        "description": "COUNTED_QTY_INVALID"
+      },
+      "StatusInvalid": {
+        "description": "INVENTORY_COUNT_STATUS_INVALID"
+      },
+      "DuplicatedScope": {
+        "description": "INVENTORY_COUNT_DUPLICATED_SCOPE"
+      },
+      "DifferencePostFailed": {
+        "description": "COUNT_DIFFERENCE_POST_FAILED"
+      }
+    }
+  }
+}

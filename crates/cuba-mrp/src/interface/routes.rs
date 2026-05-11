@@ -12,7 +12,11 @@ pub fn routes() -> Router<AppState> {
         .route("/runs", get(handlers::runs))
         .route("/runs/{run_id}", get(handlers::get_run))
         .route("/suggestions", get(handlers::suggestions))
-        .route("/suggestions/{suggestion_id}", get(handlers::get_suggestion))
+        .route("/suggestions/export", get(handlers::suggestions_export))
+        .route(
+            "/suggestions/{suggestion_id}",
+            get(handlers::get_suggestion),
+        )
         .route(
             "/suggestions/{suggestion_id}/confirm",
             post(handlers::confirm_suggestion),

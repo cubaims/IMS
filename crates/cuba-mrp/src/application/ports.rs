@@ -54,6 +54,7 @@ pub struct MrpSuggestionQuery {
     pub material_id: Option<MaterialId>,
     pub required_date_from: Option<OffsetDateTime>,
     pub required_date_to: Option<OffsetDateTime>,
+    pub only_shortage: Option<bool>,
 }
 
 /// MRP 运行仓储。
@@ -115,6 +116,12 @@ pub trait MrpMasterRepository: Send + Sync {
         &self,
         product_variant_id: &ProductVariantId,
     ) -> MrpResult<bool>;
+
+    /// 按成品物料查找可用于 MRP 的启用产品变体。
+    async fn find_active_variant_by_material(
+        &self,
+        material_id: &MaterialId,
+    ) -> MrpResult<Option<ProductVariantId>>;
 }
 
 // =============================================================================
@@ -137,6 +144,97 @@ pub struct RunMrpCommand {
 pub struct RunMrpOutput {
     pub run_id: MrpRunId,
     pub status: MrpRunStatus,
+    pub product_variant_id: Option<ProductVariantId>,
+}
+
+/// 查询单个 MRP 运行记录用例。
+pub struct GetMrpRunUseCase<R>
+where
+    R: MrpRunRepository,
+{
+    pub run_repo: R,
+}
+
+impl<R> GetMrpRunUseCase<R>
+where
+    R: MrpRunRepository,
+{
+    pub fn new(run_repo: R) -> Self {
+        Self { run_repo }
+    }
+
+    pub async fn execute(&self, run_id: MrpRunId) -> MrpResult<MrpRun> {
+        self.run_repo
+            .find_by_id(&run_id)
+            .await?
+            .ok_or(MrpError::MrpRunNotFound)
+    }
+}
+
+/// 分页查询 MRP 运行记录用例。
+pub struct ListMrpRunsUseCase<R>
+where
+    R: MrpRunRepository,
+{
+    pub run_repo: R,
+}
+
+impl<R> ListMrpRunsUseCase<R>
+where
+    R: MrpRunRepository,
+{
+    pub fn new(run_repo: R) -> Self {
+        Self { run_repo }
+    }
+
+    pub async fn execute(&self, query: MrpRunQuery) -> MrpResult<Page<MrpRunSummary>> {
+        self.run_repo.list(query).await
+    }
+}
+
+/// 查询单个 MRP 建议用例。
+pub struct GetMrpSuggestionUseCase<S>
+where
+    S: MrpSuggestionRepository,
+{
+    pub suggestion_repo: S,
+}
+
+impl<S> GetMrpSuggestionUseCase<S>
+where
+    S: MrpSuggestionRepository,
+{
+    pub fn new(suggestion_repo: S) -> Self {
+        Self { suggestion_repo }
+    }
+
+    pub async fn execute(&self, suggestion_id: MrpSuggestionId) -> MrpResult<MrpSuggestion> {
+        self.suggestion_repo
+            .find_by_id(&suggestion_id)
+            .await?
+            .ok_or(MrpError::MrpSuggestionNotFound)
+    }
+}
+
+/// 分页查询 MRP 建议用例。
+pub struct ListMrpSuggestionsUseCase<S>
+where
+    S: MrpSuggestionRepository,
+{
+    pub suggestion_repo: S,
+}
+
+impl<S> ListMrpSuggestionsUseCase<S>
+where
+    S: MrpSuggestionRepository,
+{
+    pub fn new(suggestion_repo: S) -> Self {
+        Self { suggestion_repo }
+    }
+
+    pub async fn execute(&self, query: MrpSuggestionQuery) -> MrpResult<Page<MrpSuggestion>> {
+        self.suggestion_repo.list(query).await
+    }
 }
 
 /// 运行 MRP 用例。
@@ -197,7 +295,7 @@ where
             }
         }
 
-        if let Some(product_variant_id) = &command.product_variant_id {
+        let product_variant_id = if let Some(product_variant_id) = &command.product_variant_id {
             let exists = self
                 .master_repo
                 .product_variant_exists(product_variant_id)
@@ -206,13 +304,19 @@ where
             if !exists {
                 return Err(MrpError::ProductVariantNotFound);
             }
-        }
 
-        // v9 的 wms.fn_run_mrp() 目前按 product_variant 运行。
-        // 如果后续数据库函数支持 finished_material_id，再放开纯 material_id 运行。
-        if command.product_variant_id.is_none() {
+            Some(product_variant_id.clone())
+        } else if let Some(material_id) = &command.material_id {
+            self.master_repo
+                .find_active_variant_by_material(material_id)
+                .await?
+        } else {
+            None
+        };
+
+        let Some(product_variant_id) = product_variant_id else {
             return Err(MrpError::ProductVariantRequired);
-        }
+        };
 
         // 这里的 id 只是为了构造领域对象。
         // 真正落库的 run_id 由 wms.fn_run_mrp() 返回。
@@ -221,7 +325,7 @@ where
         let run = MrpRun::create(CreateMrpRun {
             id: temp_run_id,
             material_id: command.material_id,
-            product_variant_id: command.product_variant_id,
+            product_variant_id: Some(product_variant_id.clone()),
             demand_qty: command.demand_qty,
             demand_date: command.demand_date,
             created_by: command.created_by,
@@ -239,6 +343,7 @@ where
         Ok(RunMrpOutput {
             run_id: db_run_id,
             status,
+            product_variant_id: Some(product_variant_id),
         })
     }
 }
@@ -302,7 +407,6 @@ where
     }
 }
 
-
 // =============================================================================
 // Use Case：取消 MRP 建议
 // =============================================================================
@@ -358,5 +462,383 @@ where
             suggestion_id: command.suggestion_id,
             status: suggestion.status,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct InMemoryRuns {
+        runs: Arc<Mutex<Vec<MrpRun>>>,
+    }
+
+    #[derive(Clone, Default)]
+    struct InMemoryMaster {
+        materials: Arc<Mutex<Vec<MaterialId>>>,
+        variants: Arc<Mutex<Vec<(ProductVariantId, MaterialId)>>>,
+    }
+
+    #[derive(Clone, Default)]
+    struct InMemoryPlanner {
+        runs: Arc<Mutex<Vec<MrpRun>>>,
+    }
+
+    #[derive(Clone, Default)]
+    struct StaticIdGenerator;
+
+    #[async_trait]
+    impl MrpRunRepository for InMemoryRuns {
+        async fn create(&self, run: &MrpRun) -> MrpResult<MrpRunId> {
+            self.runs.lock().expect("runs lock").push(run.clone());
+            Ok(run.id.clone())
+        }
+
+        async fn find_by_id(&self, run_id: &MrpRunId) -> MrpResult<Option<MrpRun>> {
+            Ok(self
+                .runs
+                .lock()
+                .expect("runs lock")
+                .iter()
+                .find(|run| run.id == *run_id)
+                .cloned())
+        }
+
+        async fn lock_by_id(&self, run_id: &MrpRunId) -> MrpResult<MrpRun> {
+            self.find_by_id(run_id)
+                .await?
+                .ok_or(MrpError::MrpRunNotFound)
+        }
+
+        async fn update(&self, run: &MrpRun) -> MrpResult<()> {
+            let mut runs = self.runs.lock().expect("runs lock");
+            let Some(saved) = runs.iter_mut().find(|saved| saved.id == run.id) else {
+                return Err(MrpError::MrpRunNotFound);
+            };
+            *saved = run.clone();
+            Ok(())
+        }
+
+        async fn list(&self, query: MrpRunQuery) -> MrpResult<Page<MrpRunSummary>> {
+            let runs = self.runs.lock().expect("runs lock");
+            let mut items = Vec::new();
+
+            for run in runs.iter() {
+                if let Some(status) = query.status {
+                    if run.status != status {
+                        continue;
+                    }
+                }
+
+                items.push(MrpRunSummary {
+                    id: run.id.clone(),
+                    material_id: run.material_id.clone(),
+                    product_variant_id: run.product_variant_id.clone(),
+                    demand_qty: run.demand_qty,
+                    demand_date: run.demand_date,
+                    status: run.status,
+                    created_at: run.created_at,
+                });
+            }
+
+            Ok(Page::new(
+                items.clone(),
+                items.len() as u64,
+                query.page.page,
+                query.page.page_size,
+            ))
+        }
+    }
+
+    impl MrpIdGenerator for StaticIdGenerator {
+        fn next_mrp_run_id(&self) -> MrpRunId {
+            MrpRunId::new("MRP-TEMP")
+        }
+    }
+
+    #[async_trait]
+    impl MrpPlannerGateway for InMemoryPlanner {
+        async fn run_mrp_function(&self, run: &MrpRun) -> MrpResult<MrpRunId> {
+            self.runs
+                .lock()
+                .expect("planner runs lock")
+                .push(run.clone());
+            Ok(MrpRunId::new("MRP-DB"))
+        }
+    }
+
+    #[async_trait]
+    impl MrpMasterRepository for InMemoryMaster {
+        async fn material_exists_and_active(&self, material_id: &MaterialId) -> MrpResult<bool> {
+            Ok(self
+                .materials
+                .lock()
+                .expect("materials lock")
+                .iter()
+                .any(|saved| saved == material_id))
+        }
+
+        async fn product_variant_exists(
+            &self,
+            product_variant_id: &ProductVariantId,
+        ) -> MrpResult<bool> {
+            Ok(self
+                .variants
+                .lock()
+                .expect("variants lock")
+                .iter()
+                .any(|(variant_id, _)| variant_id == product_variant_id))
+        }
+
+        async fn find_active_variant_by_material(
+            &self,
+            material_id: &MaterialId,
+        ) -> MrpResult<Option<ProductVariantId>> {
+            Ok(self
+                .variants
+                .lock()
+                .expect("variants lock")
+                .iter()
+                .find(|(_, saved_material_id)| saved_material_id == material_id)
+                .map(|(variant_id, _)| variant_id.clone()))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct InMemorySuggestions {
+        suggestions: Arc<Mutex<Vec<MrpSuggestion>>>,
+    }
+
+    #[async_trait]
+    impl MrpSuggestionRepository for InMemorySuggestions {
+        async fn find_by_id(
+            &self,
+            suggestion_id: &MrpSuggestionId,
+        ) -> MrpResult<Option<MrpSuggestion>> {
+            Ok(self
+                .suggestions
+                .lock()
+                .expect("suggestions lock")
+                .iter()
+                .find(|suggestion| suggestion.id == *suggestion_id)
+                .cloned())
+        }
+
+        async fn lock_by_id(&self, suggestion_id: &MrpSuggestionId) -> MrpResult<MrpSuggestion> {
+            self.find_by_id(suggestion_id)
+                .await?
+                .ok_or(MrpError::MrpSuggestionNotFound)
+        }
+
+        async fn update(&self, suggestion: &MrpSuggestion) -> MrpResult<()> {
+            let mut suggestions = self.suggestions.lock().expect("suggestions lock");
+            let Some(saved) = suggestions
+                .iter_mut()
+                .find(|saved| saved.id == suggestion.id)
+            else {
+                return Err(MrpError::MrpSuggestionNotFound);
+            };
+            *saved = suggestion.clone();
+            Ok(())
+        }
+
+        async fn list(&self, query: MrpSuggestionQuery) -> MrpResult<Page<MrpSuggestion>> {
+            let suggestions = self.suggestions.lock().expect("suggestions lock");
+            let mut items = Vec::new();
+
+            for suggestion in suggestions.iter() {
+                if let Some(status) = query.status {
+                    if suggestion.status != status {
+                        continue;
+                    }
+                }
+                items.push(suggestion.clone());
+            }
+
+            Ok(Page::new(
+                items.clone(),
+                items.len() as u64,
+                query.page.page,
+                query.page.page_size,
+            ))
+        }
+    }
+
+    fn now() -> OffsetDateTime {
+        OffsetDateTime::UNIX_EPOCH
+    }
+
+    fn run(id: &str, status: MrpRunStatus) -> MrpRun {
+        MrpRun {
+            id: MrpRunId::new(id),
+            material_id: Some(MaterialId::new("FIN001")),
+            product_variant_id: Some(ProductVariantId::new("FIN-A001")),
+            demand_qty: Decimal::ONE,
+            demand_date: now(),
+            status,
+            created_by: Operator::new("planner"),
+            created_at: now(),
+            started_at: None,
+            completed_at: None,
+            error_message: None,
+            remark: None,
+        }
+    }
+
+    fn suggestion(id: &str, status: MrpSuggestionStatus) -> MrpSuggestion {
+        MrpSuggestion {
+            id: MrpSuggestionId::new(id),
+            run_id: MrpRunId::new("MRP-1"),
+            suggestion_type: MrpSuggestionType::Purchase,
+            material_id: MaterialId::new("RM001"),
+            bom_level: 1,
+            gross_requirement_qty: Decimal::ONE,
+            required_qty: Decimal::ONE,
+            available_qty: Decimal::ZERO,
+            safety_stock_qty: Decimal::ZERO,
+            shortage_qty: Decimal::ONE,
+            net_requirement_qty: Decimal::ONE,
+            suggested_qty: Decimal::ONE,
+            recommended_bin: None,
+            recommended_batch: None,
+            lead_time_days: None,
+            priority: None,
+            required_date: now(),
+            suggested_date: now(),
+            supplier_id: None,
+            work_center_id: None,
+            status,
+            created_at: now(),
+            confirmed_by: None,
+            confirmed_at: None,
+            cancelled_by: None,
+            cancelled_at: None,
+            remark: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn list_and_get_run_use_cases_delegate_to_repository() {
+        let repository = InMemoryRuns::default();
+        repository.runs.lock().expect("runs lock").extend([
+            run("MRP-1", MrpRunStatus::Completed),
+            run("MRP-2", MrpRunStatus::Running),
+        ]);
+
+        let get = GetMrpRunUseCase::new(repository.clone());
+        let found = get
+            .execute(MrpRunId::new("MRP-1"))
+            .await
+            .expect("run exists");
+        assert_eq!(found.status, MrpRunStatus::Completed);
+
+        let list = ListMrpRunsUseCase::new(repository);
+        let page = list
+            .execute(MrpRunQuery {
+                page: PageQuery {
+                    page: 1,
+                    page_size: 20,
+                },
+                status: Some(MrpRunStatus::Completed),
+                material_id: None,
+                product_variant_id: None,
+                date_from: None,
+                date_to: None,
+            })
+            .await
+            .expect("list runs");
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].id.as_str(), "MRP-1");
+    }
+
+    #[tokio::test]
+    async fn suggestion_use_cases_confirm_and_cancel_by_status() {
+        let repository = InMemorySuggestions::default();
+        repository
+            .suggestions
+            .lock()
+            .expect("suggestions lock")
+            .push(suggestion("1", MrpSuggestionStatus::Open));
+
+        let confirm = ConfirmMrpSuggestionUseCase::new(repository.clone());
+        let output = confirm
+            .execute(ConfirmMrpSuggestionCommand {
+                suggestion_id: MrpSuggestionId::new("1"),
+                confirmed_by: Operator::new("planner"),
+                remark: Some("ok".to_string()),
+            })
+            .await
+            .expect("confirm");
+        assert_eq!(output.status, MrpSuggestionStatus::Confirmed);
+
+        let cancel = CancelMrpSuggestionUseCase::new(repository.clone());
+        let output = cancel
+            .execute(CancelMrpSuggestionCommand {
+                suggestion_id: MrpSuggestionId::new("1"),
+                cancelled_by: Operator::new("planner"),
+                reason: "demand cancelled".to_string(),
+            })
+            .await
+            .expect("cancel");
+        assert_eq!(output.status, MrpSuggestionStatus::Cancelled);
+
+        let get = GetMrpSuggestionUseCase::new(repository);
+        let saved = get
+            .execute(MrpSuggestionId::new("1"))
+            .await
+            .expect("suggestion exists");
+        assert_eq!(saved.status, MrpSuggestionStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn run_mrp_resolves_variant_from_finished_material() {
+        let run_repo = InMemoryRuns::default();
+        let planner = InMemoryPlanner::default();
+        let master = InMemoryMaster::default();
+        master
+            .materials
+            .lock()
+            .expect("materials lock")
+            .push(MaterialId::new("FIN001"));
+        master
+            .variants
+            .lock()
+            .expect("variants lock")
+            .push((ProductVariantId::new("FIN-A001"), MaterialId::new("FIN001")));
+
+        let use_case = RunMrpUseCase::new(run_repo, planner.clone(), master, StaticIdGenerator);
+
+        let output = use_case
+            .execute(RunMrpCommand {
+                material_id: Some(MaterialId::new("FIN001")),
+                product_variant_id: None,
+                demand_qty: Decimal::ONE,
+                demand_date: now(),
+                created_by: Operator::new("planner"),
+                remark: None,
+            })
+            .await
+            .expect("run mrp by material");
+
+        assert_eq!(output.run_id.as_str(), "MRP-DB");
+        assert_eq!(
+            output
+                .product_variant_id
+                .expect("resolved variant")
+                .as_str(),
+            "FIN-A001"
+        );
+        assert_eq!(
+            planner.runs.lock().expect("planner runs lock")[0]
+                .product_variant_id
+                .as_ref()
+                .expect("run variant")
+                .as_str(),
+            "FIN-A001"
+        );
     }
 }

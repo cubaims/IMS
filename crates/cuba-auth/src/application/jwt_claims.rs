@@ -4,7 +4,7 @@
 //! 验签函数与错误类型,避免之前 `domain` / `application` 双份定义。
 
 use crate::domain::JwtClaims;
-use jsonwebtoken::{decode, errors::ErrorKind, DecodingKey, Validation};
+use jsonwebtoken::{DecodingKey, Validation, decode, errors::ErrorKind};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -25,6 +25,10 @@ pub enum VerifyError {
 /// - HS256 签名(使用 `secret`)
 /// - exp 过期时间(jsonwebtoken 默认开启)
 /// - iss 与 `expected_issuer` 严格匹配
+///
+/// 本函数不查用户表或权限表。IMS 当前采用短期自包含 access token:
+/// 禁用用户和权限撤销在登录/refresh 时查库生效,已签发的 access token
+/// 最长保留到自身过期时间。
 pub fn verify_access_token(
     token: &str,
     secret: &str,
@@ -33,16 +37,22 @@ pub fn verify_access_token(
     let mut validation = Validation::default(); // 默认 HS256 + 验 exp
     validation.set_issuer(&[expected_issuer]);
 
-    decode::<JwtClaims>(
+    let claims = decode::<JwtClaims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
         &validation,
     )
-        .map(|d| d.claims)
-        .map_err(|e| match e.kind() {
-            ErrorKind::ExpiredSignature => VerifyError::Expired,
-            ErrorKind::InvalidSignature => VerifyError::BadSignature,
-            ErrorKind::InvalidIssuer => VerifyError::BadIssuer,
-            _ => VerifyError::Invalid(e.to_string()),
-        })
+    .map(|d| d.claims)
+    .map_err(|e| match e.kind() {
+        ErrorKind::ExpiredSignature => VerifyError::Expired,
+        ErrorKind::InvalidSignature => VerifyError::BadSignature,
+        ErrorKind::InvalidIssuer => VerifyError::BadIssuer,
+        _ => VerifyError::Invalid(e.to_string()),
+    })?;
+
+    if claims.token_type != "access" {
+        return Err(VerifyError::Invalid("token type is not access".to_string()));
+    }
+
+    Ok(claims)
 }

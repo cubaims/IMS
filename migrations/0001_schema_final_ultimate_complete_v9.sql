@@ -191,6 +191,7 @@ CREATE TABLE mdm.mdm_inspection_chars (
     lower_limit         NUMERIC(10,3),
     upper_limit         NUMERIC(10,3),
     is_critical         BOOLEAN DEFAULT FALSE,
+    is_active           BOOLEAN DEFAULT TRUE,
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     CHECK (lower_limit IS NULL OR upper_limit IS NULL OR upper_limit >= lower_limit)
 );
@@ -575,18 +576,25 @@ CREATE TABLE wms.wms_quality_notifications (
     closed_at           TIMESTAMPTZ
 );
 
+CREATE SEQUENCE wms.seq_inventory_count_doc START 1;
+
 CREATE TABLE wms.wms_inventory_count_h (
     count_doc_id        VARCHAR(30) PRIMARY KEY,
     count_date          DATE NOT NULL DEFAULT CURRENT_DATE,
-    count_type          VARCHAR(20) DEFAULT '周期盘点' CHECK (count_type IN ('周期盘点', '年度盘点', '抽盘')),
-    zone                VARCHAR(10),
-    status              VARCHAR(20) DEFAULT '草稿' CHECK (status IN ('草稿', '盘点中', '待审批', '已过账', '取消')),
+    count_type          VARCHAR(20) DEFAULT 'REGULAR' CHECK (count_type IN ('REGULAR', 'CYCLE', 'ADJUSTMENT', 'YEAR_END')),
+    count_scope         VARCHAR(20) DEFAULT 'BIN' CHECK (count_scope IN ('FULL', 'ZONE', 'BIN', 'MATERIAL', 'BATCH', 'CYCLE')),
+    zone_code           VARCHAR(10),
+    bin_code            VARCHAR(20) REFERENCES mdm.mdm_storage_bins(bin_code),
+    material_id         VARCHAR(20) REFERENCES mdm.mdm_materials(material_id),
+    batch_number        VARCHAR(30) REFERENCES wms.wms_batches(batch_number),
+    status              VARCHAR(20) DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'COUNTING', 'SUBMITTED', 'APPROVED', 'POSTED', 'CLOSED', 'CANCELLED')),
     created_by          VARCHAR(50),
     approved_by         VARCHAR(50),
     approved_at         TIMESTAMPTZ,
     posted_by           VARCHAR(50),
     posted_at           TIMESTAMPTZ,
-    notes               TEXT,
+    closed_at           TIMESTAMPTZ,
+    remark              TEXT,
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW()
 );
@@ -600,13 +608,17 @@ CREATE TABLE wms.wms_inventory_count_d (
     batch_number        VARCHAR(30) REFERENCES wms.wms_batches(batch_number),
     serial_number       VARCHAR(30) REFERENCES wms.wms_serial_numbers(serial_number),
     system_qty          INTEGER NOT NULL CHECK (system_qty >= 0),
-    physical_qty        INTEGER NOT NULL CHECK (physical_qty >= 0),
-    variance_qty        INTEGER GENERATED ALWAYS AS (physical_qty - system_qty) STORED,
-    variance_reason     TEXT,
+    quality_status      mdm.quality_status,
+    counted_qty         INTEGER CHECK (counted_qty IS NULL OR counted_qty >= 0),
+    difference_qty      INTEGER,
+    difference_reason   TEXT,
     movement_type       wms.movement_type,
-    adjustment_transaction_id VARCHAR(30),
+    transaction_id      VARCHAR(30),
+    status              VARCHAR(20) DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'COUNTED', 'POSTED')),
+    remark              TEXT,
     adjusted            BOOLEAN DEFAULT FALSE,
     created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(count_doc_id, line_no)
 );
 
@@ -711,6 +723,17 @@ CREATE TABLE sys.sys_user_permissions (
     granted_at          TIMESTAMPTZ DEFAULT NOW(),
     expires_at          TIMESTAMPTZ,
     CHECK (user_id IS NOT NULL OR role_id IS NOT NULL)
+);
+
+CREATE TABLE sys.sys_refresh_tokens (
+    token_id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id             UUID NOT NULL REFERENCES sys.sys_users(user_id) ON DELETE CASCADE,
+    selector            VARCHAR(64) UNIQUE NOT NULL,
+    token_hash          TEXT NOT NULL,
+    expires_at          TIMESTAMPTZ NOT NULL,
+    revoked_at          TIMESTAMPTZ,
+    replaced_by         UUID REFERENCES sys.sys_refresh_tokens(token_id),
+    created_at          TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE sys.sys_audit_log (
@@ -832,13 +855,17 @@ CREATE INDEX idx_inspection_lots_result_gin ON wms.wms_inspection_lots USING GIN
 CREATE INDEX idx_inspection_results_lot ON wms.wms_inspection_results(inspection_lot_id);
 CREATE INDEX idx_quality_notifications_status ON wms.wms_quality_notifications(status);
 CREATE INDEX idx_count_h_date ON wms.wms_inventory_count_h(count_date);
+CREATE INDEX idx_count_h_scope ON wms.wms_inventory_count_h(count_scope, status);
 CREATE INDEX idx_count_d_material ON wms.wms_inventory_count_d(material_id);
+CREATE INDEX idx_count_d_status ON wms.wms_inventory_count_d(count_doc_id, status);
 CREATE INDEX idx_mrp_suggestions_run ON wms.wms_mrp_suggestions(run_id);
 CREATE INDEX idx_mrp_suggestions_material ON wms.wms_mrp_suggestions(material_id);
 CREATE INDEX idx_attach_related ON wms.wms_attachments(related_table, related_id);
 CREATE INDEX idx_notify_recipient ON wms.wms_notifications(recipient, status);
 
 CREATE INDEX idx_user_permissions_user ON sys.sys_user_permissions(user_id);
+CREATE INDEX idx_refresh_tokens_user ON sys.sys_refresh_tokens(user_id);
+CREATE INDEX idx_refresh_tokens_expires ON sys.sys_refresh_tokens(expires_at);
 CREATE INDEX idx_audit_table_record ON sys.sys_audit_log(table_name, record_id);
 
 -- ============================================================
@@ -1158,12 +1185,20 @@ VALUES
 INSERT INTO sys.sys_roles (role_id, role_name, description) VALUES
 ('ADMIN', '系统管理员', '拥有系统配置和权限管理能力'),
 ('WMS_USER', '仓库用户', '执行入库、出库、转储、盘点'),
+('WAREHOUSE_OPERATOR', '仓库操作员', '执行收货、发货、库存过账'),
+('PURCHASER', '采购员', '创建采购订单并跟踪收货'),
+('SALES_OPERATOR', '销售员', '创建销售订单并跟踪发货'),
+('AUDITOR', '审计员', '只读查询业务单据、库存和报表'),
 ('QM_USER', '质量用户', '执行检验批和质量通知处理'),
 ('PLANNER', '计划员', '执行 MRP 和生产计划');
 
 INSERT INTO sys.sys_users (username, password_hash, full_name, email, role_id) VALUES
 ('admin', 'demo-not-for-production', '系统管理员', 'admin@example.com', 'ADMIN'),
 ('wms01', 'demo-not-for-production', '仓库操作员', 'wms01@example.com', 'WMS_USER'),
+('warehouse01', 'demo-not-for-production', '仓库操作员', 'warehouse01@example.com', 'WAREHOUSE_OPERATOR'),
+('purchaser01', 'demo-not-for-production', '采购员', 'purchaser01@example.com', 'PURCHASER'),
+('sales01', 'demo-not-for-production', '销售员', 'sales01@example.com', 'SALES_OPERATOR'),
+('auditor01', 'demo-not-for-production', '审计员', 'auditor01@example.com', 'AUDITOR'),
 ('qm01', 'demo-not-for-production', '质量工程师', 'qm01@example.com', 'QM_USER'),
 ('planner01', 'demo-not-for-production', '计划员', 'planner01@example.com', 'PLANNER');
 
@@ -1172,10 +1207,120 @@ SELECT user_id, role_id, 'SYSTEM' FROM sys.sys_users WHERE role_id IS NOT NULL;
 
 INSERT INTO sys.sys_user_permissions (role_id, permission_code, permission_name, granted_by) VALUES
 ('ADMIN', 'SYS_ALL', '系统全部权限', 'SYSTEM'),
+('ADMIN', 'master-data:read', '主数据查询', 'SYSTEM'),
+('ADMIN', 'master-data:write', '主数据维护', 'SYSTEM'),
+('ADMIN', 'material:read', '物料查询预留', 'SYSTEM'),
+('ADMIN', 'material:write', '物料维护预留', 'SYSTEM'),
+('ADMIN', 'bin:read', '货位查询预留', 'SYSTEM'),
+('ADMIN', 'bin:write', '货位维护预留', 'SYSTEM'),
+('ADMIN', 'supplier:read', '供应商查询预留', 'SYSTEM'),
+('ADMIN', 'supplier:write', '供应商维护预留', 'SYSTEM'),
+('ADMIN', 'customer:read', '客户查询预留', 'SYSTEM'),
+('ADMIN', 'customer:write', '客户维护预留', 'SYSTEM'),
+('ADMIN', 'bom:read', 'BOM 查询预留', 'SYSTEM'),
+('ADMIN', 'bom:write', 'BOM 维护预留', 'SYSTEM'),
+('ADMIN', 'variant:read', '产品变体查询预留', 'SYSTEM'),
+('ADMIN', 'variant:write', '产品变体维护预留', 'SYSTEM'),
+('ADMIN', 'work-center:read', '工作中心查询预留', 'SYSTEM'),
+('ADMIN', 'work-center:write', '工作中心维护预留', 'SYSTEM'),
+('ADMIN', 'quality-master:read', '质量主数据查询预留', 'SYSTEM'),
+('ADMIN', 'quality-master:write', '质量主数据维护预留', 'SYSTEM'),
+('WMS_USER', 'master-data:read', '主数据查询', 'SYSTEM'),
+('WMS_USER', 'material:read', '物料查询预留', 'SYSTEM'),
+('WMS_USER', 'bin:read', '货位查询预留', 'SYSTEM'),
+('WMS_USER', 'supplier:read', '供应商查询预留', 'SYSTEM'),
+('WMS_USER', 'customer:read', '客户查询预留', 'SYSTEM'),
+('WMS_USER', 'bom:read', 'BOM 查询预留', 'SYSTEM'),
+('WMS_USER', 'variant:read', '产品变体查询预留', 'SYSTEM'),
+('WMS_USER', 'work-center:read', '工作中心查询预留', 'SYSTEM'),
+('WMS_USER', 'quality-master:read', '质量主数据查询预留', 'SYSTEM'),
+('PLANNER', 'master-data:read', '主数据查询', 'SYSTEM'),
+('PLANNER', 'material:read', '物料查询预留', 'SYSTEM'),
+('PLANNER', 'bom:read', 'BOM 查询预留', 'SYSTEM'),
+('PLANNER', 'variant:read', '产品变体查询预留', 'SYSTEM'),
+('PLANNER', 'work-center:read', '工作中心查询预留', 'SYSTEM'),
+('QM_USER', 'master-data:read', '主数据查询', 'SYSTEM'),
+('QM_USER', 'material:read', '物料查询预留', 'SYSTEM'),
+('QM_USER', 'bin:read', '货位查询预留', 'SYSTEM'),
+('QM_USER', 'quality-master:read', '质量主数据查询预留', 'SYSTEM'),
+('QM_USER', 'quality-master:write', '质量主数据维护预留', 'SYSTEM'),
 ('WMS_USER', 'WMS_POST_TRANSACTION', '库存过账', 'SYSTEM'),
 ('WMS_USER', 'WMS_COUNT', '盘点', 'SYSTEM'),
 ('QM_USER', 'QM_INSPECTION', '质量检验', 'SYSTEM'),
-('PLANNER', 'MRP_RUN', 'MRP 运算', 'SYSTEM');
+('PLANNER', 'MRP_RUN', 'MRP 运算', 'SYSTEM'),
+('WMS_USER', 'inventory:read', '库存查询', 'SYSTEM'),
+('WMS_USER', 'inventory:post', '库存过账', 'SYSTEM'),
+('WMS_USER', 'inventory-count:read', '盘点查询', 'SYSTEM'),
+('WMS_USER', 'inventory-count:write', '盘点维护', 'SYSTEM'),
+('WMS_USER', 'inventory-count:submit', '盘点提交', 'SYSTEM'),
+('WMS_USER', 'inventory-count:approve', '盘点审核', 'SYSTEM'),
+('WMS_USER', 'inventory-count:post', '盘点过账', 'SYSTEM'),
+('WMS_USER', 'inventory-count:close', '盘点关闭', 'SYSTEM'),
+('WMS_USER', 'purchase:read', '采购订单查询', 'SYSTEM'),
+('WMS_USER', 'purchase:write', '采购订单维护', 'SYSTEM'),
+('WMS_USER', 'purchase:receipt', '采购订单收货', 'SYSTEM'),
+('WMS_USER', 'sales:read', '销售订单查询', 'SYSTEM'),
+('WMS_USER', 'sales:write', '销售订单维护', 'SYSTEM'),
+('WMS_USER', 'sales:shipment', '销售订单发货', 'SYSTEM'),
+('WMS_USER', 'report:read', '报表查询', 'SYSTEM'),
+('WMS_USER', 'report:refresh', '报表刷新', 'SYSTEM'),
+('WMS_USER', 'traceability:read', '追溯查询', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'master-data:read', '主数据查询', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'material:read', '物料查询预留', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'bin:read', '货位查询预留', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'supplier:read', '供应商查询预留', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'customer:read', '客户查询预留', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'inventory:read', '库存查询', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'inventory:post', '库存过账', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'inventory-count:read', '盘点查询', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'inventory-count:write', '盘点维护', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'inventory-count:submit', '盘点提交', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'inventory-count:approve', '盘点审核', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'inventory-count:post', '盘点过账', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'inventory-count:close', '盘点关闭', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'purchase:read', '采购订单查询', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'purchase:receipt', '采购订单收货', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'sales:read', '销售订单查询', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'sales:shipment', '销售订单发货', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'report:read', '报表查询', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'report:refresh', '报表刷新', 'SYSTEM'),
+('WAREHOUSE_OPERATOR', 'traceability:read', '追溯查询', 'SYSTEM'),
+('PURCHASER', 'master-data:read', '主数据查询', 'SYSTEM'),
+('PURCHASER', 'material:read', '物料查询预留', 'SYSTEM'),
+('PURCHASER', 'supplier:read', '供应商查询预留', 'SYSTEM'),
+('PURCHASER', 'inventory:read', '库存查询', 'SYSTEM'),
+('PURCHASER', 'purchase:read', '采购订单查询', 'SYSTEM'),
+('PURCHASER', 'purchase:write', '采购订单维护', 'SYSTEM'),
+('PURCHASER', 'report:read', '报表查询', 'SYSTEM'),
+('SALES_OPERATOR', 'master-data:read', '主数据查询', 'SYSTEM'),
+('SALES_OPERATOR', 'material:read', '物料查询预留', 'SYSTEM'),
+('SALES_OPERATOR', 'customer:read', '客户查询预留', 'SYSTEM'),
+('SALES_OPERATOR', 'variant:read', '产品变体查询预留', 'SYSTEM'),
+('SALES_OPERATOR', 'inventory:read', '库存查询', 'SYSTEM'),
+('SALES_OPERATOR', 'sales:read', '销售订单查询', 'SYSTEM'),
+('SALES_OPERATOR', 'sales:write', '销售订单维护', 'SYSTEM'),
+('SALES_OPERATOR', 'report:read', '报表查询', 'SYSTEM'),
+('AUDITOR', 'master-data:read', '主数据查询', 'SYSTEM'),
+('AUDITOR', 'inventory:read', '库存查询', 'SYSTEM'),
+('AUDITOR', 'purchase:read', '采购订单查询', 'SYSTEM'),
+('AUDITOR', 'sales:read', '销售订单查询', 'SYSTEM'),
+('AUDITOR', 'report:read', '报表查询', 'SYSTEM'),
+('AUDITOR', 'traceability:read', '追溯查询', 'SYSTEM'),
+('QM_USER', 'quality:read', '质量查询', 'SYSTEM'),
+('QM_USER', 'quality:write', '质量维护', 'SYSTEM'),
+('QM_USER', 'quality:decision', '质量判定', 'SYSTEM'),
+('QM_USER', 'traceability:read', '追溯查询', 'SYSTEM'),
+('PLANNER', 'mrp:run', 'MRP 运算', 'SYSTEM'),
+('PLANNER', 'mrp:read', 'MRP 查询', 'SYSTEM'),
+('PLANNER', 'mrp:suggestion-read', 'MRP 建议查询', 'SYSTEM'),
+('PLANNER', 'mrp:suggestion-confirm', 'MRP 建议确认', 'SYSTEM'),
+('PLANNER', 'production:read', '生产查询', 'SYSTEM'),
+('PLANNER', 'production:write', '生产维护', 'SYSTEM'),
+('PLANNER', 'production:release', '生产订单下达', 'SYSTEM'),
+('PLANNER', 'production:complete', '生产完工', 'SYSTEM'),
+('PLANNER', 'bom:explode', 'BOM 展开', 'SYSTEM'),
+('PLANNER', 'batch:trace', '批次追溯', 'SYSTEM'),
+('PLANNER', 'traceability:read', '追溯查询', 'SYSTEM');
 
 INSERT INTO sys.sys_system_params (param_key, param_value, param_type, description, updated_by) VALUES
 ('DEFAULT_SAFETY_STOCK_DAYS', '7', 'number', '默认安全库存天数', 'SYSTEM'),
@@ -1461,14 +1606,14 @@ VALUES
 ('QN-2026-0001', 'IL-2026-0004', 'FIN-B001', 'B-FINB-20260423', 'D001', '待检批次发现轻微外观风险，需复检确认', '一般', 'qm01', '处理中');
 
 INSERT INTO wms.wms_inventory_count_h
-(count_doc_id, count_date, count_type, zone, status, created_by, approved_by, approved_at, posted_by, posted_at, notes)
+(count_doc_id, count_date, count_type, count_scope, zone_code, bin_code, material_id, batch_number, status, created_by, approved_by, approved_at, posted_by, posted_at, closed_at, remark)
 VALUES
-('CNT-2026-0001', '2026-05-02', '周期盘点', 'RM', '已过账', 'wms01', 'admin', '2026-05-02 14:30:00+08', 'wms01', '2026-05-02 15:00:00+08', '保护膜盘亏 1 PCS');
+('CNT-2026-0001', '2026-05-02', 'CYCLE', 'BIN', 'RM', 'RM-A02', 'PROT001', 'B-PROT-20260401', 'POSTED', 'wms01', 'admin', '2026-05-02 14:30:00+08', 'wms01', '2026-05-02 15:00:00+08', NULL, '保护膜盘亏 1 PCS');
 
 INSERT INTO wms.wms_inventory_count_d
-(count_doc_id, line_no, bin_code, material_id, batch_number, system_qty, physical_qty, variance_reason, movement_type, adjustment_transaction_id, adjusted)
+(count_doc_id, line_no, bin_code, material_id, batch_number, quality_status, system_qty, counted_qty, difference_qty, difference_reason, movement_type, transaction_id, status, remark, adjusted)
 VALUES
-('CNT-2026-0001', 1, 'RM-A02', 'PROT001', 'B-PROT-20260401', 130, 129, '抽盘少 1 PCS', '702', 'T0019', TRUE);
+('CNT-2026-0001', 1, 'RM-A02', 'PROT001', 'B-PROT-20260401', '合格', 130, 129, -1, '抽盘少 1 PCS', '702', 'T0019', 'POSTED', '抽盘少 1 PCS', TRUE);
 
 INSERT INTO wms.wms_mrp_runs
 (run_id, run_date, variant_code, demand_qty, demand_date, planning_horizon, status, created_by)
@@ -2451,7 +2596,7 @@ BEGIN
     LEFT JOIN mdm.mdm_product_variants pv ON pv.variant_code = h.variant_code
     WHERE h.order_id = p_order_id
       AND h.status <> '取消'
-    FOR UPDATE;
+    FOR UPDATE OF h;
 
     IF NOT FOUND THEN
         RAISE EXCEPTION '生产订单 % 不存在或已取消', p_order_id;
@@ -2630,7 +2775,7 @@ DECLARE
     v_move      wms.movement_type;
     v_txn_id    VARCHAR(30);
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM wms.wms_inventory_count_h WHERE count_doc_id = p_count_doc_id AND status <> '取消') THEN
+    IF NOT EXISTS (SELECT 1 FROM wms.wms_inventory_count_h WHERE count_doc_id = p_count_doc_id AND status <> 'CANCELLED') THEN
         RAISE EXCEPTION '盘点单 % 不存在或已取消', p_count_doc_id;
     END IF;
 
@@ -2639,27 +2784,27 @@ BEGIN
         FROM wms.wms_inventory_count_d
         WHERE count_doc_id = p_count_doc_id
           AND adjusted IS FALSE
-          AND variance_qty <> 0
+          AND COALESCE(difference_qty, 0) <> 0
         ORDER BY line_no
     LOOP
         IF v_line.batch_number IS NULL THEN
             RAISE EXCEPTION '盘点单 % 行 % 缺少批次，不能过账', p_count_doc_id, v_line.line_no;
         END IF;
 
-        v_move := CASE WHEN v_line.variance_qty > 0 THEN '701'::wms.movement_type ELSE '702'::wms.movement_type END;
+        v_move := CASE WHEN v_line.difference_qty > 0 THEN '701'::wms.movement_type ELSE '702'::wms.movement_type END;
         v_txn_id := LEFT('IC-' || p_count_doc_id || '-' || v_line.line_no::TEXT, 30);
 
         PERFORM wms.post_inventory_transaction(
             v_txn_id,
             v_move,
             v_line.material_id,
-            ABS(v_line.variance_qty),
+            ABS(v_line.difference_qty),
             CASE WHEN v_move = '702' THEN v_line.bin_code ELSE NULL END,
             CASE WHEN v_move = '701' THEN v_line.bin_code ELSE NULL END,
             v_line.batch_number,
             v_line.serial_number,
             p_operator,
-            '合格',
+            COALESCE(v_line.quality_status, '合格'::mdm.quality_status),
             p_count_doc_id,
             '盘点差异一键过账',
             p_posting_time,
@@ -2669,20 +2814,28 @@ BEGIN
         UPDATE wms.wms_inventory_count_d
         SET adjusted = TRUE,
             movement_type = v_move,
-            adjustment_transaction_id = v_txn_id
+            transaction_id = v_txn_id,
+            status = 'POSTED',
+            updated_at = NOW()
         WHERE id = v_line.id;
 
         posted_line_no := v_line.line_no;
         posted_material_id := v_line.material_id;
         posted_batch_number := v_line.batch_number;
-        posted_variance_qty := v_line.variance_qty;
+        posted_variance_qty := v_line.difference_qty;
         posted_movement_type := v_move;
         posted_transaction_id := v_txn_id;
         RETURN NEXT;
     END LOOP;
 
+    UPDATE wms.wms_inventory_count_d
+    SET status = 'POSTED',
+        updated_at = NOW()
+    WHERE count_doc_id = p_count_doc_id
+      AND COALESCE(difference_qty, 0) = 0;
+
     UPDATE wms.wms_inventory_count_h
-    SET status = '已过账',
+    SET status = 'POSTED',
         posted_by = p_operator,
         posted_at = p_posting_time,
         updated_at = NOW()

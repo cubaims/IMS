@@ -96,11 +96,7 @@ impl QualityNotification {
     }
 
     /// 解决质量通知。
-    pub fn resolve(
-        &mut self,
-        root_cause: String,
-        corrective_action: String,
-    ) -> QualityResult<()> {
+    pub fn resolve(&mut self, root_cause: String, corrective_action: String) -> QualityResult<()> {
         if !self.status.can_update() {
             return Err(QualityError::QualityNotificationStatusInvalid);
         }

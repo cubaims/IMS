@@ -2,206 +2,284 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8080}"
+TOKEN="${TOKEN:-}"
+READ_TOKEN="${READ_TOKEN:-}"
 
-echo "== IMS Workspace Phase 3 Master Data Smoke Test =="
+if [ -z "$TOKEN" ]; then
+  echo "TOKEN is required. Example:"
+  echo "TOKEN=xxx ./scripts/smoke_master_data.sh"
+  exit 1
+fi
 
-echo "1. health check"
-curl -s "$BASE_URL/health"
-echo ""
+if [ -z "$READ_TOKEN" ]; then
+  echo "READ_TOKEN is required and must only grant master-data:read."
+  echo "TOKEN=write_or_admin_token READ_TOKEN=read_only_token ./scripts/smoke_master_data.sh"
+  exit 1
+fi
 
-echo "2. version check (skipped - endpoint not implemented yet)"
-# curl -s "$BASE_URL/api/version" | jq .
+need() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Required command not found: $1"
+    exit 1
+  fi
+}
 
-echo "3. create material RM-TEST-001"
-curl -s -X POST "$BASE_URL/api/master-data/materials" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "material_id": "RMTEST001",
-    "material_name": "Test Raw Material",
-    "material_type": "原材料",
-    "base_unit": "PCS",
-    "default_zone": "RM",
-    "safety_stock": 100,
-    "reorder_point": 50,
-    "standard_price": "10.00",
-    "map_price": "10.00"
-  }' | jq .
+need curl
+need jq
 
-echo "4. get material RMTEST001"
-curl -s "$BASE_URL/api/master-data/materials/RMTEST001" | jq .
+AUTH_HEADER="Authorization: Bearer ${TOKEN}"
+READ_AUTH_HEADER="Authorization: Bearer ${READ_TOKEN}"
+RUN_ID="$(date +%Y%m%d%H%M%S)"
 
-echo "5. create finished material FINTEST001"
-curl -s -X POST "$BASE_URL/api/master-data/materials" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "material_id": "FINTEST001",
-    "material_name": "Test Finished Product",
-    "material_type": "成品",
-    "base_unit": "PCS",
-    "default_zone": "FG",
-    "safety_stock": 20,
-    "reorder_point": 10,
-    "standard_price": "100.00",
-    "map_price": "100.00"
-  }' | jq .
+MATERIAL_ID="RM${RUN_ID:4:10}"
+FINISHED_ID="FN${RUN_ID:4:10}"
+SUPPLIER_ID="SP${RUN_ID:4:10}"
+CUSTOMER_ID="CU${RUN_ID:4:10}"
+RAW_BIN="R${RUN_ID:6:8}"
+FIN_BIN="F${RUN_ID:6:8}"
+BOM_ID="BOM${RUN_ID:3:11}"
+VARIANT_CODE="V${RUN_ID:5:9}"
+WORK_CENTER_ID="WC${RUN_ID:4:10}"
+CHAR_ID="CH${RUN_ID:4:10}"
+DEFECT_CODE="DF${RUN_ID:4:10}"
 
-echo "6. create bin RM-T01"
-curl -s -X POST "$BASE_URL/api/master-data/bins" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "bin_code": "RM-T01",
-    "zone": "RM",
-    "bin_type": "普通货位",
-    "capacity": 10000,
-    "notes": "Smoke test raw material bin"
-  }' | jq .
+request() {
+  local method="$1"
+  local path="$2"
+  local expected="$3"
+  local body="${4:-}"
+  local auth_header="${5:-$AUTH_HEADER}"
+  local check_success="${6:-yes}"
+  local response status payload
 
-echo "7. create bin FG-T01"
-curl -s -X POST "$BASE_URL/api/master-data/bins" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "bin_code": "FG-T01",
-    "zone": "FG",
-    "bin_type": "普通货位",
-    "capacity": 10000,
-    "notes": "Smoke test finished goods bin"
-  }' | jq .
+  if [ -n "$body" ]; then
+    response="$(curl -sS -w '\n%{http_code}' -X "$method" "${BASE_URL}${path}" \
+      -H "$auth_header" \
+      -H "Content-Type: application/json" \
+      -d "$body")"
+  elif [ -n "$auth_header" ]; then
+    response="$(curl -sS -w '\n%{http_code}' -X "$method" "${BASE_URL}${path}" \
+      -H "$auth_header")"
+  else
+    response="$(curl -sS -w '\n%{http_code}' -X "$method" "${BASE_URL}${path}")"
+  fi
 
-echo "8. create supplier SUPTEST001"
-curl -s -X POST "$BASE_URL/api/master-data/suppliers" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "supplier_id": "SUPTEST001",
-    "supplier_name": "Smoke Test Supplier",
-    "contact_person": "Tester",
-    "phone": "13800000000",
-    "email": "supplier@example.com",
-    "address": "Test Address",
-    "quality_rating": "A"
-  }' | jq .
+  status="$(printf '%s' "$response" | tail -n 1)"
+  payload="$(printf '%s' "$response" | sed '$d')"
 
-echo "9. bind material supplier"
-curl -s -X POST "$BASE_URL/api/master-data/materials/RMTEST001/suppliers" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "material_id": "RMTEST001",
-    "supplier_id": "SUPTEST001",
-    "is_primary": true,
-    "supplier_material_code": "SUP-RM-001",
-    "purchase_price": "9.50",
-    "currency": "CNY",
-    "lead_time_days": 7,
-    "moq": 100,
-    "quality_rating": "A"
-  }' | jq .
+  if [ "$status" != "$expected" ]; then
+    echo "Unexpected status for $method $path: got $status expected $expected"
+    printf '%s\n' "$payload" | jq . 2>/dev/null || printf '%s\n' "$payload"
+    exit 1
+  fi
 
-echo "10. create customer CUSTTEST001"
-curl -s -X POST "$BASE_URL/api/master-data/customers" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "customer_id": "CUSTTEST001",
-    "customer_name": "Smoke Test Customer",
-    "contact_person": "Buyer",
-    "phone": "13900000000",
-    "email": "customer@example.com",
-    "address": "Customer Address",
-    "credit_limit": "100000.00"
-  }' | jq .
+  if [ "$expected" = "200" ] && [ "$check_success" = "yes" ]; then
+    local success
+    success="$(printf '%s\n' "$payload" | jq -r '.success // empty')"
+    if [ "$success" != "true" ]; then
+      echo "Expected success=true for $method $path"
+      printf '%s\n' "$payload" | jq . 2>/dev/null || printf '%s\n' "$payload"
+      exit 1
+    fi
+  fi
 
-echo "11. create BOM BOMTEST001"
-curl -s -X POST "$BASE_URL/api/master-data/boms" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "bom_id": "BOMTEST001",
-    "bom_name": "Smoke Test BOM",
-    "parent_material_id": "FINTEST001",
-    "variant_code": null,
-    "version": "1.0",
-    "base_quantity": "1.00",
-    "valid_from": "2026-05-01",
-    "valid_to": null,
-    "status": "草稿",
-    "notes": "Smoke test BOM"
-  }' | jq .
+  printf '%s\n' "$payload"
+}
 
-echo "12. add BOM component"
-curl -s -X POST "$BASE_URL/api/master-data/boms/BOMTEST001/components" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "bom_id": "BOMTEST001",
-    "parent_material_id": "FINTEST001",
-    "component_material_id": "RMTEST001",
-    "quantity": "2.00",
-    "unit": "PCS",
-    "bom_level": 1,
-    "scrap_rate": "0.00",
-    "is_critical": true
-  }' | jq .
+echo "== Phase 3 Master Data smoke test =="
 
-echo "13. validate BOM"
-curl -s -X POST "$BASE_URL/api/master-data/boms/BOMTEST001/validate" | jq .
+echo "1. public OpenAPI document"
+request GET "/api/openapi/master-data.json" 200 "" "" no >/tmp/ims-master-data-openapi.json
+jq -e '.paths["/api/master-data/boms/{bom_id}/components/{component_id}"].patch' \
+  /tmp/ims-master-data-openapi.json >/dev/null
 
-echo "14. get BOM tree"
-curl -s "$BASE_URL/api/master-data/boms/BOMTEST001/tree" | jq .
+echo "2. permission guard rejects missing token"
+request GET "/api/master-data/materials" 401 "" "" no >/dev/null
 
-echo "15. create product variant"
-curl -s -X POST "$BASE_URL/api/master-data/product-variants" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "variant_code": "FINTEST-A",
-    "variant_name": "Smoke Test Variant A",
-    "base_material_id": "FINTEST001",
-    "bom_id": "BOMTEST001",
-    "standard_cost": "120.00"
-  }' | jq .
+echo "3. permission guard rejects read-only token on write route"
+request POST "/api/master-data/materials" 403 '{
+  "material_id": "SHOULDNOTCREATE",
+  "material_name": "Should Not Create",
+  "material_type": "原材料",
+  "base_unit": "PCS",
+  "default_zone": "RM",
+  "safety_stock": 0,
+  "reorder_point": 0,
+  "standard_price": "0.00",
+  "map_price": "0.00"
+}' "$READ_AUTH_HEADER" >/dev/null
 
-echo "16. create work center"
-curl -s -X POST "$BASE_URL/api/master-data/work-centers" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "work_center_id": "WCTEST001",
-    "work_center_name": "Smoke Test Work Center",
-    "location": "Workshop A",
-    "capacity_per_day": 1000,
-    "efficiency": "100.00"
-  }' | jq .
+echo "4. create raw and finished materials"
+request POST "/api/master-data/materials" 200 "{
+  \"material_id\": \"${MATERIAL_ID}\",
+  \"material_name\": \"Smoke Raw Material\",
+  \"material_type\": \"原材料\",
+  \"base_unit\": \"PCS\",
+  \"default_zone\": \"RM\",
+  \"safety_stock\": 100,
+  \"reorder_point\": 50,
+  \"standard_price\": \"10.00\",
+  \"map_price\": \"10.00\"
+}" >/dev/null
 
-echo "17. create inspection characteristic"
-curl -s -X POST "$BASE_URL/api/master-data/inspection-chars" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "char_id": "CHARTEST001",
-    "char_name": "Smoke Test Dimension",
-    "material_type": "原材料",
-    "inspection_type": "尺寸",
-    "method": "Caliper",
-    "standard": "10±0.2",
-    "unit": "mm",
-    "lower_limit": "9.80",
-    "upper_limit": "10.20",
-    "is_critical": true
-  }' | jq .
+request POST "/api/master-data/materials" 200 "{
+  \"material_id\": \"${FINISHED_ID}\",
+  \"material_name\": \"Smoke Finished Product\",
+  \"material_type\": \"成品\",
+  \"base_unit\": \"PCS\",
+  \"default_zone\": \"FG\",
+  \"safety_stock\": 20,
+  \"reorder_point\": 10,
+  \"standard_price\": \"100.00\",
+  \"map_price\": \"100.00\"
+}" >/dev/null
 
-echo "18. create defect code"
-curl -s -X POST "$BASE_URL/api/master-data/defect-codes" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "defect_code": "DEFTEST001",
-    "defect_name": "Smoke Test Scratch",
-    "category": "外观",
-    "severity": "一般",
-    "description": "Smoke test defect code"
-  }' | jq .
+request GET "/api/master-data/materials/${MATERIAL_ID}" 200 >/dev/null
 
-echo "19. list all major master data"
-curl -s "$BASE_URL/api/master-data/materials" | jq .
-curl -s "$BASE_URL/api/master-data/bins" | jq .
-curl -s "$BASE_URL/api/master-data/suppliers" | jq .
-curl -s "$BASE_URL/api/master-data/customers" | jq .
-curl -s "$BASE_URL/api/master-data/boms" | jq .
-curl -s "$BASE_URL/api/master-data/product-variants" | jq .
-curl -s "$BASE_URL/api/master-data/work-centers" | jq .
-curl -s "$BASE_URL/api/master-data/inspection-chars" | jq .
-curl -s "$BASE_URL/api/master-data/defect-codes" | jq .
+echo "5. create bins"
+request POST "/api/master-data/bins" 200 "{
+  \"bin_code\": \"${RAW_BIN}\",
+  \"zone\": \"RM\",
+  \"bin_type\": \"普通货位\",
+  \"capacity\": 10000,
+  \"notes\": \"Phase 3 smoke raw bin\"
+}" >/dev/null
 
-echo "== Phase 3 smoke test completed =="
+request POST "/api/master-data/bins" 200 "{
+  \"bin_code\": \"${FIN_BIN}\",
+  \"zone\": \"FG\",
+  \"bin_type\": \"普通货位\",
+  \"capacity\": 10000,
+  \"notes\": \"Phase 3 smoke finished bin\"
+}" >/dev/null
+
+echo "6. create supplier and material-supplier relationship"
+request POST "/api/master-data/suppliers" 200 "{
+  \"supplier_id\": \"${SUPPLIER_ID}\",
+  \"supplier_name\": \"Smoke Supplier\",
+  \"contact_person\": \"Tester\",
+  \"phone\": \"13800000000\",
+  \"email\": \"supplier@example.com\",
+  \"address\": \"Test Address\",
+  \"quality_rating\": \"A\"
+}" >/dev/null
+
+request POST "/api/master-data/materials/${MATERIAL_ID}/suppliers" 200 "{
+  \"material_id\": \"${MATERIAL_ID}\",
+  \"supplier_id\": \"${SUPPLIER_ID}\",
+  \"is_primary\": false,
+  \"supplier_material_code\": \"SUP-${MATERIAL_ID}\",
+  \"purchase_price\": \"9.50\",
+  \"currency\": \"CNY\",
+  \"lead_time_days\": 7,
+  \"moq\": 100,
+  \"quality_rating\": \"A\"
+}" >/dev/null
+
+request POST "/api/master-data/materials/${MATERIAL_ID}/suppliers/${SUPPLIER_ID}/primary" 200 >/dev/null
+
+echo "7. create customer"
+request POST "/api/master-data/customers" 200 "{
+  \"customer_id\": \"${CUSTOMER_ID}\",
+  \"customer_name\": \"Smoke Customer\",
+  \"contact_person\": \"Buyer\",
+  \"phone\": \"13900000000\",
+  \"email\": \"customer@example.com\",
+  \"address\": \"Customer Address\",
+  \"credit_limit\": \"100000.00\"
+}" >/dev/null
+
+echo "8. create BOM, component, activate, validate, tree, explosion preview"
+request POST "/api/master-data/boms" 200 "{
+  \"bom_id\": \"${BOM_ID}\",
+  \"bom_name\": \"Smoke BOM\",
+  \"parent_material_id\": \"${FINISHED_ID}\",
+  \"variant_code\": null,
+  \"version\": \"1.0\",
+  \"base_quantity\": \"1.00\",
+  \"valid_from\": \"2026-05-01\",
+  \"valid_to\": null,
+  \"status\": \"草稿\",
+  \"notes\": \"Phase 3 smoke BOM\"
+}" >/dev/null
+
+request POST "/api/master-data/boms/${BOM_ID}/components" 200 "{
+  \"bom_id\": \"${BOM_ID}\",
+  \"parent_material_id\": \"${FINISHED_ID}\",
+  \"component_material_id\": \"${MATERIAL_ID}\",
+  \"quantity\": \"2.00\",
+  \"unit\": \"PCS\",
+  \"bom_level\": 1,
+  \"scrap_rate\": \"0.00\",
+  \"is_critical\": true
+}" >/dev/null
+
+request POST "/api/master-data/boms/${BOM_ID}/activate" 200 >/dev/null
+request POST "/api/master-data/boms/${BOM_ID}/validate" 200 >/dev/null
+request GET "/api/master-data/boms/${BOM_ID}/tree" 200 >/dev/null
+request POST "/api/master-data/boms/${BOM_ID}/explode-preview" 200 '{
+  "quantity": 5
+}' >/dev/null
+
+echo "9. create product variant"
+request POST "/api/master-data/product-variants" 200 "{
+  \"variant_code\": \"${VARIANT_CODE}\",
+  \"variant_name\": \"Smoke Variant\",
+  \"base_material_id\": \"${FINISHED_ID}\",
+  \"bom_id\": \"${BOM_ID}\",
+  \"standard_cost\": \"120.00\"
+}" >/dev/null
+
+echo "10. create work center and quality master data"
+request POST "/api/master-data/work-centers" 200 "{
+  \"work_center_id\": \"${WORK_CENTER_ID}\",
+  \"work_center_name\": \"Smoke Work Center\",
+  \"location\": \"Workshop A\",
+  \"capacity_per_day\": 1000,
+  \"efficiency\": \"100.00\"
+}" >/dev/null
+
+request POST "/api/master-data/inspection-chars" 200 "{
+  \"char_id\": \"${CHAR_ID}\",
+  \"char_name\": \"Smoke Dimension\",
+  \"material_type\": \"原材料\",
+  \"inspection_type\": \"来料检验\",
+  \"method\": \"Caliper\",
+  \"standard\": \"10 plus/minus 0.2\",
+  \"unit\": \"mm\",
+  \"lower_limit\": \"9.80\",
+  \"upper_limit\": \"10.20\",
+  \"is_critical\": true
+}" >/dev/null
+
+request POST "/api/master-data/defect-codes" 200 "{
+  \"defect_code\": \"${DEFECT_CODE}\",
+  \"defect_name\": \"Smoke Scratch\",
+  \"category\": \"外观\",
+  \"severity\": \"一般\",
+  \"description\": \"Smoke defect code\"
+}" >/dev/null
+
+echo "11. list major master data"
+request GET "/api/master-data/materials" 200 >/dev/null
+request GET "/api/master-data/bins" 200 >/dev/null
+request GET "/api/master-data/suppliers" 200 >/dev/null
+request GET "/api/master-data/customers" 200 >/dev/null
+request GET "/api/master-data/boms" 200 >/dev/null
+request GET "/api/master-data/product-variants" 200 >/dev/null
+request GET "/api/master-data/work-centers" 200 >/dev/null
+request GET "/api/master-data/inspection-chars" 200 >/dev/null
+request GET "/api/master-data/defect-codes" 200 >/dev/null
+
+cat <<EOF
+== Phase 3 smoke test completed ==
+MATERIAL_ID=${MATERIAL_ID}
+FINISHED_ID=${FINISHED_ID}
+SUPPLIER_ID=${SUPPLIER_ID}
+CUSTOMER_ID=${CUSTOMER_ID}
+BOM_ID=${BOM_ID}
+VARIANT_CODE=${VARIANT_CODE}
+WORK_CENTER_ID=${WORK_CENTER_ID}
+CHAR_ID=${CHAR_ID}
+DEFECT_CODE=${DEFECT_CODE}
+EOF

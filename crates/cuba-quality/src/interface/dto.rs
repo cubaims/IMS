@@ -1,15 +1,18 @@
 use crate::application::{
-    AddInspectionResultCommand, CreateInspectionLotCommand, FreezeBatchCommand,
-    MakeInspectionDecisionCommand, ScrapBatchCommand, UnfreezeBatchCommand,
+    AddInspectionResultCommand, BatchAddInspectionResultItem, BatchAddInspectionResultsCommand,
+    BatchHistoryQuery, CreateInspectionLotCommand, FreezeBatchCommand, InspectionLotQuery,
+    MakeInspectionDecisionCommand, QualityNotificationQuery, ScrapBatchCommand,
+    UnfreezeBatchCommand,
 };
 use crate::domain::{
-    BatchNumber, BatchQualityStatus, DefectCode, InspectionCharId,
-    InspectionDecision, InspectionLotId, InspectionLotType,
-    InspectionResultStatus, MaterialId, Operator,
-    QualityNotificationSeverity,
+    BatchNumber, BatchQualityStatus, DefectCode, InspectionCharId, InspectionDecision,
+    InspectionLotId, InspectionLotStatus, InspectionLotType, InspectionResultStatus, MaterialId,
+    Operator, QualityNotificationSeverity, QualityNotificationStatus,
 };
+use cuba_shared::PageQuery;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 /// 创建检验批请求。
 ///
@@ -44,9 +47,7 @@ impl CreateInspectionLotRequest {
             sample_qty: self.sample_qty,
             created_by: operator,
             remark: self.remark,
-            mark_batch_pending_inspection: self
-                .mark_batch_pending_inspection
-                .unwrap_or(true),
+            mark_batch_pending_inspection: self.mark_batch_pending_inspection.unwrap_or(true),
         }
     }
 }
@@ -74,11 +75,7 @@ pub struct AddInspectionResultRequest {
 }
 
 impl AddInspectionResultRequest {
-    pub fn into_command(
-        self,
-        lot_id: String,
-        operator: Operator,
-    ) -> AddInspectionResultCommand {
+    pub fn into_command(self, lot_id: String, operator: Operator) -> AddInspectionResultCommand {
         AddInspectionResultCommand {
             inspection_lot_id: InspectionLotId::new(lot_id),
             char_id: InspectionCharId::new(self.char_id),
@@ -108,6 +105,31 @@ pub struct BatchAddInspectionResultsRequest {
     pub results: Vec<AddInspectionResultRequest>,
 }
 
+impl BatchAddInspectionResultsRequest {
+    pub fn into_command(
+        self,
+        lot_id: String,
+        operator: Operator,
+    ) -> BatchAddInspectionResultsCommand {
+        BatchAddInspectionResultsCommand {
+            inspection_lot_id: InspectionLotId::new(lot_id),
+            results: self
+                .results
+                .into_iter()
+                .map(|item| BatchAddInspectionResultItem {
+                    char_id: InspectionCharId::new(item.char_id),
+                    measured_value: item.measured_value,
+                    qualitative_result: item.qualitative_result,
+                    defect_code: item.defect_code.map(DefectCode::new),
+                    defect_qty: item.defect_qty.unwrap_or(Decimal::ZERO),
+                    remark: item.remark,
+                })
+                .collect(),
+            inspector: operator,
+        }
+    }
+}
+
 /// 批量录入检验结果响应。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchAddInspectionResultsResponse {
@@ -129,11 +151,7 @@ pub struct MakeInspectionDecisionRequest {
 }
 
 impl MakeInspectionDecisionRequest {
-    pub fn into_command(
-        self,
-        lot_id: String,
-        operator: Operator,
-    ) -> MakeInspectionDecisionCommand {
+    pub fn into_command(self, lot_id: String, operator: Operator) -> MakeInspectionDecisionCommand {
         MakeInspectionDecisionCommand {
             inspection_lot_id: InspectionLotId::new(lot_id),
             decision: self.decision,
@@ -167,11 +185,7 @@ pub struct FreezeBatchRequest {
 }
 
 impl FreezeBatchRequest {
-    pub fn into_command(
-        self,
-        batch_number: String,
-        operator: Operator,
-    ) -> FreezeBatchCommand {
+    pub fn into_command(self, batch_number: String, operator: Operator) -> FreezeBatchCommand {
         FreezeBatchCommand {
             batch_number: BatchNumber::new(batch_number),
             reason: self.reason,
@@ -195,11 +209,7 @@ pub struct UnfreezeBatchRequest {
 }
 
 impl UnfreezeBatchRequest {
-    pub fn into_command(
-        self,
-        batch_number: String,
-        operator: Operator,
-    ) -> UnfreezeBatchCommand {
+    pub fn into_command(self, batch_number: String, operator: Operator) -> UnfreezeBatchCommand {
         UnfreezeBatchCommand {
             batch_number: BatchNumber::new(batch_number),
             target_status: self.target_status,
@@ -224,11 +234,7 @@ pub struct ScrapBatchRequest {
 }
 
 impl ScrapBatchRequest {
-    pub fn into_command(
-        self,
-        batch_number: String,
-        operator: Operator,
-    ) -> ScrapBatchCommand {
+    pub fn into_command(self, batch_number: String, operator: Operator) -> ScrapBatchCommand {
         ScrapBatchCommand {
             batch_number: BatchNumber::new(batch_number),
             reason: self.reason,
@@ -245,6 +251,86 @@ impl ScrapBatchRequest {
 pub struct BatchActionResponse {
     pub batch_number: String,
     pub success: bool,
+}
+
+/// 检验批列表查询参数。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct InspectionLotListQuery {
+    pub page: Option<u64>,
+    pub page_size: Option<u64>,
+    pub lot_type: Option<InspectionLotType>,
+    pub status: Option<InspectionLotStatus>,
+    pub material_id: Option<String>,
+    pub batch_number: Option<String>,
+    pub date_from: Option<OffsetDateTime>,
+    pub date_to: Option<OffsetDateTime>,
+}
+
+impl InspectionLotListQuery {
+    pub fn into_application_query(self) -> InspectionLotQuery {
+        InspectionLotQuery {
+            page: PageQuery {
+                page: self.page.unwrap_or(1),
+                page_size: self.page_size.unwrap_or(20),
+            },
+            lot_type: self.lot_type,
+            status: self.status,
+            material_id: self.material_id.map(MaterialId::new),
+            batch_number: self.batch_number.map(BatchNumber::new),
+            date_from: self.date_from,
+            date_to: self.date_to,
+        }
+    }
+}
+
+/// 批次质量历史查询参数。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BatchHistoryListQuery {
+    pub page: Option<u64>,
+    pub page_size: Option<u64>,
+}
+
+impl BatchHistoryListQuery {
+    pub fn into_application_query(self) -> BatchHistoryQuery {
+        BatchHistoryQuery {
+            page: PageQuery {
+                page: self.page.unwrap_or(1),
+                page_size: self.page_size.unwrap_or(20),
+            },
+        }
+    }
+}
+
+/// 质量通知列表查询参数。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct QualityNotificationListQuery {
+    pub page: Option<u64>,
+    pub page_size: Option<u64>,
+    pub status: Option<QualityNotificationStatus>,
+    pub severity: Option<QualityNotificationSeverity>,
+    pub material_id: Option<String>,
+    pub batch_number: Option<String>,
+    pub owner: Option<String>,
+    pub date_from: Option<OffsetDateTime>,
+    pub date_to: Option<OffsetDateTime>,
+}
+
+impl QualityNotificationListQuery {
+    pub fn into_application_query(self) -> QualityNotificationQuery {
+        QualityNotificationQuery {
+            page: PageQuery {
+                page: self.page.unwrap_or(1),
+                page_size: self.page_size.unwrap_or(20),
+            },
+            status: self.status,
+            severity: self.severity,
+            material_id: self.material_id.map(MaterialId::new),
+            batch_number: self.batch_number.map(BatchNumber::new),
+            owner: self.owner,
+            date_from: self.date_from,
+            date_to: self.date_to,
+        }
+    }
 }
 
 /// 当前用户上下文。

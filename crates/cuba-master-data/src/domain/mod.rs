@@ -2,8 +2,8 @@ pub mod entities;
 
 pub mod enums;
 
-pub mod value_objects;
 pub mod errors;
+pub mod value_objects;
 
 pub mod aggregates;
 pub use aggregates::Bom;

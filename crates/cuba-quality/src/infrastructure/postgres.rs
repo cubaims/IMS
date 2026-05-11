@@ -1,30 +1,26 @@
 use crate::application::{
-    BatchHistoryQuery, BatchQualityRepository, BatchQualityStatusView,
-    DefectCodeSnapshot, InspectionCharSnapshot, QualityIdGenerator,
-    QualityMasterRepository,
+    BatchHistoryQuery, BatchQualityRepository, BatchQualityStatusView, DefectCodeSnapshot,
+    InspectionCharSnapshot, QualityIdGenerator, QualityMasterRepository,
 };
 use crate::domain::{
-    BatchNumber, BatchQuality, BatchQualityAction, BatchQualityHistory,
-    BatchQualityStatus, DefectCode, InspectionCharId, InspectionLotId,
-    InspectionResultId, MaterialId, Operator, QualityError,
-    QualityNotificationId, QualityResult,
+    BatchNumber, BatchQuality, BatchQualityAction, BatchQualityHistory, BatchQualityStatus,
+    DefectCode, InspectionCharId, InspectionLotId, InspectionResultId, MaterialId, Operator,
+    QualityError, QualityNotificationId, QualityResult,
 };
 
 use crate::application::{
-    InspectionLotQuery, InspectionLotRepository, InspectionLotSummary,
-    InspectionResultRepository, QualityNotificationQuery,
-    QualityNotificationRepository, QualityNotificationSummary,
+    InspectionLotQuery, InspectionLotRepository, InspectionLotSummary, InspectionResultRepository,
+    QualityNotificationQuery, QualityNotificationRepository, QualityNotificationSummary,
 };
 use crate::domain::{
-    CreateInspectionLot, CreateInspectionResult, CreateQualityNotification,
-    InspectionDecision, InspectionLot, InspectionLotStatus, InspectionLotType,
-    InspectionResult, InspectionResultStatus, QualityNotification,
-    QualityNotificationSeverity, QualityNotificationStatus,
+    InspectionDecision, InspectionLot, InspectionLotStatus, InspectionLotType, InspectionResult,
+    InspectionResultStatus, QualityNotification, QualityNotificationSeverity,
+    QualityNotificationStatus,
 };
-use serde_json::{json, Value};
 use async_trait::async_trait;
-use cuba_shared::Page;
+use cuba_shared::{AppError, Page};
 use rust_decimal::Decimal;
+use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -89,14 +85,30 @@ impl QualityIdGenerator for PostgresQualityIdGenerator {
 // =============================================================================
 
 /// 把 sqlx 错误转换成质量模块业务错误。
-///
-/// 当前 MVP 先统一包装成 BusinessRuleViolation。
-/// 后续可以根据数据库错误码细分为：
-/// - 外键不存在
-/// - 唯一键冲突
-/// - CHECK 约束失败
-fn map_sqlx_error(error: sqlx::Error) -> QualityError {
-    QualityError::BusinessRuleViolation(format!("数据库错误：{error}"))
+fn map_quality_db_error(error: sqlx::Error) -> QualityError {
+    match cuba_shared::map_quality_db_error(error) {
+        AppError::NotFound(_) => QualityError::InspectionLotNotFound,
+        AppError::Business {
+            code: "INSPECTION_LOT_NOT_FOUND",
+            ..
+        } => QualityError::InspectionLotNotFound,
+        AppError::Business {
+            code: "INSPECTION_CHAR_NOT_FOUND",
+            ..
+        } => QualityError::InspectionCharNotFound,
+        AppError::Business {
+            code: "DEFECT_CODE_NOT_FOUND",
+            ..
+        } => QualityError::DefectCodeNotFound,
+        AppError::Business { code, message } => {
+            QualityError::BusinessRuleViolation(format!("{code}: {message}"))
+        }
+        AppError::Validation(message) => QualityError::BusinessRuleViolation(message),
+        AppError::Database { .. } | AppError::Internal(_) => {
+            QualityError::BusinessRuleViolation("质量模块数据库操作失败".to_string())
+        }
+        other => QualityError::BusinessRuleViolation(other.public_message()),
+    }
 }
 
 /// 把领域质量状态转为数据库枚举文本。
@@ -196,10 +208,10 @@ impl BatchQualityRepository for PostgresQualityStore {
             FOR UPDATE
             "#,
         )
-            .bind(batch_number.as_str())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(batch_number.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         let Some(row) = row else {
             return Err(QualityError::BusinessRuleViolation(format!(
@@ -231,11 +243,11 @@ impl BatchQualityRepository for PostgresQualityStore {
             WHERE batch_number = $1
             "#,
         )
-            .bind(batch_number.as_str())
-            .bind(batch_status_to_db(status))
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(batch_number.as_str())
+        .bind(batch_status_to_db(status))
+        .execute(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         if result.rows_affected() == 0 {
             return Err(QualityError::BusinessRuleViolation(format!(
@@ -250,10 +262,7 @@ impl BatchQualityRepository for PostgresQualityStore {
     /// 写入批次质量历史。
     ///
     /// 对应表：wms.wms_batch_history。
-    async fn write_batch_history(
-        &self,
-        history: &BatchQualityHistory,
-    ) -> QualityResult<()> {
+    async fn write_batch_history(&self, history: &BatchQualityHistory) -> QualityResult<()> {
         let old_status = history.old_status.map(batch_status_to_db);
         let new_status = batch_status_to_db(history.new_status);
 
@@ -294,18 +303,18 @@ impl BatchQualityRepository for PostgresQualityStore {
             )
             "#,
         )
-            .bind(history.batch_number.as_str())
-            .bind(old_status)
-            .bind(new_status)
-            .bind(change_reason)
-            .bind(inspection_lot_id)
-            .bind(notification_id)
-            .bind(transaction_id)
-            .bind(history.operator.as_str())
-            .bind(history.occurred_at)
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(history.batch_number.as_str())
+        .bind(old_status)
+        .bind(new_status)
+        .bind(change_reason)
+        .bind(inspection_lot_id)
+        .bind(notification_id)
+        .bind(transaction_id)
+        .bind(history.operator.as_str())
+        .bind(history.occurred_at)
+        .execute(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         Ok(())
     }
@@ -326,10 +335,10 @@ impl BatchQualityRepository for PostgresQualityStore {
             WHERE batch_number = $1
             "#,
         )
-            .bind(batch_number.as_str())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(batch_number.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         let Some(row) = row else {
             return Err(QualityError::BusinessRuleViolation(format!(
@@ -367,10 +376,10 @@ impl BatchQualityRepository for PostgresQualityStore {
             WHERE batch_number = $1
             "#,
         )
-            .bind(batch_number.as_str())
-            .fetch_one(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(batch_number.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         let rows = sqlx::query(
             r#"
@@ -390,12 +399,12 @@ impl BatchQualityRepository for PostgresQualityStore {
             LIMIT $2 OFFSET $3
             "#,
         )
-            .bind(batch_number.as_str())
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(batch_number.as_str())
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         let mut items = Vec::with_capacity(rows.len());
 
@@ -413,9 +422,7 @@ impl BatchQualityRepository for PostgresQualityStore {
             let notification_id: Option<String> = row.get("notification_id");
             let transaction_id: Option<String> = row.get("transaction_id");
 
-            let reference_doc = inspection_lot_id
-                .or(notification_id)
-                .or(transaction_id);
+            let reference_doc = inspection_lot_id.or(notification_id).or(transaction_id);
 
             let reason: Option<String> = row.get("change_reason");
             let changed_by: Option<String> = row.get("changed_by");
@@ -451,21 +458,222 @@ fn history_action_from_status(status: BatchQualityStatus) -> BatchQualityAction 
 }
 
 // =============================================================================
+// Inspection Lot 映射
+// =============================================================================
+
+/// 检验批类型映射到 v9 数据库 inspection_type。
+fn inspection_lot_type_to_db(value: InspectionLotType) -> &'static str {
+    match value {
+        InspectionLotType::PurchaseReceipt => "来料检验",
+        InspectionLotType::ProductionReceipt => "最终检验",
+        InspectionLotType::StockRecheck => "过程检验",
+        InspectionLotType::CustomerReturn => "最终检验",
+        InspectionLotType::Manual => "过程检验",
+    }
+}
+
+/// v9 数据库 inspection_type 映射回领域类型。
+fn inspection_lot_type_from_db(value: &str) -> InspectionLotType {
+    match value {
+        "来料检验" => InspectionLotType::PurchaseReceipt,
+        "最终检验" => InspectionLotType::ProductionReceipt,
+        "过程检验" => InspectionLotType::Manual,
+        _ => InspectionLotType::Manual,
+    }
+}
+
+/// 检验批领域状态映射到数据库 lot_status。
+fn lot_status_to_db(
+    status: InspectionLotStatus,
+    decision: Option<InspectionDecision>,
+) -> &'static str {
+    match decision {
+        Some(InspectionDecision::Accept) => "合格",
+        Some(InspectionDecision::Freeze) => "冻结",
+        Some(InspectionDecision::Scrap) => "报废",
+        None => match status {
+            InspectionLotStatus::Created => "待检",
+            InspectionLotStatus::InProgress => "待检",
+            InspectionLotStatus::ResultEntered => "待检",
+            InspectionLotStatus::Decided => "待检",
+            InspectionLotStatus::Closed => "合格",
+            InspectionLotStatus::Cancelled => "冻结",
+        },
+    }
+}
+
+/// 从 JSONB 里的 app_status 恢复领域状态。
+fn inspection_lot_status_from_json_or_db(
+    meta: &Value,
+    lot_status_text: &str,
+) -> InspectionLotStatus {
+    match meta.get("app_status").and_then(|v| v.as_str()) {
+        Some("CREATED") => InspectionLotStatus::Created,
+        Some("IN_PROGRESS") => InspectionLotStatus::InProgress,
+        Some("RESULT_ENTERED") => InspectionLotStatus::ResultEntered,
+        Some("DECIDED") => InspectionLotStatus::Decided,
+        Some("CLOSED") => InspectionLotStatus::Closed,
+        Some("CANCELLED") => InspectionLotStatus::Cancelled,
+        _ => match lot_status_text {
+            "待检" => InspectionLotStatus::Created,
+            "合格" => InspectionLotStatus::Decided,
+            "冻结" => InspectionLotStatus::Decided,
+            "报废" => InspectionLotStatus::Decided,
+            "放行" => InspectionLotStatus::Decided,
+            _ => InspectionLotStatus::Created,
+        },
+    }
+}
+
+/// 领域状态转字符串，写入 inspection_result JSONB。
+fn inspection_lot_status_to_code(status: InspectionLotStatus) -> &'static str {
+    match status {
+        InspectionLotStatus::Created => "CREATED",
+        InspectionLotStatus::InProgress => "IN_PROGRESS",
+        InspectionLotStatus::ResultEntered => "RESULT_ENTERED",
+        InspectionLotStatus::Decided => "DECIDED",
+        InspectionLotStatus::Closed => "CLOSED",
+        InspectionLotStatus::Cancelled => "CANCELLED",
+    }
+}
+
+/// 质量判定转字符串。
+fn inspection_decision_to_code(decision: InspectionDecision) -> &'static str {
+    match decision {
+        InspectionDecision::Accept => "ACCEPT",
+        InspectionDecision::Freeze => "FREEZE",
+        InspectionDecision::Scrap => "SCRAP",
+    }
+}
+
+/// 字符串转质量判定。
+fn inspection_decision_from_code(value: &str) -> Option<InspectionDecision> {
+    match value {
+        "ACCEPT" => Some(InspectionDecision::Accept),
+        "FREEZE" => Some(InspectionDecision::Freeze),
+        "SCRAP" => Some(InspectionDecision::Scrap),
+        _ => None,
+    }
+}
+
+/// 把 InspectionLot 中 v9 表没有的字段打包进 JSONB。
+fn inspection_lot_to_meta(lot: &InspectionLot) -> Value {
+    json!({
+        "app_status": inspection_lot_status_to_code(lot.status),
+        "decision": lot.decision.map(inspection_decision_to_code),
+        "decision_reason": lot.decision_reason,
+        "source_transaction_id": lot.source_transaction_id,
+        "source_doc": lot.source_doc,
+        "quantity": lot.quantity,
+        "sample_qty": lot.sample_qty,
+        "created_by": lot.created_by.as_str(),
+        "decided_by": lot.decided_by.as_ref().map(|x| x.as_str().to_string()),
+        "created_at": lot.created_at,
+        "inspected_at": lot.inspected_at,
+        "decided_at": lot.decided_at,
+        "closed_at": lot.closed_at,
+        "remark": lot.remark
+    })
+}
+
+/// 从数据库行恢复 InspectionLot。
+fn inspection_lot_from_row(row: &sqlx::postgres::PgRow) -> QualityResult<InspectionLot> {
+    let meta: Value = row
+        .try_get::<Value, _>("inspection_result")
+        .unwrap_or_else(|_| json!({}));
+
+    let lot_status_text: String = row.get("lot_status");
+    let status = inspection_lot_status_from_json_or_db(&meta, &lot_status_text);
+
+    let decision = meta
+        .get("decision")
+        .and_then(|v| v.as_str())
+        .and_then(inspection_decision_from_code)
+        .or_else(|| match lot_status_text.as_str() {
+            "合格" | "放行" => Some(InspectionDecision::Accept),
+            "冻结" => Some(InspectionDecision::Freeze),
+            "报废" => Some(InspectionDecision::Scrap),
+            _ => None,
+        });
+
+    let quantity = meta
+        .get("quantity")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or(Decimal::ZERO);
+
+    let sample_qty = meta
+        .get("sample_qty")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or(Decimal::ZERO);
+
+    let source_transaction_id = meta
+        .get("source_transaction_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let source_doc = meta
+        .get("source_doc")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let decision_reason = meta
+        .get("decision_reason")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let created_by = meta
+        .get("created_by")
+        .and_then(|v| v.as_str())
+        .unwrap_or("SYSTEM");
+
+    let decided_by = meta
+        .get("decided_by")
+        .and_then(|v| v.as_str())
+        .map(Operator::new);
+
+    let remark = meta
+        .get("remark")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let created_at: OffsetDateTime = row.get("created_at");
+    let inspection_date: Option<OffsetDateTime> = row.get("inspection_date");
+
+    Ok(InspectionLot {
+        id: InspectionLotId::new(row.get::<String, _>("inspection_lot_id")),
+        lot_type: inspection_lot_type_from_db(&row.get::<String, _>("inspection_type")),
+        material_id: MaterialId::new(row.get::<String, _>("material_id")),
+        batch_number: BatchNumber::new(row.get::<String, _>("batch_number")),
+        source_transaction_id,
+        source_doc,
+        quantity,
+        sample_qty,
+        status,
+        decision,
+        decision_reason,
+        created_by: Operator::new(created_by),
+        inspected_by: row.get::<Option<String>, _>("inspector").map(Operator::new),
+        decided_by,
+        created_at,
+        inspected_at: inspection_date,
+        decided_at: meta
+            .get("decided_at")
+            .and_then(|v| serde_json::from_value(v.clone()).ok()),
+        closed_at: meta
+            .get("closed_at")
+            .and_then(|v| serde_json::from_value(v.clone()).ok()),
+        remark,
+    })
+}
+
+// =============================================================================
 // QualityMasterRepository 实现
 // =============================================================================
 
 #[async_trait]
 impl QualityMasterRepository for PostgresQualityStore {
     /// 检查物料是否存在且启用。
-    ///
-    /// v9 里 mdm_materials 使用 status 字段：
-    /// - 正常
-    /// - 停用
-    /// - 冻结
-    async fn material_exists_and_active(
-        &self,
-        material_id: &MaterialId,
-    ) -> QualityResult<bool> {
+    async fn material_exists_and_active(&self, material_id: &MaterialId) -> QualityResult<bool> {
         let exists: bool = sqlx::query_scalar(
             r#"
             SELECT EXISTS (
@@ -476,18 +684,15 @@ impl QualityMasterRepository for PostgresQualityStore {
             )
             "#,
         )
-            .bind(material_id.as_str())
-            .fetch_one(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(material_id.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         Ok(exists)
     }
 
     /// 查询检验特性。
-    ///
-    /// v9 的 mdm_inspection_chars 暂时没有 is_active 字段，
-    /// 所以这里查询到就认为可用。
     async fn find_inspection_char(
         &self,
         char_id: &InspectionCharId,
@@ -504,10 +709,10 @@ impl QualityMasterRepository for PostgresQualityStore {
             WHERE char_id = $1
             "#,
         )
-            .bind(char_id.as_str())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(char_id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         let Some(row) = row else {
             return Ok(None);
@@ -515,16 +720,11 @@ impl QualityMasterRepository for PostgresQualityStore {
 
         Ok(Some(InspectionCharSnapshot {
             char_id: InspectionCharId::new(row.get::<String, _>("char_id")),
-
-            // v9 没有 char_code 字段，先用 char_id 作为 code。
             char_code: row.get::<String, _>("char_id"),
-
             char_name: row.get::<String, _>("char_name"),
             lower_limit: row.get::<Option<Decimal>, _>("lower_limit"),
             upper_limit: row.get::<Option<Decimal>, _>("upper_limit"),
             unit: row.get::<Option<String>, _>("unit"),
-
-            // v9 没有 is_active 字段。
             is_active: true,
         }))
     }
@@ -545,10 +745,10 @@ impl QualityMasterRepository for PostgresQualityStore {
             WHERE defect_code = $1
             "#,
         )
-            .bind(defect_code.as_str())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(defect_code.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         let Some(row) = row else {
             return Ok(None);
@@ -562,221 +762,6 @@ impl QualityMasterRepository for PostgresQualityStore {
             description: description.unwrap_or(defect_name),
             is_active: row.get::<bool, _>("is_active"),
         }))
-    }
-
-    // =============================================================================
-    // Inspection Lot 映射
-    // =============================================================================
-
-    /// 检验批类型映射到 v9 数据库 inspection_type。
-    ///
-    /// v9 只允许：
-    /// - 来料检验
-    /// - 过程检验
-    /// - 最终检验
-    fn inspection_lot_type_to_db(value: InspectionLotType) -> &'static str {
-        match value {
-            InspectionLotType::PurchaseReceipt => "来料检验",
-            InspectionLotType::ProductionReceipt => "最终检验",
-            InspectionLotType::StockRecheck => "过程检验",
-            InspectionLotType::CustomerReturn => "最终检验",
-            InspectionLotType::Manual => "过程检验",
-        }
-    }
-
-    /// v9 数据库 inspection_type 映射回领域类型。
-    fn inspection_lot_type_from_db(value: &str) -> InspectionLotType {
-        match value {
-            "来料检验" => InspectionLotType::PurchaseReceipt,
-            "最终检验" => InspectionLotType::ProductionReceipt,
-            "过程检验" => InspectionLotType::Manual,
-            _ => InspectionLotType::Manual,
-        }
-    }
-
-    /// 检验批领域状态映射到数据库 lot_status。
-    ///
-    /// 注意：
-    /// v9 的 lot_status 使用 mdm.quality_status：
-    /// 待检 / 合格 / 冻结 / 报废 / 放行。
-    ///
-    /// 领域里的 CREATED / IN_PROGRESS / RESULT_ENTERED 等细状态，
-    /// 会额外放到 inspection_result JSONB 的 app_status 字段。
-    fn lot_status_to_db(status: InspectionLotStatus, decision: Option<InspectionDecision>) -> &'static str {
-        match decision {
-            Some(InspectionDecision::Accept) => "合格",
-            Some(InspectionDecision::Freeze) => "冻结",
-            Some(InspectionDecision::Scrap) => "报废",
-            None => match status {
-                InspectionLotStatus::Created => "待检",
-                InspectionLotStatus::InProgress => "待检",
-                InspectionLotStatus::ResultEntered => "待检",
-                InspectionLotStatus::Decided => "待检",
-                InspectionLotStatus::Closed => "合格",
-                InspectionLotStatus::Cancelled => "冻结",
-            },
-        }
-    }
-
-    /// 从 JSONB 里的 app_status 恢复领域状态。
-    ///
-    /// 如果历史数据没有 app_status，则根据数据库 lot_status 做一个保守推断。
-    fn inspection_lot_status_from_json_or_db(
-        meta: &Value,
-        lot_status_text: &str,
-    ) -> InspectionLotStatus {
-        match meta.get("app_status").and_then(|v| v.as_str()) {
-            Some("CREATED") => InspectionLotStatus::Created,
-            Some("IN_PROGRESS") => InspectionLotStatus::InProgress,
-            Some("RESULT_ENTERED") => InspectionLotStatus::ResultEntered,
-            Some("DECIDED") => InspectionLotStatus::Decided,
-            Some("CLOSED") => InspectionLotStatus::Closed,
-            Some("CANCELLED") => InspectionLotStatus::Cancelled,
-            _ => match lot_status_text {
-                "待检" => InspectionLotStatus::Created,
-                "合格" => InspectionLotStatus::Decided,
-                "冻结" => InspectionLotStatus::Decided,
-                "报废" => InspectionLotStatus::Decided,
-                "放行" => InspectionLotStatus::Decided,
-                _ => InspectionLotStatus::Created,
-            },
-        }
-    }
-
-    /// 领域状态转字符串，写入 inspection_result JSONB。
-    fn inspection_lot_status_to_code(status: InspectionLotStatus) -> &'static str {
-        match status {
-            InspectionLotStatus::Created => "CREATED",
-            InspectionLotStatus::InProgress => "IN_PROGRESS",
-            InspectionLotStatus::ResultEntered => "RESULT_ENTERED",
-            InspectionLotStatus::Decided => "DECIDED",
-            InspectionLotStatus::Closed => "CLOSED",
-            InspectionLotStatus::Cancelled => "CANCELLED",
-        }
-    }
-
-    /// 质量判定转字符串。
-    fn inspection_decision_to_code(decision: InspectionDecision) -> &'static str {
-        match decision {
-            InspectionDecision::Accept => "ACCEPT",
-            InspectionDecision::Freeze => "FREEZE",
-            InspectionDecision::Scrap => "SCRAP",
-        }
-    }
-
-    /// 字符串转质量判定。
-    fn inspection_decision_from_code(value: &str) -> Option<InspectionDecision> {
-        match value {
-            "ACCEPT" => Some(InspectionDecision::Accept),
-            "FREEZE" => Some(InspectionDecision::Freeze),
-            "SCRAP" => Some(InspectionDecision::Scrap),
-            _ => None,
-        }
-    }
-
-    /// 把 InspectionLot 中 v9 表没有的字段打包进 JSONB。
-    fn inspection_lot_to_meta(lot: &InspectionLot) -> Value {
-        json!({
-        "app_status": inspection_lot_status_to_code(lot.status),
-        "decision": lot.decision.map(inspection_decision_to_code),
-        "source_transaction_id": lot.source_transaction_id,
-        "source_doc": lot.source_doc,
-        "quantity": lot.quantity,
-        "sample_qty": lot.sample_qty,
-        "created_by": lot.created_by.as_str(),
-        "decided_by": lot.decided_by.as_ref().map(|x| x.as_str().to_string()),
-        "created_at": lot.created_at,
-        "inspected_at": lot.inspected_at,
-        "decided_at": lot.decided_at,
-        "closed_at": lot.closed_at,
-        "remark": lot.remark
-    })
-    }
-
-    /// 从数据库行恢复 InspectionLot。
-    fn inspection_lot_from_row(row: &sqlx::postgres::PgRow) -> QualityResult<InspectionLot> {
-        let meta: Value = row
-            .try_get::<Value, _>("inspection_result")
-            .unwrap_or_else(|_| json!({}));
-
-        let lot_status_text: String = row.get("lot_status");
-        let status = inspection_lot_status_from_json_or_db(&meta, &lot_status_text);
-
-        let decision = meta
-            .get("decision")
-            .and_then(|v| v.as_str())
-            .and_then(inspection_decision_from_code)
-            .or_else(|| match lot_status_text.as_str() {
-                "合格" | "放行" => Some(InspectionDecision::Accept),
-                "冻结" => Some(InspectionDecision::Freeze),
-                "报废" => Some(InspectionDecision::Scrap),
-                _ => None,
-            });
-
-        let quantity = meta
-            .get("quantity")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or(Decimal::ZERO);
-
-        let sample_qty = meta
-            .get("sample_qty")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or(Decimal::ZERO);
-
-        let source_transaction_id = meta
-            .get("source_transaction_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let source_doc = meta
-            .get("source_doc")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let created_by = meta
-            .get("created_by")
-            .and_then(|v| v.as_str())
-            .unwrap_or("SYSTEM");
-
-        let decided_by = meta
-            .get("decided_by")
-            .and_then(|v| v.as_str())
-            .map(Operator::new);
-
-        let remark = meta
-            .get("remark")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let created_at: OffsetDateTime = row.get("created_at");
-        let inspection_date: Option<OffsetDateTime> = row.get("inspection_date");
-
-        Ok(InspectionLot {
-            id: InspectionLotId::new(row.get::<String, _>("inspection_lot_id")),
-            lot_type: inspection_lot_type_from_db(&row.get::<String, _>("inspection_type")),
-            material_id: MaterialId::new(row.get::<String, _>("material_id")),
-            batch_number: BatchNumber::new(row.get::<String, _>("batch_number")),
-            source_transaction_id,
-            source_doc,
-            quantity,
-            sample_qty,
-            status,
-            decision,
-            created_by: Operator::new(created_by),
-            inspected_by: row
-                .get::<Option<String>, _>("inspector")
-                .map(Operator::new),
-            decided_by,
-            created_at,
-            inspected_at: inspection_date,
-            decided_at: meta
-                .get("decided_at")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            closed_at: meta
-                .get("closed_at")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            remark,
-        })
     }
 }
 // =============================================================================
@@ -815,7 +800,7 @@ fn inspection_result_to_remarks_json(result: &InspectionResult) -> String {
         "defect_qty": result.defect_qty,
         "remark": result.remark
     })
-        .to_string()
+    .to_string()
 }
 
 /// 从 remarks TEXT 尝试解析 JSON。
@@ -940,7 +925,9 @@ fn notification_status_from_db(value: &str) -> QualityNotificationStatus {
 }
 
 /// 从数据库行恢复 QualityNotification。
-fn quality_notification_from_row(row: &sqlx::postgres::PgRow) -> QualityResult<QualityNotification> {
+fn quality_notification_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> QualityResult<QualityNotification> {
     let status_text: String = row.get("status");
 
     Ok(QualityNotification {
@@ -1011,18 +998,18 @@ impl InspectionLotRepository for PostgresQualityStore {
             )
             "#,
         )
-            .bind(lot.id.as_str())
-            .bind(lot.material_id.as_str())
-            .bind(lot.batch_number.as_str())
-            .bind(inspection_lot_type_to_db(lot.lot_type))
-            .bind(lot_status_to_db(lot.status, lot.decision))
-            .bind(lot.inspected_at)
-            .bind(lot.inspected_by.as_ref().map(|x| x.as_str().to_string()))
-            .bind(meta)
-            .bind(lot.created_at)
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(lot.id.as_str())
+        .bind(lot.material_id.as_str())
+        .bind(lot.batch_number.as_str())
+        .bind(inspection_lot_type_to_db(lot.lot_type))
+        .bind(lot_status_to_db(lot.status, lot.decision))
+        .bind(lot.inspected_at)
+        .bind(lot.inspected_by.as_ref().map(|x| x.as_str().to_string()))
+        .bind(meta)
+        .bind(lot.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         Ok(lot.id.clone())
     }
@@ -1046,10 +1033,10 @@ impl InspectionLotRepository for PostgresQualityStore {
             WHERE inspection_lot_id = $1
             "#,
         )
-            .bind(lot_id.as_str())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(lot_id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         match row {
             Some(row) => Ok(Some(inspection_lot_from_row(&row)?)),
@@ -1079,15 +1066,15 @@ impl InspectionLotRepository for PostgresQualityStore {
               AND ($6::timestamptz IS NULL OR created_at < $6)
             "#,
         )
-            .bind(lot_type)
-            .bind(lot_status)
-            .bind(query.material_id.as_ref().map(|x| x.as_str().to_string()))
-            .bind(query.batch_number.as_ref().map(|x| x.as_str().to_string()))
-            .bind(query.date_from)
-            .bind(query.date_to)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(lot_type)
+        .bind(lot_status)
+        .bind(query.material_id.as_ref().map(|x| x.as_str().to_string()))
+        .bind(query.batch_number.as_ref().map(|x| x.as_str().to_string()))
+        .bind(query.date_from)
+        .bind(query.date_to)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         let rows = sqlx::query(
             r#"
@@ -1113,17 +1100,17 @@ impl InspectionLotRepository for PostgresQualityStore {
             LIMIT $7 OFFSET $8
             "#,
         )
-            .bind(lot_type)
-            .bind(lot_status)
-            .bind(query.material_id.as_ref().map(|x| x.as_str().to_string()))
-            .bind(query.batch_number.as_ref().map(|x| x.as_str().to_string()))
-            .bind(query.date_from)
-            .bind(query.date_to)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(lot_type)
+        .bind(lot_status)
+        .bind(query.material_id.as_ref().map(|x| x.as_str().to_string()))
+        .bind(query.batch_number.as_ref().map(|x| x.as_str().to_string()))
+        .bind(query.date_from)
+        .bind(query.date_to)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         let mut items = Vec::with_capacity(rows.len());
 
@@ -1168,10 +1155,10 @@ impl InspectionLotRepository for PostgresQualityStore {
             FOR UPDATE
             "#,
         )
-            .bind(lot_id.as_str())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(lot_id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         let Some(row) = row else {
             return Err(QualityError::InspectionLotNotFound);
@@ -1196,14 +1183,14 @@ impl InspectionLotRepository for PostgresQualityStore {
             WHERE inspection_lot_id = $1
             "#,
         )
-            .bind(lot.id.as_str())
-            .bind(lot_status_to_db(lot.status, lot.decision))
-            .bind(lot.inspected_at)
-            .bind(lot.inspected_by.as_ref().map(|x| x.as_str().to_string()))
-            .bind(meta)
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(lot.id.as_str())
+        .bind(lot_status_to_db(lot.status, lot.decision))
+        .bind(lot.inspected_at)
+        .bind(lot.inspected_by.as_ref().map(|x| x.as_str().to_string()))
+        .bind(meta)
+        .execute(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         if result.rows_affected() == 0 {
             return Err(QualityError::InspectionLotNotFound);
@@ -1224,10 +1211,10 @@ impl InspectionLotRepository for PostgresQualityStore {
             )
             "#,
         )
-            .bind(batch_number.as_str())
-            .fetch_one(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(batch_number.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         Ok(exists)
     }
@@ -1265,16 +1252,16 @@ impl InspectionResultRepository for PostgresQualityStore {
             RETURNING id
             "#,
         )
-            .bind(result.inspection_lot_id.as_str())
-            .bind(result.char_id.as_str())
-            .bind(result.measured_value)
-            .bind(inspection_result_status_to_db(result.result_status))
-            .bind(remarks)
-            .bind(result.inspector.as_str())
-            .bind(result.inspected_at)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(result.inspection_lot_id.as_str())
+        .bind(result.char_id.as_str())
+        .bind(result.measured_value)
+        .bind(inspection_result_status_to_db(result.result_status))
+        .bind(remarks)
+        .bind(result.inspector.as_str())
+        .bind(result.inspected_at)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         Ok(InspectionResultId::new(id.to_string()))
     }
@@ -1289,7 +1276,7 @@ impl InspectionResultRepository for PostgresQualityStore {
         // MVP 先逐条插入，便于清晰处理错误。
         // 后续如果性能压力大，再换成 QueryBuilder 批量 INSERT。
         for result in results {
-            let id = self.create(result).await?;
+            let id = InspectionResultRepository::create(self, result).await?;
             ids.push(id);
         }
 
@@ -1317,10 +1304,10 @@ impl InspectionResultRepository for PostgresQualityStore {
             ORDER BY id ASC
             "#,
         )
-            .bind(lot_id.as_str())
-            .fetch_all(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(lot_id.as_str())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         let mut items = Vec::with_capacity(rows.len());
 
@@ -1342,10 +1329,10 @@ impl InspectionResultRepository for PostgresQualityStore {
             )
             "#,
         )
-            .bind(lot_id.as_str())
-            .fetch_one(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(lot_id.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         Ok(exists)
     }
@@ -1362,10 +1349,10 @@ impl InspectionResultRepository for PostgresQualityStore {
             )
             "#,
         )
-            .bind(lot_id.as_str())
-            .fetch_one(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(lot_id.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         Ok(exists)
     }
@@ -1415,26 +1402,31 @@ impl QualityNotificationRepository for PostgresQualityStore {
             )
             "#,
         )
-            .bind(notification.id.as_str())
-            .bind(if notification.source_type == "INSPECTION_LOT" {
-                Some(notification.source_id.clone())
-            } else {
-                None
-            })
-            .bind(notification.material_id.as_str())
-            .bind(notification.batch_number.as_str())
-            .bind(notification.defect_code.as_ref().map(|x| x.as_str().to_string()))
-            .bind(&notification.description)
-            .bind(notification_severity_to_db(notification.severity))
-            .bind(&notification.root_cause)
-            .bind(&notification.corrective_action)
-            .bind(notification.owner.as_ref().map(|x| x.as_str().to_string()))
-            .bind(notification_status_to_db(notification.status))
-            .bind(notification.created_at)
-            .bind(notification.closed_at)
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(notification.id.as_str())
+        .bind(if notification.source_type == "INSPECTION_LOT" {
+            Some(notification.source_id.clone())
+        } else {
+            None
+        })
+        .bind(notification.material_id.as_str())
+        .bind(notification.batch_number.as_str())
+        .bind(
+            notification
+                .defect_code
+                .as_ref()
+                .map(|x| x.as_str().to_string()),
+        )
+        .bind(&notification.description)
+        .bind(notification_severity_to_db(notification.severity))
+        .bind(&notification.root_cause)
+        .bind(&notification.corrective_action)
+        .bind(notification.owner.as_ref().map(|x| x.as_str().to_string()))
+        .bind(notification_status_to_db(notification.status))
+        .bind(notification.created_at)
+        .bind(notification.closed_at)
+        .execute(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         Ok(notification.id.clone())
     }
@@ -1464,10 +1456,10 @@ impl QualityNotificationRepository for PostgresQualityStore {
             WHERE notification_id = $1
             "#,
         )
-            .bind(notification_id.as_str())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(notification_id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         match row {
             Some(row) => Ok(Some(quality_notification_from_row(&row)?)),
@@ -1487,6 +1479,7 @@ impl QualityNotificationRepository for PostgresQualityStore {
 
         let status = query.status.map(notification_status_to_db);
         let severity = query.severity.map(notification_severity_to_db);
+        let owner = query.owner.as_deref();
 
         let total: i64 = sqlx::query_scalar(
             r#"
@@ -1501,16 +1494,16 @@ impl QualityNotificationRepository for PostgresQualityStore {
               AND ($7::timestamptz IS NULL OR created_at < $7)
             "#,
         )
-            .bind(status)
-            .bind(severity)
-            .bind(query.material_id.as_ref().map(|x| x.as_str().to_string()))
-            .bind(query.batch_number.as_ref().map(|x| x.as_str().to_string()))
-            .bind(query.owner)
-            .bind(query.date_from)
-            .bind(query.date_to)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(status)
+        .bind(severity)
+        .bind(query.material_id.as_ref().map(|x| x.as_str().to_string()))
+        .bind(query.batch_number.as_ref().map(|x| x.as_str().to_string()))
+        .bind(owner)
+        .bind(query.date_from)
+        .bind(query.date_to)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         let rows = sqlx::query(
             r#"
@@ -1540,18 +1533,18 @@ impl QualityNotificationRepository for PostgresQualityStore {
             LIMIT $8 OFFSET $9
             "#,
         )
-            .bind(status)
-            .bind(severity)
-            .bind(query.material_id.as_ref().map(|x| x.as_str().to_string()))
-            .bind(query.batch_number.as_ref().map(|x| x.as_str().to_string()))
-            .bind(query.owner)
-            .bind(query.date_from)
-            .bind(query.date_to)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(status)
+        .bind(severity)
+        .bind(query.material_id.as_ref().map(|x| x.as_str().to_string()))
+        .bind(query.batch_number.as_ref().map(|x| x.as_str().to_string()))
+        .bind(owner)
+        .bind(query.date_from)
+        .bind(query.date_to)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         let mut items = Vec::with_capacity(rows.len());
 
@@ -1588,17 +1581,17 @@ impl QualityNotificationRepository for PostgresQualityStore {
             WHERE notification_id = $1
             "#,
         )
-            .bind(notification.id.as_str())
-            .bind(&notification.description)
-            .bind(notification_severity_to_db(notification.severity))
-            .bind(&notification.root_cause)
-            .bind(&notification.corrective_action)
-            .bind(notification.owner.as_ref().map(|x| x.as_str().to_string()))
-            .bind(notification_status_to_db(notification.status))
-            .bind(notification.closed_at)
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        .bind(notification.id.as_str())
+        .bind(&notification.description)
+        .bind(notification_severity_to_db(notification.severity))
+        .bind(&notification.root_cause)
+        .bind(&notification.corrective_action)
+        .bind(notification.owner.as_ref().map(|x| x.as_str().to_string()))
+        .bind(notification_status_to_db(notification.status))
+        .bind(notification.closed_at)
+        .execute(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
 
         if result.rows_affected() == 0 {
             return Err(QualityError::QualityNotificationNotFound);

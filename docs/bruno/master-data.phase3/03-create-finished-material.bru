@@ -1,0 +1,29 @@
+meta {
+  name: 03 Create Finished Material
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{base_url}}/api/master-data/materials
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "material_id": "{{finished_material_id}}",
+    "material_name": "Bruno Finished Material",
+    "material_type": "成品",
+    "base_unit": "PCS",
+    "default_zone": "FG",
+    "safety_stock": 20,
+    "reorder_point": 10,
+    "standard_price": "100.00",
+    "map_price": "100.00"
+  }
+}

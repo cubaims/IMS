@@ -1,0 +1,14 @@
+meta {
+  name: 14 Get BOM Tree
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{base_url}}/api/master-data/boms/{{bom_id}}/tree
+  body: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}
