@@ -12,7 +12,10 @@ pub fn routes() -> Router<AppState> {
             "/",
             get(handlers::list_sales_orders).post(handlers::create_sales_order),
         )
-        .route("/{so_id}", get(handlers::get_sales_order))
+        .route(
+            "/{so_id}",
+            get(handlers::get_sales_order).patch(handlers::update_sales_order),
+        )
         .route("/{so_id}/shipment", post(handlers::post_sales_shipment))
         .route(
             "/{so_id}/pick-preview",

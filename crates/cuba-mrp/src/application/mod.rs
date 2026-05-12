@@ -41,6 +41,7 @@ impl From<crate::domain::MrpError> for cuba_shared::AppError {
 
             crate::domain::MrpError::DemandQtyMustBePositive
             | crate::domain::MrpError::DemandDateRequired
+            | crate::domain::MrpError::DemandDateBeforeToday
             | crate::domain::MrpError::RequiredFieldEmpty(_) => cuba_shared::AppError::Business {
                 code: "MRP_DEMAND_INVALID",
                 message: err.to_string(),

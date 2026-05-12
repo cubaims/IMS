@@ -33,6 +33,21 @@ pub struct CreatePurchaseOrderLineCommand {
 }
 
 #[derive(Debug, Clone, Deserialize, Validate)]
+pub struct UpdatePurchaseOrderCommand {
+    #[serde(default)]
+    pub po_id: String,
+
+    #[validate(length(min = 1))]
+    pub supplier_id: Option<String>,
+
+    pub expected_date: Option<Date>,
+
+    pub remark: Option<String>,
+
+    pub lines: Option<Vec<CreatePurchaseOrderLineCommand>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct PostPurchaseReceiptCommand {
     #[serde(default)]
     pub po_id: String,

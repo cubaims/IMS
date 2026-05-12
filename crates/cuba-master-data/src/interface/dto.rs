@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 pub use crate::application::{
-    CreateBomComponentCommand, CreateBomHeaderCommand, CreateCustomerCommand,
+    CopyBomCommand, CreateBomComponentCommand, CreateBomHeaderCommand, CreateCustomerCommand,
     CreateDefectCodeCommand, CreateInspectionCharCommand, CreateMaterialCommand,
     CreateMaterialSupplierCommand, CreateProductVariantCommand, CreateStorageBinCommand,
     CreateSupplierCommand, CreateWorkCenterCommand, MasterDataQuery, UpdateBomComponentCommand,

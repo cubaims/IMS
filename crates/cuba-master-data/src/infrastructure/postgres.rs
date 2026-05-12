@@ -15,7 +15,7 @@ use crate::application::{
     BinCapacityUtilizationReadModel, BomComponentReadModel, BomDetailReadModel,
     BomExplosionItemReadModel, BomExplosionPreviewReadModel, BomHeaderReadModel, BomRepository,
     BomSummaryReadModel, BomTreeComponentReadModel, BomTreeReadModel, BomValidationReadModel,
-    CreateBomHeaderCommand, CreateCustomerCommand, CreateDefectCodeCommand,
+    CopyBomCommand, CreateBomHeaderCommand, CreateCustomerCommand, CreateDefectCodeCommand,
     CreateInspectionCharCommand, CreateMaterialCommand, CreateMaterialSupplierCommand,
     CreateProductVariantCommand, CreateStorageBinCommand, CreateSupplierCommand,
     CreateWorkCenterCommand, CustomerReadModel, CustomerRepository, DefectCodeReadModel, DeleteAck,
@@ -246,6 +246,7 @@ impl PostgresMasterDataRepository {
             bin_type: Self::column(row, "bin_type")?,
             capacity: Self::column(row, "capacity")?,
             current_occupied: Self::column(row, "current_occupied")?,
+            available_capacity: Self::column(row, "available_capacity")?,
             status: Self::column(row, "status")?,
             notes: Self::column(row, "notes")?,
             created_at: Self::column(row, "created_at")?,
@@ -259,7 +260,9 @@ impl PostgresMasterDataRepository {
             zone: Self::column(row, "zone")?,
             capacity: Self::column(row, "capacity")?,
             current_occupied: Self::column(row, "current_occupied")?,
+            available_capacity: Self::column(row, "available_capacity")?,
             utilization_pct: Self::column(row, "utilization_pct")?,
+            capacity_status: Self::column(row, "capacity_status")?,
         })
     }
 
@@ -843,6 +846,7 @@ impl StorageBinRepository for PostgresMasterDataRepository {
                 bin_type,
                 capacity,
                 current_occupied,
+                available_capacity,
                 status,
                 notes,
                 created_at,
@@ -852,6 +856,11 @@ impl StorageBinRepository for PostgresMasterDataRepository {
                 ($3::text IS NULL OR bin_code ILIKE $3 OR zone ILIKE $3)
                 AND ($4::text IS NULL OR zone = $4)
                 AND ($5::text IS NULL OR status = $5)
+                AND (
+                    $6::boolean IS NULL
+                    OR ($6::boolean = TRUE AND status IN ('正常', '占用'))
+                    OR ($6::boolean = FALSE AND status NOT IN ('正常', '占用'))
+                )
             ORDER BY zone, bin_code
             LIMIT $1 OFFSET $2
             "#,
@@ -861,6 +870,7 @@ impl StorageBinRepository for PostgresMasterDataRepository {
         .bind(keyword_pattern.as_deref())
         .bind(query.zone.as_deref())
         .bind(query.status.as_deref())
+        .bind(query.is_active)
         .fetch_all(&self.pool)
         .await
         .map_err(cuba_shared::map_master_data_db_error)?;
@@ -877,6 +887,7 @@ impl StorageBinRepository for PostgresMasterDataRepository {
                 bin_type,
                 capacity,
                 current_occupied,
+                available_capacity,
                 status,
                 notes,
                 created_at,
@@ -919,6 +930,7 @@ impl StorageBinRepository for PostgresMasterDataRepository {
                 bin_type,
                 capacity,
                 current_occupied,
+                available_capacity,
                 status,
                 notes,
                 created_at,
@@ -993,6 +1005,7 @@ impl StorageBinRepository for PostgresMasterDataRepository {
                 bin_type,
                 capacity,
                 current_occupied,
+                available_capacity,
                 status,
                 notes,
                 created_at,
@@ -1074,7 +1087,14 @@ impl StorageBinRepository for PostgresMasterDataRepository {
                 zone,
                 capacity,
                 current_occupied,
-                ROUND(current_occupied::numeric * 100 / capacity::numeric, 2) AS utilization_pct
+                available_capacity,
+                ROUND(current_occupied::numeric * 100 / capacity::numeric, 2) AS utilization_pct,
+                CASE
+                    WHEN current_occupied > capacity THEN '超容量'
+                    WHEN current_occupied::numeric * 100 / capacity::numeric >= 90 THEN '接近满仓'
+                    WHEN current_occupied = 0 THEN '空闲'
+                    ELSE '正常'
+                END AS capacity_status
             FROM mdm.mdm_storage_bins
             WHERE bin_code = $1
             "#,
@@ -2569,6 +2589,226 @@ impl BomRepository for PostgresMasterDataRepository {
             .map_err(cuba_shared::map_master_data_db_error)?;
 
         Self::parse_bom_header(&row)
+    }
+
+    async fn copy_bom(&self, bom: &Bom, command: CopyBomCommand) -> AppResult<BomDetailReadModel> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(cuba_shared::map_master_data_db_error)?;
+
+        let target_exists: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM mdm.mdm_bom_headers WHERE bom_id = $1
+            )
+            "#,
+        )
+        .bind(bom.id().value())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+        if target_exists {
+            return Err(AppError::business(
+                "BOM_ALREADY_EXISTS",
+                format!("BOM 已存在: {}", bom.id().value()),
+            ));
+        }
+
+        let parent_status: Option<String> = sqlx::query_scalar(
+            r#"
+            SELECT status::text
+            FROM mdm.mdm_materials
+            WHERE material_id = $1
+            FOR SHARE
+            "#,
+        )
+        .bind(bom.header().parent_material_id.value())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+        match parent_status {
+            None => {
+                return Err(AppError::Validation(format!(
+                    "BOM 父物料不存在: {}",
+                    bom.header().parent_material_id.value()
+                )));
+            }
+            Some(status) if status == "停用" => {
+                return Err(AppError::Validation(format!(
+                    "BOM 父物料已停用: {}",
+                    bom.header().parent_material_id.value()
+                )));
+            }
+            _ => {}
+        }
+
+        if let Some(variant_code) = bom.header().variant_code.as_ref() {
+            let variant_active: Option<bool> = sqlx::query_scalar(
+                r#"
+                SELECT is_active
+                FROM mdm.mdm_product_variants
+                WHERE variant_code = $1
+                FOR SHARE
+                "#,
+            )
+            .bind(variant_code.value())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(cuba_shared::map_master_data_db_error)?;
+            match variant_active {
+                None => {
+                    return Err(AppError::Validation(format!(
+                        "产品变体不存在: {}",
+                        variant_code.value()
+                    )));
+                }
+                Some(false) => {
+                    return Err(AppError::Validation(format!(
+                        "产品变体已停用: {}",
+                        variant_code.value()
+                    )));
+                }
+                Some(true) => {}
+            }
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO mdm.mdm_bom_headers (
+                bom_id,
+                bom_name,
+                parent_material_id,
+                variant_code,
+                version,
+                base_quantity,
+                valid_from,
+                valid_to,
+                status,
+                is_active,
+                notes
+            )
+            VALUES (
+                $1,
+                $2,
+                $3,
+                $4,
+                $5,
+                COALESCE($6, 1),
+                COALESCE($7::date, CURRENT_DATE),
+                $8::date,
+                '草稿',
+                TRUE,
+                $9
+            )
+            "#,
+        )
+        .bind(bom.id().value())
+        .bind(&bom.header().bom_name)
+        .bind(bom.header().parent_material_id.value())
+        .bind(bom.header().variant_code.as_ref().map(|v| v.value()))
+        .bind(&bom.header().version)
+        .bind(command.base_quantity)
+        .bind(command.valid_from)
+        .bind(command.valid_to)
+        .bind(command.notes)
+        .execute(&mut *tx)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO mdm.mdm_bom_components (
+                bom_id,
+                parent_material_id,
+                component_material_id,
+                quantity,
+                unit,
+                bom_level,
+                scrap_rate,
+                is_critical
+            )
+            SELECT
+                $1,
+                copied.parent_material_id,
+                copied.component_material_id,
+                copied.quantity,
+                copied.unit,
+                copied.bom_level,
+                copied.scrap_rate,
+                copied.is_critical
+            FROM UNNEST(
+                $2::text[],
+                $3::text[],
+                $4::numeric[],
+                $5::text[],
+                $6::int4[],
+                $7::numeric[],
+                $8::bool[]
+            ) AS copied(
+                parent_material_id,
+                component_material_id,
+                quantity,
+                unit,
+                bom_level,
+                scrap_rate,
+                is_critical
+            )
+            "#,
+        )
+        .bind(bom.id().value())
+        .bind(
+            bom.components()
+                .iter()
+                .map(|c| c.parent_material_id.value().to_string())
+                .collect::<Vec<_>>(),
+        )
+        .bind(
+            bom.components()
+                .iter()
+                .map(|c| c.component_material_id.value().to_string())
+                .collect::<Vec<_>>(),
+        )
+        .bind(
+            bom.components()
+                .iter()
+                .map(|c| c.quantity)
+                .collect::<Vec<_>>(),
+        )
+        .bind(
+            bom.components()
+                .iter()
+                .map(|c| c.unit.clone())
+                .collect::<Vec<_>>(),
+        )
+        .bind(
+            bom.components()
+                .iter()
+                .map(|c| c.bom_level)
+                .collect::<Vec<_>>(),
+        )
+        .bind(
+            bom.components()
+                .iter()
+                .map(|c| c.scrap_rate)
+                .collect::<Vec<_>>(),
+        )
+        .bind(
+            bom.components()
+                .iter()
+                .map(|c| c.is_critical)
+                .collect::<Vec<_>>(),
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(cuba_shared::map_master_data_db_error)?;
+
+        tx.commit()
+            .await
+            .map_err(cuba_shared::map_master_data_db_error)?;
+
+        self.get_bom(bom.id().value()).await
     }
 
     async fn update_bom(

@@ -252,6 +252,10 @@ fn remark_from_meta(meta: &Value) -> Option<String> {
 fn mrp_run_from_row(row: &sqlx::postgres::PgRow) -> MrpResult<MrpRun> {
     let run_id: String = row.get("run_id");
     let status_text: String = row.get("status");
+    let base_material_id = row
+        .try_get::<Option<String>, _>("base_material_id")
+        .ok()
+        .flatten();
 
     let demand_date: Option<Date> = row.get("demand_date");
     let demand_date = demand_date
@@ -260,7 +264,7 @@ fn mrp_run_from_row(row: &sqlx::postgres::PgRow) -> MrpResult<MrpRun> {
 
     Ok(MrpRun {
         id: MrpRunId::new(run_id),
-        material_id: None,
+        material_id: base_material_id.map(MaterialId::new),
         product_variant_id: row
             .get::<Option<String>, _>("variant_code")
             .map(ProductVariantId::new),
@@ -282,25 +286,51 @@ fn mrp_run_from_row(row: &sqlx::postgres::PgRow) -> MrpResult<MrpRun> {
 fn mrp_suggestion_from_row(row: &sqlx::postgres::PgRow) -> MrpResult<MrpSuggestion> {
     let remarks_meta = parse_remarks(row.get::<Option<String>, _>("remarks"));
 
-    let status = suggestion_status_from_code(remarks_meta.get("status").and_then(|v| v.as_str()));
+    let status_code = remarks_meta
+        .get("status")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .or_else(|| row.try_get::<Option<String>, _>("status").ok().flatten());
+
+    let status = suggestion_status_from_code(status_code.as_deref());
 
     let confirmed_by = remarks_meta
         .get("confirmed_by")
         .and_then(|v| v.as_str())
-        .map(Operator::new);
+        .map(Operator::new)
+        .or_else(|| {
+            row.try_get::<Option<String>, _>("confirmed_by")
+                .ok()
+                .flatten()
+                .map(Operator::new)
+        });
 
     let confirmed_at = remarks_meta
         .get("confirmed_at")
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .or_else(|| row.try_get::<Option<OffsetDateTime>, _>("confirmed_at").ok().flatten());
 
     let cancelled_by = remarks_meta
         .get("cancelled_by")
         .and_then(|v| v.as_str())
-        .map(Operator::new);
+        .map(Operator::new)
+        .or_else(|| {
+            row.try_get::<Option<String>, _>("cancelled_by")
+                .ok()
+                .flatten()
+                .map(Operator::new)
+        });
 
     let cancelled_at = remarks_meta
         .get("cancelled_at")
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .or_else(|| row.try_get::<Option<OffsetDateTime>, _>("cancelled_at").ok().flatten());
+
+    let remark = row
+        .try_get::<Option<String>, _>("cancelled_reason")
+        .ok()
+        .flatten()
+        .or_else(|| remark_from_meta(&remarks_meta));
 
     let created_at: OffsetDateTime = row.get("created_at");
 
@@ -344,7 +374,7 @@ fn mrp_suggestion_from_row(row: &sqlx::postgres::PgRow) -> MrpResult<MrpSuggesti
         confirmed_at,
         cancelled_by,
         cancelled_at,
-        remark: remark_from_meta(&remarks_meta),
+        remark,
     })
 }
 
@@ -410,17 +440,19 @@ impl MrpRunRepository for PostgresMrpStore {
         let row = sqlx::query(
             r#"
             SELECT
-                run_id,
-                run_date,
-                variant_code,
-                demand_qty,
-                demand_date,
-                planning_horizon,
-                status,
-                created_by,
-                created_at
-            FROM wms.wms_mrp_runs
-            WHERE run_id = $1
+                r.run_id,
+                r.run_date,
+                r.variant_code,
+                pv.base_material_id,
+                r.demand_qty,
+                r.demand_date,
+                r.planning_horizon,
+                r.status,
+                r.created_by,
+                r.created_at
+            FROM wms.wms_mrp_runs r
+            LEFT JOIN mdm.mdm_product_variants pv ON pv.variant_code = r.variant_code
+            WHERE r.run_id = $1
             "#,
         )
         .bind(run_id.as_str())
@@ -438,17 +470,19 @@ impl MrpRunRepository for PostgresMrpStore {
         let row = sqlx::query(
             r#"
             SELECT
-                run_id,
-                run_date,
-                variant_code,
-                demand_qty,
-                demand_date,
-                planning_horizon,
-                status,
-                created_by,
-                created_at
-            FROM wms.wms_mrp_runs
-            WHERE run_id = $1
+                r.run_id,
+                r.run_date,
+                r.variant_code,
+                pv.base_material_id,
+                r.demand_qty,
+                r.demand_date,
+                r.planning_horizon,
+                r.status,
+                r.created_by,
+                r.created_at
+            FROM wms.wms_mrp_runs r
+            LEFT JOIN mdm.mdm_product_variants pv ON pv.variant_code = r.variant_code
+            WHERE r.run_id = $1
             FOR UPDATE
             "#,
         )
@@ -499,19 +533,23 @@ impl MrpRunRepository for PostgresMrpStore {
             .product_variant_id
             .as_ref()
             .map(|x| x.as_str().to_string());
+        let material_id = query.material_id.as_ref().map(|x| x.as_str().to_string());
 
         let total: i64 = sqlx::query_scalar(
             r#"
             SELECT COUNT(*)
-            FROM wms.wms_mrp_runs
-            WHERE ($1::text IS NULL OR status = $1)
-              AND ($2::text IS NULL OR variant_code = $2)
-              AND ($3::timestamptz IS NULL OR created_at >= $3)
-              AND ($4::timestamptz IS NULL OR created_at < $4)
+            FROM wms.wms_mrp_runs r
+            LEFT JOIN mdm.mdm_product_variants pv ON pv.variant_code = r.variant_code
+            WHERE ($1::text IS NULL OR r.status = $1)
+              AND ($2::text IS NULL OR r.variant_code = $2)
+              AND ($3::text IS NULL OR pv.base_material_id = $3)
+              AND ($4::timestamptz IS NULL OR r.created_at >= $4)
+              AND ($5::timestamptz IS NULL OR r.created_at < $5)
             "#,
         )
         .bind(status)
         .bind(variant_code.clone())
+        .bind(material_id.clone())
         .bind(query.date_from)
         .bind(query.date_to)
         .fetch_one(&self.pool)
@@ -521,26 +559,30 @@ impl MrpRunRepository for PostgresMrpStore {
         let rows = sqlx::query(
             r#"
             SELECT
-                run_id,
-                run_date,
-                variant_code,
-                demand_qty,
-                demand_date,
-                planning_horizon,
-                status,
-                created_by,
-                created_at
-            FROM wms.wms_mrp_runs
-            WHERE ($1::text IS NULL OR status = $1)
-              AND ($2::text IS NULL OR variant_code = $2)
-              AND ($3::timestamptz IS NULL OR created_at >= $3)
-              AND ($4::timestamptz IS NULL OR created_at < $4)
-            ORDER BY created_at DESC
-            LIMIT $5 OFFSET $6
+                r.run_id,
+                r.run_date,
+                r.variant_code,
+                pv.base_material_id,
+                r.demand_qty,
+                r.demand_date,
+                r.planning_horizon,
+                r.status,
+                r.created_by,
+                r.created_at
+            FROM wms.wms_mrp_runs r
+            LEFT JOIN mdm.mdm_product_variants pv ON pv.variant_code = r.variant_code
+            WHERE ($1::text IS NULL OR r.status = $1)
+              AND ($2::text IS NULL OR r.variant_code = $2)
+              AND ($3::text IS NULL OR pv.base_material_id = $3)
+              AND ($4::timestamptz IS NULL OR r.created_at >= $4)
+              AND ($5::timestamptz IS NULL OR r.created_at < $5)
+            ORDER BY r.created_at DESC
+            LIMIT $6 OFFSET $7
             "#,
         )
         .bind(status)
         .bind(variant_code)
+        .bind(material_id)
         .bind(query.date_from)
         .bind(query.date_to)
         .bind(limit)
@@ -602,6 +644,12 @@ impl MrpSuggestionRepository for PostgresMrpStore {
                 recommended_batch,
                 lead_time_days,
                 priority,
+                status,
+                confirmed_by,
+                confirmed_at,
+                cancelled_by,
+                cancelled_at,
+                cancelled_reason,
                 remarks,
                 created_at
             FROM wms.wms_mrp_suggestions
@@ -643,6 +691,12 @@ impl MrpSuggestionRepository for PostgresMrpStore {
                 recommended_batch,
                 lead_time_days,
                 priority,
+                status,
+                confirmed_by,
+                confirmed_at,
+                cancelled_by,
+                cancelled_at,
+                cancelled_reason,
                 remarks,
                 created_at
             FROM wms.wms_mrp_suggestions
@@ -677,7 +731,13 @@ impl MrpSuggestionRepository for PostgresMrpStore {
             SET
                 suggested_order_type = $2,
                 suggested_order_qty = $3,
-                remarks = $4
+                remarks = $4,
+                status = $5,
+                confirmed_by = $6,
+                confirmed_at = $7,
+                cancelled_by = $8,
+                cancelled_at = $9,
+                cancelled_reason = $10
             WHERE id = $1
             "#,
             )
@@ -687,6 +747,22 @@ impl MrpSuggestionRepository for PostgresMrpStore {
                 MrpError::BusinessRuleViolation("建议数量超过 i32 范围".to_string())
             })?)
             .bind(remarks)
+            .bind(suggestion_status_to_code(suggestion.status))
+            .bind(
+                suggestion
+                    .confirmed_by
+                    .as_ref()
+                    .map(|operator| operator.as_str().to_string()),
+            )
+            .bind(suggestion.confirmed_at)
+            .bind(
+                suggestion
+                    .cancelled_by
+                    .as_ref()
+                    .map(|operator| operator.as_str().to_string()),
+            )
+            .bind(suggestion.cancelled_at)
+            .bind(suggestion.remark.clone())
             .execute(&self.pool)
             .await
             .map_err(map_mrp_db_error)?;
@@ -696,6 +772,43 @@ impl MrpSuggestionRepository for PostgresMrpStore {
         }
 
         Ok(())
+    }
+
+    async fn confirm(
+        &self,
+        suggestion_id: &MrpSuggestionId,
+        confirmed_by: Operator,
+        remark: Option<String>,
+        now: OffsetDateTime,
+    ) -> MrpResult<MrpSuggestion> {
+        let mut tx = self.pool.begin().await.map_err(map_mrp_db_error)?;
+        let mut suggestion = lock_suggestion_in_tx(&mut tx, suggestion_id).await?;
+
+        suggestion.confirm(confirmed_by, now)?;
+        suggestion.remark = remark;
+
+        update_suggestion_in_tx(&mut tx, &suggestion).await?;
+        tx.commit().await.map_err(map_mrp_db_error)?;
+
+        Ok(suggestion)
+    }
+
+    async fn cancel(
+        &self,
+        suggestion_id: &MrpSuggestionId,
+        cancelled_by: Operator,
+        reason: String,
+        now: OffsetDateTime,
+    ) -> MrpResult<MrpSuggestion> {
+        let mut tx = self.pool.begin().await.map_err(map_mrp_db_error)?;
+        let mut suggestion = lock_suggestion_in_tx(&mut tx, suggestion_id).await?;
+
+        suggestion.cancel(cancelled_by, now, reason)?;
+
+        update_suggestion_in_tx(&mut tx, &suggestion).await?;
+        tx.commit().await.map_err(map_mrp_db_error)?;
+
+        Ok(suggestion)
     }
 
     async fn list(&self, query: MrpSuggestionQuery) -> MrpResult<Page<MrpSuggestion>> {
@@ -732,6 +845,12 @@ impl MrpSuggestionRepository for PostgresMrpStore {
                 recommended_batch,
                 lead_time_days,
                 priority,
+                status,
+                confirmed_by,
+                confirmed_at,
+                cancelled_by,
+                cancelled_at,
+                cancelled_reason,
                 remarks,
                 created_at
             FROM wms.wms_mrp_suggestions
@@ -784,6 +903,122 @@ impl MrpSuggestionRepository for PostgresMrpStore {
 
         Ok(Page::new(items, total, page, page_size))
     }
+}
+
+async fn lock_suggestion_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    suggestion_id: &MrpSuggestionId,
+) -> MrpResult<MrpSuggestion> {
+    let id = suggestion_id
+        .as_str()
+        .parse::<i64>()
+        .map_err(|_| MrpError::BusinessRuleViolation("MRP 建议 ID 必须是数字".to_string()))?;
+
+    let row = sqlx::query(
+        r#"
+        SELECT
+            id,
+            run_id,
+            material_id,
+            bom_level,
+            gross_requirement_qty,
+            required_qty,
+            available_qty,
+            safety_stock_qty,
+            shortage_qty,
+            suggested_order_type,
+            suggested_order_qty,
+            recommended_bin,
+            recommended_batch,
+            lead_time_days,
+            priority,
+            status,
+            confirmed_by,
+            confirmed_at,
+            cancelled_by,
+            cancelled_at,
+            cancelled_reason,
+            remarks,
+            created_at
+        FROM wms.wms_mrp_suggestions
+        WHERE id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(map_mrp_db_error)?;
+
+    let Some(row) = row else {
+        return Err(MrpError::MrpSuggestionNotFound);
+    };
+
+    mrp_suggestion_from_row(&row)
+}
+
+async fn update_suggestion_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    suggestion: &MrpSuggestion,
+) -> MrpResult<()> {
+    let id = suggestion
+        .id
+        .as_str()
+        .parse::<i64>()
+        .map_err(|_| MrpError::BusinessRuleViolation("MRP 建议 ID 必须是数字".to_string()))?;
+
+    let remarks = suggestion_remarks_to_json(suggestion);
+
+    let result = sqlx::query(
+        r#"
+        UPDATE wms.wms_mrp_suggestions
+        SET
+            suggested_order_type = $2,
+            suggested_order_qty = $3,
+            remarks = $4,
+            status = $5,
+            confirmed_by = $6,
+            confirmed_at = $7,
+            cancelled_by = $8,
+            cancelled_at = $9,
+            cancelled_reason = $10
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .bind(suggestion_type_to_db(suggestion.suggestion_type))
+    .bind(
+        suggestion
+            .suggested_qty
+            .to_i32()
+            .ok_or_else(|| MrpError::BusinessRuleViolation("建议数量超过 i32 范围".to_string()))?,
+    )
+    .bind(remarks)
+    .bind(suggestion_status_to_code(suggestion.status))
+    .bind(
+        suggestion
+            .confirmed_by
+            .as_ref()
+            .map(|operator| operator.as_str().to_string()),
+    )
+    .bind(suggestion.confirmed_at)
+    .bind(
+        suggestion
+            .cancelled_by
+            .as_ref()
+            .map(|operator| operator.as_str().to_string()),
+    )
+    .bind(suggestion.cancelled_at)
+    .bind(suggestion.remark.clone())
+    .execute(&mut **tx)
+    .await
+    .map_err(map_mrp_db_error)?;
+
+    if result.rows_affected() == 0 {
+        return Err(MrpError::MrpSuggestionNotFound);
+    }
+
+    Ok(())
 }
 
 // =============================================================================

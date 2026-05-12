@@ -10,6 +10,7 @@ use crate::{
     application::{
         BomExplosionCommand, CompleteProductionOrderCommand, CreateProductionOrderCommand,
         ProductionOrderQuery, ProductionVarianceQuery, ReleaseProductionOrderCommand,
+        UpdateProductionOrderCommand,
     },
     domain::ProductionOrderStatus,
     infrastructure::PostgresProductionRepository,
@@ -19,7 +20,7 @@ use super::dto::{
     BomExplosionPreviewRequest, CancelProductionOrderRequest, CloseProductionOrderRequest,
     CompleteProductionOrderRequest, CreateProductionOrderRequest, CreatedProductionOrderResponse,
     ProductionActionResponse, ProductionOrderListQuery, ProductionVarianceListQuery,
-    ReleaseProductionOrderRequest,
+    ReleaseProductionOrderRequest, UpdateProductionOrderRequest,
 };
 
 fn production_service(state: &AppState) -> crate::application::ProductionService {
@@ -35,7 +36,7 @@ fn production_service(state: &AppState) -> crate::application::ProductionService
 }
 
 fn status_text(status: ProductionOrderStatus) -> String {
-    status.as_db_text().to_string()
+    status.as_api_code().to_string()
 }
 
 pub async fn preview_bom_explosion(
@@ -62,6 +63,9 @@ pub async fn create_production_order(
     Json(req): Json<CreateProductionOrderRequest>,
 ) -> AppResult<Json<ApiResponse<CreatedProductionOrderResponse>>> {
     let service = production_service(&state);
+    let variant_code = req.variant_code.clone();
+    let finished_material_id = req.finished_material_id.clone();
+    let planned_qty = req.planned_qty;
 
     let order_id = service
         .create_order(CreateProductionOrderCommand {
@@ -79,7 +83,10 @@ pub async fn create_production_order(
 
     Ok(Json(ApiResponse::ok(CreatedProductionOrderResponse {
         order_id: order_id.0,
-        status: ProductionOrderStatus::Planned.as_db_text().to_string(),
+        status: ProductionOrderStatus::Planned.as_api_code().to_string(),
+        variant_code,
+        finished_material_id,
+        planned_qty,
     })))
 }
 
@@ -119,6 +126,29 @@ pub async fn get_production_order_components(
 ) -> AppResult<Json<ApiResponse<Vec<crate::domain::ProductionOrderLine>>>> {
     let service = production_service(&state);
     let result = service.list_order_lines(&order_id).await?;
+
+    Ok(Json(ApiResponse::ok(result)))
+}
+
+pub async fn update_production_order(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(order_id): Path<String>,
+    Json(req): Json<UpdateProductionOrderRequest>,
+) -> AppResult<Json<ApiResponse<crate::domain::ProductionOrder>>> {
+    let service = production_service(&state);
+
+    let result = service
+        .update_order(UpdateProductionOrderCommand {
+            order_id,
+            planned_qty: req.planned_qty,
+            work_center_id: req.work_center_id,
+            planned_start_date: req.planned_start_date,
+            planned_end_date: req.planned_end_date,
+            remark: req.remark,
+            operator: Some(user.username),
+        })
+        .await?;
 
     Ok(Json(ApiResponse::ok(result)))
 }

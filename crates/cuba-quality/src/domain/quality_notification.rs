@@ -95,6 +95,47 @@ impl QualityNotification {
         Ok(())
     }
 
+    /// 更新质量通知基础和处理信息。
+    pub fn update_details(&mut self, input: UpdateQualityNotificationDetails) -> QualityResult<()> {
+        if !self.status.can_update() {
+            return Err(QualityError::QualityNotificationStatusInvalid);
+        }
+
+        if let Some(description) = input.description {
+            let description = description.trim().to_string();
+            if description.is_empty() {
+                return Err(QualityError::RequiredFieldEmpty("description"));
+            }
+            self.description = description;
+        }
+
+        if let Some(severity) = input.severity {
+            self.severity = severity;
+        }
+
+        if let Some(owner) = input.owner {
+            self.owner = Some(owner);
+        }
+
+        if let Some(root_cause) = input.root_cause {
+            let root_cause = root_cause.trim().to_string();
+            if root_cause.is_empty() {
+                return Err(QualityError::RequiredFieldEmpty("root_cause"));
+            }
+            self.root_cause = Some(root_cause);
+        }
+
+        if let Some(corrective_action) = input.corrective_action {
+            let corrective_action = corrective_action.trim().to_string();
+            if corrective_action.is_empty() {
+                return Err(QualityError::RequiredFieldEmpty("corrective_action"));
+            }
+            self.corrective_action = Some(corrective_action);
+        }
+
+        Ok(())
+    }
+
     /// 解决质量通知。
     pub fn resolve(&mut self, root_cause: String, corrective_action: String) -> QualityResult<()> {
         if !self.status.can_update() {
@@ -157,4 +198,14 @@ pub struct CreateQualityNotification {
     pub created_by: Operator,
     pub now: OffsetDateTime,
     pub remark: Option<String>,
+}
+
+/// 更新质量通知基础和处理信息输入。
+#[derive(Debug, Clone)]
+pub struct UpdateQualityNotificationDetails {
+    pub description: Option<String>,
+    pub severity: Option<QualityNotificationSeverity>,
+    pub owner: Option<Operator>,
+    pub root_cause: Option<String>,
+    pub corrective_action: Option<String>,
 }

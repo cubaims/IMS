@@ -34,6 +34,9 @@ pub enum MrpError {
     #[error("需求日期不能为空")]
     DemandDateRequired,
 
+    #[error("需求日期不能早于当前日期")]
+    DemandDateBeforeToday,
+
     #[error("MRP 运行失败")]
     MrpRunFailed,
 
@@ -501,18 +504,17 @@ mod tests {
 
     #[test]
     fn demand_requires_positive_quantity_and_target() {
-        let err = MrpDemand::new(None, None, Decimal::ONE, now(), None).unwrap_err();
-        assert!(matches!(err, MrpError::BusinessRuleViolation(_)));
+        let result = MrpDemand::new(None, None, Decimal::ONE, now(), None);
+        assert!(matches!(result, Err(MrpError::BusinessRuleViolation(_))));
 
-        let err = MrpDemand::new(
+        let result = MrpDemand::new(
             Some(MaterialId::new("FIN001")),
             None,
             Decimal::ZERO,
             now(),
             None,
-        )
-        .unwrap_err();
-        assert_eq!(err, MrpError::DemandQtyMustBePositive);
+        );
+        assert!(matches!(result, Err(MrpError::DemandQtyMustBePositive)));
 
         let demand = MrpDemand::new(
             Some(MaterialId::new("FIN001")),

@@ -16,6 +16,7 @@ impl From<QualityError> for AppError {
     fn from(err: QualityError) -> Self {
         match err {
             QualityError::InspectionLotNotFound => AppError::NotFound(err.to_string()),
+            QualityError::InspectionResultNotFound => AppError::NotFound(err.to_string()),
             QualityError::QualityNotificationNotFound => AppError::NotFound(err.to_string()),
             QualityError::InspectionCharNotFound => {
                 AppError::business("INSPECTION_CHAR_NOT_FOUND", err.to_string())

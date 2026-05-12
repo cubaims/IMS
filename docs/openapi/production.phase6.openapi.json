@@ -1,0 +1,357 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "IMS Phase 6 Production API",
+    "version": "0.1.0"
+  },
+  "tags": [
+    {
+      "name": "Production Planning"
+    },
+    {
+      "name": "Production Orders"
+    },
+    {
+      "name": "Production Variance"
+    },
+    {
+      "name": "Production Trace"
+    }
+  ],
+  "paths": {
+    "/api/production/bom-explosion": {
+      "post": {
+        "tags": ["Production Planning"],
+        "summary": "Preview BOM explosion for a production quantity",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "bom:explode",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/BomExplosionPreviewRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "BOM explosion preview"},
+          "400": {"description": "Validation error"},
+          "403": {"description": "Permission denied"},
+          "409": {"description": "Business rule violation"}
+        }
+      }
+    },
+    "/api/production/variances": {
+      "get": {
+        "tags": ["Production Variance"],
+        "summary": "List production variances",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "production:variance-read",
+        "parameters": [
+          {"name": "order_id", "in": "query", "schema": {"type": "string"}},
+          {"name": "variant_code", "in": "query", "schema": {"type": "string"}},
+          {"name": "only_over_budget", "in": "query", "schema": {"type": "boolean"}},
+          {"name": "page", "in": "query", "schema": {"type": "integer", "minimum": 1}},
+          {"name": "page_size", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 200}}
+        ],
+        "responses": {
+          "200": {"description": "Production variance list"}
+        }
+      }
+    },
+    "/api/production/batches/{batch_number}/components": {
+      "get": {
+        "tags": ["Production Trace"],
+        "summary": "Trace components consumed by a finished batch",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "batch:trace",
+        "parameters": [{"name": "batch_number", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Finished batch components"}
+        }
+      }
+    },
+    "/api/production/batches/{batch_number}/where-used": {
+      "get": {
+        "tags": ["Production Trace"],
+        "summary": "Trace where a component batch was used",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "batch:trace",
+        "parameters": [{"name": "batch_number", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Component batch where-used records"}
+        }
+      }
+    },
+    "/api/production-orders": {
+      "get": {
+        "tags": ["Production Orders"],
+        "summary": "List production orders",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "production:read",
+        "parameters": [
+          {"name": "order_id", "in": "query", "schema": {"type": "string"}},
+          {"name": "variant_code", "in": "query", "schema": {"type": "string"}},
+          {"name": "finished_material_id", "in": "query", "schema": {"type": "string"}},
+          {"name": "status", "in": "query", "schema": {"type": "string"}},
+          {"name": "page", "in": "query", "schema": {"type": "integer", "minimum": 1}},
+          {"name": "page_size", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 200}}
+        ],
+        "responses": {
+          "200": {"description": "Production order list"}
+        }
+      },
+      "post": {
+        "tags": ["Production Orders"],
+        "summary": "Create production order",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "production:write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/CreateProductionOrderRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Production order created"},
+          "400": {"description": "Validation error"},
+          "403": {"description": "Permission denied"},
+          "409": {"description": "Business rule violation"}
+        }
+      }
+    },
+    "/api/production-orders/{order_id}": {
+      "get": {
+        "tags": ["Production Orders"],
+        "summary": "Get production order",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "production:read",
+        "parameters": [{"name": "order_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Production order detail"},
+          "404": {"description": "Production order not found"}
+        }
+      },
+      "patch": {
+        "tags": ["Production Orders"],
+        "summary": "Update a planned production order",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "production:write",
+        "parameters": [{"name": "order_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/UpdateProductionOrderRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Production order updated"},
+          "400": {"description": "Validation error"},
+          "403": {"description": "Permission denied"},
+          "404": {"description": "Production order not found"},
+          "409": {"description": "Order status does not allow update"}
+        }
+      }
+    },
+    "/api/production-orders/{order_id}/components": {
+      "get": {
+        "tags": ["Production Orders"],
+        "summary": "List production order components",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "production:read",
+        "parameters": [{"name": "order_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Production order components"}
+        }
+      }
+    },
+    "/api/production-orders/{order_id}/release": {
+      "post": {
+        "tags": ["Production Orders"],
+        "summary": "Release production order",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "production:release",
+        "parameters": [{"name": "order_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/ReleaseProductionOrderRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Production order released"},
+          "409": {"description": "Order status does not allow release"}
+        }
+      }
+    },
+    "/api/production-orders/{order_id}/complete": {
+      "post": {
+        "tags": ["Production Orders"],
+        "summary": "Complete production order and post inventory movements",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "production:complete",
+        "parameters": [{"name": "order_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/CompleteProductionOrderRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Production completion posted"},
+          "400": {"description": "Validation error"},
+          "403": {"description": "Permission denied"},
+          "404": {"description": "Production order not found"},
+          "409": {"description": "Inventory or production rule violation"}
+        }
+      }
+    },
+    "/api/production-orders/{order_id}/cancel": {
+      "post": {
+        "tags": ["Production Orders"],
+        "summary": "Cancel production order",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "production:write",
+        "parameters": [{"name": "order_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/CancelProductionOrderRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Production order cancelled"},
+          "409": {"description": "Order status does not allow cancel"}
+        }
+      }
+    },
+    "/api/production-orders/{order_id}/close": {
+      "post": {
+        "tags": ["Production Orders"],
+        "summary": "Close production order",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "production:write",
+        "parameters": [{"name": "order_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/CloseProductionOrderRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Production order closed"},
+          "409": {"description": "Order status does not allow close"}
+        }
+      }
+    },
+    "/api/production-orders/{order_id}/genealogy": {
+      "get": {
+        "tags": ["Production Trace"],
+        "summary": "Get production order genealogy",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "batch:trace",
+        "parameters": [{"name": "order_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Production genealogy"}
+        }
+      }
+    },
+    "/api/production-orders/{order_id}/variance": {
+      "get": {
+        "tags": ["Production Variance"],
+        "summary": "Get production order variance",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "production:variance-read",
+        "parameters": [{"name": "order_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Production variance"},
+          "404": {"description": "Production order not found"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "BomExplosionPreviewRequest": {
+        "type": "object",
+        "required": ["finished_material_id", "quantity"],
+        "properties": {
+          "variant_code": {"type": "string"},
+          "finished_material_id": {"type": "string"},
+          "quantity": {"type": "integer", "minimum": 1},
+          "merge_components": {"type": "boolean"}
+        }
+      },
+      "CreateProductionOrderRequest": {
+        "type": "object",
+        "required": ["variant_code", "finished_material_id", "bom_id", "planned_qty", "work_center_id"],
+        "properties": {
+          "variant_code": {"type": "string"},
+          "finished_material_id": {"type": "string"},
+          "bom_id": {"type": "string"},
+          "planned_qty": {"type": "integer", "minimum": 1},
+          "work_center_id": {"type": "string"},
+          "planned_start_date": {"type": "string", "format": "date"},
+          "planned_end_date": {"type": "string", "format": "date"},
+          "remark": {"type": "string"}
+        }
+      },
+      "UpdateProductionOrderRequest": {
+        "type": "object",
+        "properties": {
+          "planned_qty": {"type": "integer", "minimum": 1},
+          "work_center_id": {"type": "string"},
+          "planned_start_date": {"type": "string", "format": "date"},
+          "planned_end_date": {"type": "string", "format": "date"},
+          "remark": {"type": "string"}
+        }
+      },
+      "ReleaseProductionOrderRequest": {
+        "type": "object",
+        "properties": {
+          "remark": {"type": "string"}
+        }
+      },
+      "CancelProductionOrderRequest": {
+        "type": "object",
+        "properties": {
+          "remark": {"type": "string"}
+        }
+      },
+      "CloseProductionOrderRequest": {
+        "type": "object",
+        "properties": {
+          "remark": {"type": "string"}
+        }
+      },
+      "CompleteProductionOrderRequest": {
+        "type": "object",
+        "required": ["completed_qty", "finished_batch_number", "finished_to_bin"],
+        "properties": {
+          "completed_qty": {"type": "integer", "minimum": 1},
+          "finished_batch_number": {"type": "string"},
+          "finished_to_bin": {"type": "string"},
+          "posting_date": {"type": "string", "format": "date-time"},
+          "pick_strategy": {"type": "string", "enum": ["FEFO"]},
+          "remark": {"type": "string"}
+        }
+      }
+    }
+  }
+}

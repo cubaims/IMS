@@ -1,0 +1,14 @@
+meta {
+  name: 08 Refresh Current Stock
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{base_url}}/api/reports/refresh
+  body: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

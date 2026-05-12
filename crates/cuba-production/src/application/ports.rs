@@ -9,6 +9,7 @@ use crate::domain::{
 use super::{
     BomExplosionCommand, CompleteProductionOrderCommand, CreateProductionOrderCommand,
     ProductionOrderQuery, ProductionVarianceQuery, ReleaseProductionOrderCommand,
+    UpdateProductionOrderCommand,
 };
 
 #[async_trait]
@@ -25,6 +26,8 @@ pub trait ProductionOrderRepository: Send + Sync {
     async fn list_lines(&self, order_id: &str) -> AppResult<Vec<ProductionOrderLine>>;
 
     async fn release(&self, command: ReleaseProductionOrderCommand) -> AppResult<ProductionOrder>;
+
+    async fn update(&self, command: UpdateProductionOrderCommand) -> AppResult<ProductionOrder>;
 
     async fn cancel(&self, order_id: &str, operator: Option<String>) -> AppResult<ProductionOrder>;
 

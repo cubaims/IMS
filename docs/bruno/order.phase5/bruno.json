@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "IMS Phase 5 Orders",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}

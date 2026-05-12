@@ -20,6 +20,14 @@ pub struct CreateSalesOrderLineRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct UpdateSalesOrderRequest {
+    pub customer_id: Option<String>,
+    pub required_date: Option<Date>,
+    pub remark: Option<String>,
+    pub lines: Option<Vec<CreateSalesOrderLineRequest>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct PostSalesShipmentRequest {
     pub posting_date: Option<OffsetDateTime>,
     pub pick_strategy: Option<String>,

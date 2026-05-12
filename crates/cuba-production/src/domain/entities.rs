@@ -61,7 +61,7 @@ impl ProductionOrder {
         self.status = if self.completed_qty >= self.planned_qty {
             ProductionOrderStatus::Completed
         } else {
-            ProductionOrderStatus::InProduction
+            ProductionOrderStatus::PartiallyCompleted
         };
 
         Ok(ProductionCompletionDecision {
@@ -80,7 +80,39 @@ impl ProductionOrder {
 
     pub fn close(&mut self) -> Result<(), ProductionDomainError> {
         self.status.ensure_can_close()?;
-        self.status = ProductionOrderStatus::Completed;
+        self.status = ProductionOrderStatus::Closed;
+        Ok(())
+    }
+
+    pub fn update_plan(
+        &mut self,
+        planned_qty: Option<i32>,
+        work_center_id: Option<WorkCenterId>,
+        planned_start_date: Option<Date>,
+        planned_end_date: Option<Date>,
+        remark: Option<String>,
+    ) -> Result<(), ProductionDomainError> {
+        self.status.ensure_can_update_plan()?;
+
+        if let Some(planned_qty) = planned_qty {
+            if planned_qty <= 0 {
+                return Err(ProductionDomainError::ProductionQuantityInvalid);
+            }
+
+            if planned_qty < self.completed_qty {
+                return Err(ProductionDomainError::ProductionQuantityExceeded);
+            }
+
+            self.planned_qty = planned_qty;
+        }
+
+        if let Some(work_center_id) = work_center_id {
+            self.work_center_id = work_center_id;
+        }
+
+        self.planned_start_date = planned_start_date;
+        self.planned_end_date = planned_end_date;
+        self.remark = remark;
         Ok(())
     }
 }
@@ -225,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_completion_moves_order_to_in_production() {
+    fn partial_completion_moves_order_to_partially_completed() {
         let mut order = production_order(ProductionOrderStatus::Released, 100, 0);
 
         let decision = order
@@ -233,13 +265,13 @@ mod tests {
             .expect("released order can be partially completed");
 
         assert_eq!(order.completed_qty, 30);
-        assert_eq!(decision.status, ProductionOrderStatus::InProduction);
+        assert_eq!(decision.status, ProductionOrderStatus::PartiallyCompleted);
         assert!(!decision.is_fully_completed);
     }
 
     #[test]
     fn final_completion_completes_order() {
-        let mut order = production_order(ProductionOrderStatus::InProduction, 100, 70);
+        let mut order = production_order(ProductionOrderStatus::PartiallyCompleted, 100, 70);
 
         let decision = order
             .start_or_complete(30)
@@ -261,6 +293,39 @@ mod tests {
         assert!(matches!(
             err,
             ProductionDomainError::ProductionQuantityExceeded
+        ));
+    }
+
+    #[test]
+    fn planned_order_can_update_plan() {
+        let mut order = production_order(ProductionOrderStatus::Planned, 100, 0);
+
+        order
+            .update_plan(
+                Some(120),
+                Some(WorkCenterId("WC-002".to_string())),
+                None,
+                None,
+                Some("updated".to_string()),
+            )
+            .expect("planned order can be updated");
+
+        assert_eq!(order.planned_qty, 120);
+        assert_eq!(order.work_center_id.0, "WC-002");
+        assert_eq!(order.remark.as_deref(), Some("updated"));
+    }
+
+    #[test]
+    fn released_order_cannot_update_plan() {
+        let mut order = production_order(ProductionOrderStatus::Released, 100, 0);
+
+        let err = order
+            .update_plan(Some(120), None, None, None, None)
+            .expect_err("released order cannot be updated");
+
+        assert!(matches!(
+            err,
+            ProductionDomainError::ProductionOrderStatusInvalid
         ));
     }
 }

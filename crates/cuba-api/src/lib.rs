@@ -23,6 +23,12 @@ const MASTER_DATA_OPENAPI_JSON: &str =
     include_str!("../../../docs/openapi/master-data.phase3.openapi.json");
 const INVENTORY_CORE_OPENAPI_JSON: &str =
     include_str!("../../../docs/openapi/inventory-core.phase4.openapi.json");
+const INVENTORY_COUNT_OPENAPI_JSON: &str =
+    include_str!("../../../docs/openapi/inventory-count.phase7.openapi.json");
+const ORDER_PHASE5_OPENAPI_JSON: &str =
+    include_str!("../../../docs/openapi/order-phase5.openapi.json");
+const PRODUCTION_PHASE6_OPENAPI_JSON: &str =
+    include_str!("../../../docs/openapi/production.phase6.openapi.json");
 const MRP_REPORTING_OPENAPI_JSON: &str =
     include_str!("../../../docs/openapi/mrp-reporting.phase9.openapi.json");
 
@@ -44,6 +50,18 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/openapi/inventory-core.json",
             axum::routing::get(inventory_core_openapi),
+        )
+        .route(
+            "/api/openapi/inventory-count.json",
+            axum::routing::get(inventory_count_openapi),
+        )
+        .route(
+            "/api/openapi/orders-phase5.json",
+            axum::routing::get(order_phase5_openapi),
+        )
+        .route(
+            "/api/openapi/production-phase6.json",
+            axum::routing::get(production_phase6_openapi),
         )
         .route(
             "/api/openapi/mrp-reporting.json",
@@ -213,6 +231,12 @@ pub fn build_router(state: AppState) -> Router {
                     "/counts/{count_doc_id}",
                     axum::routing::get(cuba_inventory::interface::handlers::get_inventory_count),
                 )
+                .route(
+                    "/counts/{count_doc_id}/differences",
+                    axum::routing::get(
+                        cuba_inventory::interface::handlers::list_inventory_count_differences,
+                    ),
+                )
                 .layer(axum::middleware::from_fn(|req, next| {
                     middleware::require_permission("inventory-count:read", req, next)
                 }));
@@ -236,6 +260,12 @@ pub fn build_router(state: AppState) -> Router {
                 )
                 .route(
                     "/counts/{count_doc_id}/lines/batch",
+                    axum::routing::patch(
+                        cuba_inventory::interface::handlers::batch_update_inventory_count_lines,
+                    ),
+                )
+                .route(
+                    "/counts/{count_doc_id}/lines",
                     axum::routing::patch(
                         cuba_inventory::interface::handlers::batch_update_inventory_count_lines,
                     ),
@@ -325,6 +355,12 @@ pub fn build_router(state: AppState) -> Router {
                     axum::routing::post(cuba_purchase::interface::handlers::create_purchase_order),
                 )
                 .route(
+                    "/{po_id}",
+                    axum::routing::patch(
+                        cuba_purchase::interface::handlers::update_purchase_order,
+                    ),
+                )
+                .route(
                     "/{po_id}/close",
                     axum::routing::post(cuba_purchase::interface::handlers::close_purchase_order),
                 )
@@ -371,6 +407,10 @@ pub fn build_router(state: AppState) -> Router {
                 .route(
                     "/",
                     axum::routing::post(cuba_sales::interface::handlers::create_sales_order),
+                )
+                .route(
+                    "/{so_id}",
+                    axum::routing::patch(cuba_sales::interface::handlers::update_sales_order),
                 )
                 .route(
                     "/{so_id}/close",
@@ -473,6 +513,12 @@ pub fn build_router(state: AppState) -> Router {
                         "/",
                         axum::routing::post(
                             cuba_production::interface::handlers::create_production_order,
+                        ),
+                    )
+                    .route(
+                        "/{order_id}",
+                        axum::routing::patch(
+                            cuba_production::interface::handlers::update_production_order,
                         ),
                     )
                     .route(
@@ -874,6 +920,27 @@ async fn inventory_core_openapi() -> impl IntoResponse {
     )
 }
 
+async fn inventory_count_openapi() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        INVENTORY_COUNT_OPENAPI_JSON,
+    )
+}
+
+async fn order_phase5_openapi() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        ORDER_PHASE5_OPENAPI_JSON,
+    )
+}
+
+async fn production_phase6_openapi() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        PRODUCTION_PHASE6_OPENAPI_JSON,
+    )
+}
+
 async fn mrp_reporting_openapi() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
@@ -1064,6 +1131,10 @@ mod tests {
                 "/counts/CNT-1",
                 axum::routing::get(|| async { StatusCode::OK }),
             )
+            .route(
+                "/counts/CNT-1/differences",
+                axum::routing::get(|| async { StatusCode::OK }),
+            )
             .layer(axum::middleware::from_fn(|req, next| {
                 middleware::require_permission("inventory-count:read", req, next)
             }));
@@ -1076,6 +1147,10 @@ mod tests {
             )
             .route(
                 "/counts/CNT-1/lines/10",
+                axum::routing::patch(|| async { StatusCode::OK }),
+            )
+            .route(
+                "/counts/CNT-1/lines",
                 axum::routing::patch(|| async { StatusCode::OK }),
             )
             .route(
@@ -1148,6 +1223,10 @@ mod tests {
                 "/purchase-orders",
                 axum::routing::post(|| async { StatusCode::OK }),
             )
+            .route(
+                "/purchase-orders/PO-1",
+                axum::routing::patch(|| async { StatusCode::OK }),
+            )
             .layer(axum::middleware::from_fn(|req, next| {
                 middleware::require_permission("purchase:write", req, next)
             }));
@@ -1165,6 +1244,10 @@ mod tests {
             .route(
                 "/sales-orders",
                 axum::routing::post(|| async { StatusCode::OK }),
+            )
+            .route(
+                "/sales-orders/SO-1",
+                axum::routing::patch(|| async { StatusCode::OK }),
             )
             .layer(axum::middleware::from_fn(|req, next| {
                 middleware::require_permission("sales:write", req, next)
@@ -1306,6 +1389,111 @@ mod tests {
             assert!(
                 INVENTORY_CORE_OPENAPI_JSON.contains(path),
                 "missing Phase 4 OpenAPI path: {path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn openapi_document_contains_phase7_inventory_count_paths_and_tags() {
+        for path in [
+            "/api/inventory/counts",
+            "/api/inventory/counts/{count_doc_id}",
+            "/api/inventory/counts/{count_doc_id}/differences",
+            "/api/inventory/counts/{count_doc_id}/generate-lines",
+            "/api/inventory/counts/{count_doc_id}/lines/{line_no}",
+            "/api/inventory/counts/{count_doc_id}/lines",
+            "/api/inventory/counts/{count_doc_id}/lines/batch",
+            "/api/inventory/counts/{count_doc_id}/submit",
+            "/api/inventory/counts/{count_doc_id}/approve",
+            "/api/inventory/counts/{count_doc_id}/post",
+            "/api/inventory/counts/{count_doc_id}/close",
+            "/api/inventory/counts/{count_doc_id}/cancel",
+        ] {
+            assert!(
+                INVENTORY_COUNT_OPENAPI_JSON.contains(path),
+                "missing Phase 7 OpenAPI path: {path}"
+            );
+        }
+
+        for tag in [
+            "Inventory Count",
+            "Inventory Count Lines",
+            "Inventory Count Posting",
+        ] {
+            assert!(
+                INVENTORY_COUNT_OPENAPI_JSON.contains(tag),
+                "missing Phase 7 OpenAPI tag: {tag}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn openapi_document_contains_phase5_order_paths_and_permissions() {
+        for path in [
+            "/api/purchase-orders",
+            "/api/purchase-orders/{po_id}",
+            "/api/purchase-orders/{po_id}/receipt",
+            "/api/sales-orders",
+            "/api/sales-orders/{so_id}",
+            "/api/sales-orders/{so_id}/pick-preview",
+            "/api/sales-orders/{so_id}/shipment",
+        ] {
+            assert!(
+                ORDER_PHASE5_OPENAPI_JSON.contains(path),
+                "missing Phase 5 OpenAPI path: {path}"
+            );
+        }
+
+        for permission in [
+            "purchase:read",
+            "purchase:write",
+            "purchase:receipt",
+            "sales:read",
+            "sales:write",
+            "sales:shipment",
+        ] {
+            assert!(
+                ORDER_PHASE5_OPENAPI_JSON.contains(permission),
+                "missing Phase 5 OpenAPI permission: {permission}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn openapi_document_contains_phase6_production_paths_and_permissions() {
+        for path in [
+            "/api/production/bom-explosion",
+            "/api/production/variances",
+            "/api/production/batches/{batch_number}/components",
+            "/api/production/batches/{batch_number}/where-used",
+            "/api/production-orders",
+            "/api/production-orders/{order_id}",
+            "/api/production-orders/{order_id}/components",
+            "/api/production-orders/{order_id}/release",
+            "/api/production-orders/{order_id}/complete",
+            "/api/production-orders/{order_id}/cancel",
+            "/api/production-orders/{order_id}/close",
+            "/api/production-orders/{order_id}/genealogy",
+            "/api/production-orders/{order_id}/variance",
+        ] {
+            assert!(
+                PRODUCTION_PHASE6_OPENAPI_JSON.contains(path),
+                "missing Phase 6 OpenAPI path: {path}"
+            );
+        }
+
+        for permission in [
+            "production:read",
+            "production:write",
+            "production:release",
+            "production:complete",
+            "production:variance-read",
+            "bom:explode",
+            "batch:trace",
+        ] {
+            assert!(
+                PRODUCTION_PHASE6_OPENAPI_JSON.contains(permission),
+                "missing Phase 6 OpenAPI permission: {permission}"
             );
         }
     }
@@ -1701,6 +1889,16 @@ mod tests {
         assert_eq!(
             send(
                 &router,
+                axum::http::Method::GET,
+                "/counts/CNT-1/differences",
+                Some(&read_token)
+            )
+            .await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            send(
+                &router,
                 axum::http::Method::POST,
                 "/counts",
                 Some(&read_token)
@@ -1713,6 +1911,16 @@ mod tests {
                 &router,
                 axum::http::Method::POST,
                 "/counts/CNT-1/generate-lines",
+                Some(&write_token)
+            )
+            .await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            send(
+                &router,
+                axum::http::Method::PATCH,
+                "/counts/CNT-1/lines",
                 Some(&write_token)
             )
             .await,
@@ -1790,6 +1998,26 @@ mod tests {
         assert_eq!(
             send(
                 &router,
+                axum::http::Method::PATCH,
+                "/purchase-orders/PO-1",
+                Some(&purchaser_token)
+            )
+            .await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            send(
+                &router,
+                axum::http::Method::PATCH,
+                "/purchase-orders/PO-1",
+                Some(&warehouse_token)
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            send(
+                &router,
                 axum::http::Method::POST,
                 "/purchase-orders/PO-1/receipt",
                 Some(&purchaser_token)
@@ -1816,6 +2044,26 @@ mod tests {
             )
             .await,
             StatusCode::OK
+        );
+        assert_eq!(
+            send(
+                &router,
+                axum::http::Method::PATCH,
+                "/sales-orders/SO-1",
+                Some(&sales_token)
+            )
+            .await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            send(
+                &router,
+                axum::http::Method::PATCH,
+                "/sales-orders/SO-1",
+                Some(&warehouse_token)
+            )
+            .await,
+            StatusCode::FORBIDDEN
         );
         assert_eq!(
             send(

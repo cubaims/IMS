@@ -10,11 +10,12 @@ use crate::{
     application::{
         CreateSalesOrderCommand, CreateSalesOrderLineCommand, PostSalesShipmentCommand,
         PostSalesShipmentLineCommand, PreviewSalesFefoPickCommand, PreviewSalesFefoPickLineCommand,
-        SalesOrderQuery, SalesOrderService,
+        SalesOrderQuery, SalesOrderService, UpdateSalesOrderCommand,
     },
     infrastructure::PostgresSalesOrderRepository,
     interface::dto::{
         CreateSalesOrderRequest, PostSalesShipmentRequest, PreviewSalesFefoPickRequest,
+        UpdateSalesOrderRequest,
     },
 };
 
@@ -63,6 +64,36 @@ pub async fn get_sales_order(
     Path(so_id): Path<String>,
 ) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
     let result = service(&state).get_order(so_id).await?;
+    Ok(Json(ApiResponse::ok(result)))
+}
+
+pub async fn update_sales_order(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(so_id): Path<String>,
+    Json(request): Json<UpdateSalesOrderRequest>,
+) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+    let command = UpdateSalesOrderCommand {
+        so_id,
+        customer_id: request.customer_id,
+        required_date: request.required_date,
+        remark: request.remark,
+        lines: request.lines.map(|lines| {
+            lines
+                .into_iter()
+                .map(|line| CreateSalesOrderLineCommand {
+                    line_no: line.line_no,
+                    material_id: line.material_id,
+                    ordered_qty: line.ordered_qty,
+                    unit_price: line.unit_price,
+                    from_bin: line.from_bin,
+                })
+                .collect()
+        }),
+    };
+
+    let result = service(&state).update_order(command, user.username).await?;
+
     Ok(Json(ApiResponse::ok(result)))
 }
 

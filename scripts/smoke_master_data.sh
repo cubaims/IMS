@@ -38,6 +38,7 @@ CUSTOMER_ID="CU${RUN_ID:4:10}"
 RAW_BIN="R${RUN_ID:6:8}"
 FIN_BIN="F${RUN_ID:6:8}"
 BOM_ID="BOM${RUN_ID:3:11}"
+COPIED_BOM_ID="BMC${RUN_ID:3:10}"
 VARIANT_CODE="V${RUN_ID:5:9}"
 WORK_CENTER_ID="WC${RUN_ID:4:10}"
 CHAR_ID="CH${RUN_ID:4:10}"
@@ -91,6 +92,8 @@ echo "== Phase 3 Master Data smoke test =="
 echo "1. public OpenAPI document"
 request GET "/api/openapi/master-data.json" 200 "" "" no >/tmp/ims-master-data-openapi.json
 jq -e '.paths["/api/master-data/boms/{bom_id}/components/{component_id}"].patch' \
+  /tmp/ims-master-data-openapi.json >/dev/null
+jq -e '.paths["/api/master-data/boms/{bom_id}/copy"].post' \
   /tmp/ims-master-data-openapi.json >/dev/null
 
 echo "2. permission guard rejects missing token"
@@ -177,6 +180,8 @@ request POST "/api/master-data/materials/${MATERIAL_ID}/suppliers" 200 "{
 }" >/dev/null
 
 request POST "/api/master-data/materials/${MATERIAL_ID}/suppliers/${SUPPLIER_ID}/primary" 200 >/dev/null
+request DELETE "/api/master-data/materials/${MATERIAL_ID}/suppliers/${SUPPLIER_ID}/primary" 200 >/dev/null
+request POST "/api/master-data/materials/${MATERIAL_ID}/suppliers/${SUPPLIER_ID}/primary" 200 >/dev/null
 
 echo "7. create customer"
 request POST "/api/master-data/customers" 200 "{
@@ -221,7 +226,21 @@ request POST "/api/master-data/boms/${BOM_ID}/explode-preview" 200 '{
   "quantity": 5
 }' >/dev/null
 
-echo "9. create product variant"
+echo "9. copy BOM"
+request POST "/api/master-data/boms/${BOM_ID}/copy" 200 "{
+  \"target_bom_id\": \"${COPIED_BOM_ID}\",
+  \"bom_name\": \"Smoke BOM Copy\",
+  \"parent_material_id\": \"${FINISHED_ID}\",
+  \"variant_code\": null,
+  \"version\": \"1.1\",
+  \"base_quantity\": \"1.00\",
+  \"valid_from\": \"2026-05-01\",
+  \"valid_to\": null,
+  \"notes\": \"Phase 3 smoke copied BOM\"
+}" | jq -e '.data.header.bom_id == "'"${COPIED_BOM_ID}"'" and (.data.components | length == 1)' >/dev/null
+request POST "/api/master-data/boms/${COPIED_BOM_ID}/validate" 200 >/dev/null
+
+echo "10. create product variant"
 request POST "/api/master-data/product-variants" 200 "{
   \"variant_code\": \"${VARIANT_CODE}\",
   \"variant_name\": \"Smoke Variant\",
@@ -230,7 +249,7 @@ request POST "/api/master-data/product-variants" 200 "{
   \"standard_cost\": \"120.00\"
 }" >/dev/null
 
-echo "10. create work center and quality master data"
+echo "11. create work center and quality master data"
 request POST "/api/master-data/work-centers" 200 "{
   \"work_center_id\": \"${WORK_CENTER_ID}\",
   \"work_center_name\": \"Smoke Work Center\",
@@ -260,9 +279,10 @@ request POST "/api/master-data/defect-codes" 200 "{
   \"description\": \"Smoke defect code\"
 }" >/dev/null
 
-echo "11. list major master data"
+echo "12. list major master data"
 request GET "/api/master-data/materials" 200 >/dev/null
 request GET "/api/master-data/bins" 200 >/dev/null
+request GET "/api/master-data/bins/${RAW_BIN}/capacity-utilization" 200 >/dev/null
 request GET "/api/master-data/suppliers" 200 >/dev/null
 request GET "/api/master-data/customers" 200 >/dev/null
 request GET "/api/master-data/boms" 200 >/dev/null
@@ -278,6 +298,7 @@ FINISHED_ID=${FINISHED_ID}
 SUPPLIER_ID=${SUPPLIER_ID}
 CUSTOMER_ID=${CUSTOMER_ID}
 BOM_ID=${BOM_ID}
+COPIED_BOM_ID=${COPIED_BOM_ID}
 VARIANT_CODE=${VARIANT_CODE}
 WORK_CENTER_ID=${WORK_CENTER_ID}
 CHAR_ID=${CHAR_ID}

@@ -4,7 +4,7 @@ use time::{Date, OffsetDateTime};
 
 use crate::application::{
     CreatePurchaseOrderCommand, CreatePurchaseOrderLineCommand, PostPurchaseReceiptCommand,
-    PostPurchaseReceiptLineCommand,
+    PostPurchaseReceiptLineCommand, UpdatePurchaseOrderCommand,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -22,6 +22,14 @@ pub struct CreatePurchaseOrderLineRequest {
     pub ordered_qty: i32,
     pub unit_price: Decimal,
     pub expected_bin: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdatePurchaseOrderRequest {
+    pub supplier_id: Option<String>,
+    pub expected_date: Option<Date>,
+    pub remark: Option<String>,
+    pub lines: Option<Vec<CreatePurchaseOrderLineRequest>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -84,6 +92,20 @@ impl From<CreatePurchaseOrderLineRequest> for CreatePurchaseOrderLineCommand {
             ordered_qty: req.ordered_qty,
             unit_price: req.unit_price,
             expected_bin: req.expected_bin,
+        }
+    }
+}
+
+impl From<UpdatePurchaseOrderRequest> for UpdatePurchaseOrderCommand {
+    fn from(req: UpdatePurchaseOrderRequest) -> Self {
+        Self {
+            po_id: String::new(),
+            supplier_id: req.supplier_id,
+            expected_date: req.expected_date,
+            remark: req.remark,
+            lines: req
+                .lines
+                .map(|lines| lines.into_iter().map(Into::into).collect()),
         }
     }
 }

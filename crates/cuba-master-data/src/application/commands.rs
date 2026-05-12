@@ -254,6 +254,28 @@ pub struct UpdateBomHeaderCommand {
 }
 
 #[derive(Debug, Clone, Deserialize, Validate)]
+pub struct CopyBomCommand {
+    #[validate(length(min = 1, max = 30))]
+    pub target_bom_id: String,
+
+    #[validate(length(min = 1, max = 100))]
+    pub bom_name: String,
+
+    #[validate(length(min = 1, max = 20))]
+    pub parent_material_id: String,
+
+    pub variant_code: Option<String>,
+
+    #[validate(length(min = 1, max = 10))]
+    pub version: String,
+
+    pub base_quantity: Option<Decimal>,
+    pub valid_from: Option<String>,
+    pub valid_to: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct CreateBomComponentCommand {
     #[validate(length(min = 1, max = 30))]
     pub bom_id: String,

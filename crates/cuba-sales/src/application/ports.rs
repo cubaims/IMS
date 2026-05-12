@@ -3,7 +3,8 @@ use cuba_shared::AppResult;
 use serde_json::Value;
 
 use crate::application::{
-    CreateSalesOrderCommand, PostSalesShipmentCommand, PreviewSalesFefoPickCommand, SalesOrderQuery,
+    CreateSalesOrderCommand, PostSalesShipmentCommand, PreviewSalesFefoPickCommand,
+    SalesOrderQuery, UpdateSalesOrderCommand,
 };
 
 #[async_trait]
@@ -11,6 +12,12 @@ pub trait SalesOrderRepository: Send + Sync {
     async fn create_order(
         &self,
         command: CreateSalesOrderCommand,
+        operator: String,
+    ) -> AppResult<Value>;
+
+    async fn update_order(
+        &self,
+        command: UpdateSalesOrderCommand,
         operator: String,
     ) -> AppResult<Value>;
 

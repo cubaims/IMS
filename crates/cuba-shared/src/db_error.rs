@@ -78,6 +78,9 @@ pub fn map_quality_db_error(err: SqlxError) -> AppError {
                 "DEFECT_CODE_NOT_FOUND" => {
                     return AppError::business("DEFECT_CODE_NOT_FOUND", "不良代码不存在");
                 }
+                "BATCH_PENDING_INSPECTION" => {
+                    return AppError::business("BATCH_PENDING_INSPECTION", "批次待检");
+                }
                 "BATCH_FROZEN" => return AppError::business("BATCH_FROZEN", "批次已冻结"),
                 "BATCH_SCRAPPED" => return AppError::business("BATCH_SCRAPPED", "批次已报废"),
                 _ => {}
@@ -94,6 +97,9 @@ pub fn map_quality_db_error(err: SqlxError) -> AppError {
     }
     if message.contains("不良代码") && message.contains("不存在") {
         return AppError::business("DEFECT_CODE_NOT_FOUND", "不良代码不存在");
+    }
+    if message.contains("待检") {
+        return AppError::business("BATCH_PENDING_INSPECTION", "批次待检");
     }
 
     map_inventory_db_error(err)
@@ -191,6 +197,12 @@ pub fn map_inventory_db_error(err: SqlxError) -> AppError {
                         "目标货位容量不足，无法入库或转储",
                     );
                 }
+                "BIN_INACTIVE" => {
+                    return AppError::business("BIN_INACTIVE", "目标货位不可用，无法入库或转储");
+                }
+                "BATCH_PENDING_INSPECTION" => {
+                    return AppError::business("BATCH_PENDING_INSPECTION", "批次待检，不能出库");
+                }
                 "BATCH_FROZEN" => {
                     return AppError::business("BATCH_FROZEN", "批次已冻结，不能出库");
                 }
@@ -220,6 +232,12 @@ pub fn map_inventory_db_error(err: SqlxError) -> AppError {
     }
     if message.contains("容量") || message.contains("超限") {
         return AppError::business("BIN_CAPACITY_EXCEEDED", "目标货位容量不足，无法入库或转储");
+    }
+    if message.contains("目标货位") && message.contains("不可用") {
+        return AppError::business("BIN_INACTIVE", "目标货位不可用，无法入库或转储");
+    }
+    if message.contains("待检") {
+        return AppError::business("BATCH_PENDING_INSPECTION", "批次待检，不能出库");
     }
     if message.contains("冻结") {
         return AppError::business("BATCH_FROZEN", "批次已冻结，不能出库");
@@ -499,6 +517,24 @@ mod tests {
             err,
             AppError::Business {
                 code: "INSUFFICIENT_STOCK",
+                ..
+            }
+        ));
+        assert_eq!(err.http_status(), axum::http::StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn inactive_target_bin_message_maps_to_bin_inactive() {
+        let err = map_inventory_db_error(db_error(
+            None,
+            "目标货位 RM-A01 不可用，当前状态 冻结",
+            ErrorKind::Other,
+        ));
+
+        assert!(matches!(
+            err,
+            AppError::Business {
+                code: "BIN_INACTIVE",
                 ..
             }
         ));

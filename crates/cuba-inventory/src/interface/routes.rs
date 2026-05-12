@@ -51,6 +51,10 @@ pub fn routes() -> Router<AppState> {
         .route("/counts", get(handlers::list_inventory_counts))
         .route("/counts/{count_doc_id}", get(handlers::get_inventory_count))
         .route(
+            "/counts/{count_doc_id}/differences",
+            get(handlers::list_inventory_count_differences),
+        )
+        .route(
             "/counts/{count_doc_id}/generate-lines",
             post(handlers::generate_inventory_count_lines),
         )
@@ -60,6 +64,10 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/counts/{count_doc_id}/lines/batch",
+            patch(handlers::batch_update_inventory_count_lines),
+        )
+        .route(
+            "/counts/{count_doc_id}/lines",
             patch(handlers::batch_update_inventory_count_lines),
         )
         .route(

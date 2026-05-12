@@ -15,9 +15,23 @@
       "bearerAuth": []
     }
   ],
+  "tags": [
+    {
+      "name": "Inventory Count"
+    },
+    {
+      "name": "Inventory Count Lines"
+    },
+    {
+      "name": "Inventory Count Posting"
+    }
+  ],
   "paths": {
     "/api/inventory/counts": {
       "get": {
+        "tags": [
+          "Inventory Count"
+        ],
         "summary": "List inventory counts",
         "x-permission": "inventory-count:read",
         "responses": {
@@ -27,6 +41,9 @@
         }
       },
       "post": {
+        "tags": [
+          "Inventory Count"
+        ],
         "summary": "Create inventory count",
         "x-permission": "inventory-count:write",
         "requestBody": {
@@ -51,6 +68,9 @@
     },
     "/api/inventory/counts/{count_doc_id}": {
       "get": {
+        "tags": [
+          "Inventory Count"
+        ],
         "summary": "Get inventory count detail",
         "x-permission": "inventory-count:read",
         "parameters": [
@@ -68,8 +88,33 @@
         }
       }
     },
+    "/api/inventory/counts/{count_doc_id}/differences": {
+      "get": {
+        "tags": [
+          "Inventory Count Lines"
+        ],
+        "summary": "List count lines with non-zero differences",
+        "x-permission": "inventory-count:read",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/count_doc_id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Count difference lines"
+          },
+          "404": {
+            "$ref": "#/components/responses/CountNotFound"
+          }
+        }
+      }
+    },
     "/api/inventory/counts/{count_doc_id}/generate-lines": {
       "post": {
+        "tags": [
+          "Inventory Count Lines"
+        ],
         "summary": "Generate count lines from scope snapshot",
         "x-permission": "inventory-count:write",
         "parameters": [
@@ -89,6 +134,9 @@
     },
     "/api/inventory/counts/{count_doc_id}/lines/{line_no}": {
       "patch": {
+        "tags": [
+          "Inventory Count Lines"
+        ],
         "summary": "Enter counted quantity for one count line",
         "x-permission": "inventory-count:write",
         "parameters": [
@@ -122,8 +170,81 @@
         }
       }
     },
+    "/api/inventory/counts/{count_doc_id}/lines": {
+      "patch": {
+        "tags": [
+          "Inventory Count Lines"
+        ],
+        "summary": "Batch enter counted quantities for count lines",
+        "x-permission": "inventory-count:write",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/count_doc_id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchUpdateInventoryCountLinesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated count lines"
+          },
+          "400": {
+            "$ref": "#/components/responses/CountedQtyInvalid"
+          },
+          "409": {
+            "$ref": "#/components/responses/StatusInvalid"
+          }
+        }
+      }
+    },
+    "/api/inventory/counts/{count_doc_id}/lines/batch": {
+      "patch": {
+        "tags": [
+          "Inventory Count Lines"
+        ],
+        "summary": "Batch enter counted quantities for count lines (compatibility alias)",
+        "x-permission": "inventory-count:write",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/count_doc_id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchUpdateInventoryCountLinesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated count lines"
+          },
+          "400": {
+            "$ref": "#/components/responses/CountedQtyInvalid"
+          },
+          "409": {
+            "$ref": "#/components/responses/StatusInvalid"
+          }
+        }
+      }
+    },
     "/api/inventory/counts/{count_doc_id}/submit": {
       "post": {
+        "tags": [
+          "Inventory Count"
+        ],
         "summary": "Submit count",
         "x-permission": "inventory-count:submit",
         "parameters": [
@@ -146,6 +267,9 @@
     },
     "/api/inventory/counts/{count_doc_id}/approve": {
       "post": {
+        "tags": [
+          "Inventory Count"
+        ],
         "summary": "Approve or reject count",
         "x-permission": "inventory-count:approve",
         "parameters": [
@@ -175,6 +299,9 @@
     },
     "/api/inventory/counts/{count_doc_id}/post": {
       "post": {
+        "tags": [
+          "Inventory Count Posting"
+        ],
         "summary": "Post count differences as 701/702 inventory transactions",
         "x-permission": "inventory-count:post",
         "parameters": [
@@ -207,6 +334,9 @@
     },
     "/api/inventory/counts/{count_doc_id}/close": {
       "post": {
+        "tags": [
+          "Inventory Count"
+        ],
         "summary": "Close posted count",
         "x-permission": "inventory-count:close",
         "parameters": [
@@ -229,6 +359,9 @@
     },
     "/api/inventory/counts/{count_doc_id}/cancel": {
       "post": {
+        "tags": [
+          "Inventory Count"
+        ],
         "summary": "Cancel unposted count",
         "x-permission": "inventory-count:write",
         "parameters": [
@@ -339,6 +472,42 @@
           "counted_qty"
         ],
         "properties": {
+          "counted_qty": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "difference_reason": {
+            "type": "string"
+          },
+          "remark": {
+            "type": "string"
+          }
+        }
+      },
+      "BatchUpdateInventoryCountLinesRequest": {
+        "type": "object",
+        "required": [
+          "lines"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BatchUpdateInventoryCountLineItem"
+            }
+          }
+        }
+      },
+      "BatchUpdateInventoryCountLineItem": {
+        "type": "object",
+        "required": [
+          "line_no",
+          "counted_qty"
+        ],
+        "properties": {
+          "line_no": {
+            "type": "integer"
+          },
           "counted_qty": {
             "type": "integer",
             "minimum": 0

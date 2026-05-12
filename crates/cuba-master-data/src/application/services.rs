@@ -4,11 +4,11 @@ use validator::Validate;
 
 use super::read_models::*;
 use super::{
-    BomRepository, CreateBomComponentCommand, CreateBomHeaderCommand, CreateCustomerCommand,
-    CreateDefectCodeCommand, CreateInspectionCharCommand, CreateMaterialCommand,
-    CreateMaterialSupplierCommand, CreateProductVariantCommand, CreateStorageBinCommand,
-    CreateSupplierCommand, CreateWorkCenterCommand, CustomerRepository, MasterDataQuery,
-    MaterialRepository, MaterialSupplierRepository, ProductVariantRepository,
+    BomRepository, CopyBomCommand, CreateBomComponentCommand, CreateBomHeaderCommand,
+    CreateCustomerCommand, CreateDefectCodeCommand, CreateInspectionCharCommand,
+    CreateMaterialCommand, CreateMaterialSupplierCommand, CreateProductVariantCommand,
+    CreateStorageBinCommand, CreateSupplierCommand, CreateWorkCenterCommand, CustomerRepository,
+    MasterDataQuery, MaterialRepository, MaterialSupplierRepository, ProductVariantRepository,
     QualityMasterRepository, StorageBinRepository, SupplierRepository, UpdateBomComponentCommand,
     UpdateBomHeaderCommand, UpdateCustomerCommand, UpdateDefectCodeCommand,
     UpdateInspectionCharCommand, UpdateMaterialCommand, UpdateMaterialSupplierCommand,
@@ -704,6 +704,37 @@ impl MasterDataService {
         // valid_to >= valid_from 跨字段规则:命令里两个字段都是 String,
         // 留给 PG 端 CHECK 或 cast 失败兜底;这里宽松处理。
         self.bom_repo.create_bom(command).await
+    }
+
+    pub async fn copy_bom(
+        &self,
+        source_bom_id: &str,
+        command: CopyBomCommand,
+    ) -> AppResult<BomDetailReadModel> {
+        Self::validate(&command)?;
+        let source_bom_id = BomId::new(source_bom_id)?;
+        let target_bom_id = BomId::new(command.target_bom_id.clone())?;
+        if source_bom_id == target_bom_id {
+            return Err(AppError::Validation(
+                "目标 BOM 编码不能与源 BOM 编码相同".to_string(),
+            ));
+        }
+        let parent_material_id = MaterialId::new(command.parent_material_id.clone())?;
+        let mut target_header = BomHeader::new(
+            target_bom_id,
+            &command.bom_name,
+            parent_material_id,
+            &command.version,
+        )?;
+        if let Some(variant_code) = command.variant_code.as_deref() {
+            target_header.variant_code = Some(VariantCode::new(variant_code)?);
+        }
+        Self::ensure_positive_decimal(command.base_quantity, "BOM 基准数量")?;
+
+        let source = self.bom_repo.load_bom(&source_bom_id).await?;
+        let copied = source.copy_to(target_header)?;
+        self.bom_repo.assert_no_cycle_after_change(&copied).await?;
+        self.bom_repo.copy_bom(&copied, command).await
     }
 
     pub async fn update_bom(

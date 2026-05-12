@@ -170,6 +170,14 @@ impl PostgresInventoryRepository {
             return AppError::business("BIN_CAPACITY_EXCEEDED", "目标货位容量不足");
         }
 
+        if message.contains("目标货位") && message.contains("不可用") {
+            return AppError::business("BIN_INACTIVE", "目标货位不可用");
+        }
+
+        if message.contains("待检") {
+            return AppError::business("BATCH_PENDING_INSPECTION", "批次待检");
+        }
+
         if message.contains("冻结") {
             return AppError::business("BATCH_FROZEN", "批次已冻结");
         }

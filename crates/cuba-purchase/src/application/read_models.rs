@@ -10,6 +10,13 @@ pub struct PurchaseOrderCreated {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PurchaseOrderUpdated {
+    pub po_id: String,
+    pub status: String,
+    pub reports_stale: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PurchaseOrderSummary {
     pub po_id: String,
     pub supplier_id: String,

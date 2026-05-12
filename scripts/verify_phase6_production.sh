@@ -164,7 +164,7 @@ assert_json() {
 }
 
 sum_inventory_qty() {
-  printf '%s\n' "$1" | jq -re '[.data[]?.qty | tonumber] | add // 0'
+  printf '%s\n' "$1" | jq -re '[((.data.items // .data // [])[]?.qty) | tonumber] | add // 0'
 }
 
 material_stock() {
@@ -283,7 +283,7 @@ CREATE_BODY="$(jq -n \
   }')"
 CREATE_RESPONSE="$(request POST "/api/production-orders" 200 "$CREATE_BODY")"
 ORDER_ID="$(printf '%s\n' "$CREATE_RESPONSE" | jq -re '.data.order_id')"
-assert_json "$CREATE_RESPONSE" "created order should be planned" '.data.status == "计划中"'
+assert_json "$CREATE_RESPONSE" "created order should be planned" '(.data.status == "PLANNED" or .data.status == "计划中")'
 echo "ORDER_ID=${ORDER_ID}"
 
 echo "5. Verify generated direct component lines"
@@ -295,7 +295,7 @@ assert_json "$COMPONENT_RESPONSE" \
 
 echo "6. Release production order"
 RELEASE_RESPONSE="$(request POST "/api/production-orders/${ORDER_ID}/release" 200 '{"remark":"phase 6 release"}')"
-assert_json "$RELEASE_RESPONSE" "released order should be released" '.data.status == "已下达"'
+assert_json "$RELEASE_RESPONSE" "released order should be released" '(.data.status == "RELEASED" or .data.status == "已下达")'
 
 echo "7. Complete production order"
 COMPLETE_BODY="$(jq -n \
@@ -314,7 +314,7 @@ COMPLETE_RESPONSE="$(request POST "/api/production-orders/${ORDER_ID}/complete" 
 assert_json "$COMPLETE_RESPONSE" \
   "completion should post component issues, finished receipt, genealogy, and variance marker" \
   --argjson completed_qty "$PLANNED_QTY" \
-  '(.data.status == "完成" or .data.status == "Completed")
+  '(.data.status == "COMPLETED" or .data.status == "完成" or .data.status == "Completed")
    and .data.completed_qty == $completed_qty
    and .data.finished_transaction.movement_type == "101"
    and .data.finished_transaction.quantity == $completed_qty

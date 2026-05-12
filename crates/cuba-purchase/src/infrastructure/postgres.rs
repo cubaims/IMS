@@ -7,8 +7,8 @@ use uuid::Uuid;
 use crate::application::{
     CreatePurchaseOrderCommand, PostPurchaseReceiptCommand, PurchaseOrderClosed,
     PurchaseOrderCreated, PurchaseOrderDetail, PurchaseOrderLineDetail, PurchaseOrderQuery,
-    PurchaseOrderRepository, PurchaseOrderSummary, PurchaseReceiptPosted,
-    PurchaseReceiptTransaction,
+    PurchaseOrderRepository, PurchaseOrderSummary, PurchaseOrderUpdated, PurchaseReceiptPosted,
+    PurchaseReceiptTransaction, UpdatePurchaseOrderCommand,
 };
 use crate::domain::{
     PurchaseDomainError, PurchaseLineStatus, PurchaseOrder, PurchaseOrderLine, PurchaseOrderStatus,
@@ -153,7 +153,10 @@ impl PostgresPurchaseOrderRepository {
         .map_err(map_purchase_db_error)?;
 
         let Some(row) = row else {
-            return Err(AppError::NotFound(format!("采购订单不存在: {po_id}")));
+            return Err(AppError::business(
+                "PO_NOT_FOUND",
+                format!("采购订单不存在: {po_id}"),
+            ));
         };
 
         let status_text: String = row.get("status");
@@ -163,7 +166,7 @@ impl PostgresPurchaseOrderRepository {
     fn map_domain_error(error: PurchaseDomainError) -> AppError {
         match error {
             PurchaseDomainError::PurchaseOrderLineNotFound => {
-                AppError::NotFound("采购订单行不存在".to_string())
+                AppError::business("PO_LINE_NOT_FOUND", "采购订单行不存在")
             }
             PurchaseDomainError::InvalidLineNo | PurchaseDomainError::InvalidQuantity => {
                 AppError::Validation(error.to_string())
@@ -372,7 +375,10 @@ impl PostgresPurchaseOrderRepository {
         .map_err(map_purchase_db_error)?;
 
         let Some(row) = row else {
-            return Err(AppError::NotFound(format!("采购订单不存在: {po_id}")));
+            return Err(AppError::business(
+                "PO_NOT_FOUND",
+                format!("采购订单不存在: {po_id}"),
+            ));
         };
 
         let line_rows = sqlx::query(
@@ -503,6 +509,141 @@ impl PurchaseOrderRepository for PostgresPurchaseOrderRepository {
         })
     }
 
+    async fn update_order(
+        &self,
+        command: UpdatePurchaseOrderCommand,
+        operator: String,
+    ) -> AppResult<PurchaseOrderUpdated> {
+        if command.po_id.is_empty() {
+            return Err(AppError::Validation("采购订单号不能为空".to_string()));
+        }
+
+        if let Some(lines) = &command.lines
+            && lines.is_empty()
+        {
+            return Err(AppError::Validation("采购订单明细不能更新为空".to_string()));
+        }
+
+        let mut tx = self.pool.begin().await.map_err(map_purchase_db_error)?;
+
+        sqlx::query("SET LOCAL lock_timeout = '5s'")
+            .execute(&mut *tx)
+            .await
+            .map_err(map_purchase_db_error)?;
+
+        let status = Self::po_exists_for_update(&mut tx, &command.po_id).await?;
+        if !matches!(
+            status,
+            PurchaseOrderStatus::Draft | PurchaseOrderStatus::Open
+        ) {
+            return Err(AppError::business(
+                "PO_STATUS_INVALID",
+                "只有草稿或未收货采购订单可以修改",
+            ));
+        }
+
+        let existing_lines = Self::lock_purchase_lines_for_update(&mut tx, &command.po_id).await?;
+        if existing_lines.iter().any(|line| line.received_qty > 0) {
+            return Err(AppError::business(
+                "PO_STATUS_INVALID",
+                "已有收货记录的采购订单不能修改",
+            ));
+        }
+
+        if let Some(supplier_id) = &command.supplier_id {
+            Self::ensure_active_supplier(&mut tx, supplier_id).await?;
+        }
+
+        sqlx::query(
+            r#"
+            UPDATE wms.wms_purchase_orders_h
+            SET supplier_id = COALESCE($2, supplier_id),
+                expected_date = COALESCE($3, expected_date),
+                notes = COALESCE($4, notes),
+                updated_at = NOW()
+            WHERE po_id = $1
+            "#,
+        )
+        .bind(&command.po_id)
+        .bind(&command.supplier_id)
+        .bind(command.expected_date)
+        .bind(&command.remark)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_purchase_db_error)?;
+
+        if let Some(lines) = command.lines {
+            for line in &lines {
+                Self::ensure_active_material(&mut tx, &line.material_id).await?;
+                if let Some(expected_bin) = &line.expected_bin {
+                    Self::ensure_active_bin(&mut tx, expected_bin).await?;
+                }
+            }
+
+            sqlx::query(
+                r#"
+                DELETE FROM wms.wms_purchase_orders_d
+                WHERE po_id = $1
+                "#,
+            )
+            .bind(&command.po_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_purchase_db_error)?;
+
+            for line in lines {
+                sqlx::query(
+                    r#"
+                    INSERT INTO wms.wms_purchase_orders_d (
+                        po_id,
+                        line_no,
+                        material_id,
+                        ordered_qty,
+                        received_qty,
+                        unit_price,
+                        expected_bin,
+                        line_status
+                    )
+                    VALUES ($1, $2, $3, $4, 0, $5, $6, '待到货')
+                    "#,
+                )
+                .bind(&command.po_id)
+                .bind(line.line_no)
+                .bind(&line.material_id)
+                .bind(line.ordered_qty)
+                .bind(line.unit_price)
+                .bind(&line.expected_bin)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_purchase_db_error)?;
+            }
+        }
+
+        Self::refresh_po_total(&mut tx, &command.po_id).await?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT po_id, status
+            FROM wms.wms_purchase_orders_h
+            WHERE po_id = $1
+            "#,
+        )
+        .bind(&command.po_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_purchase_db_error)?;
+
+        let _ = operator;
+
+        tx.commit().await.map_err(map_purchase_db_error)?;
+
+        Ok(PurchaseOrderUpdated {
+            po_id: row.get("po_id"),
+            status: row.get("status"),
+            reports_stale: false,
+        })
+    }
+
     async fn list_orders(&self, query: PurchaseOrderQuery) -> AppResult<Vec<PurchaseOrderSummary>> {
         let rows = sqlx::query(
             r#"
@@ -589,10 +730,13 @@ impl PurchaseOrderRepository for PostgresPurchaseOrderRepository {
                 .iter_mut()
                 .find(|line| line.line_no == receipt_line.line_no)
                 .ok_or_else(|| {
-                    AppError::NotFound(format!(
-                        "采购订单行不存在: po_id={}, line_no={}",
-                        command.po_id, receipt_line.line_no
-                    ))
+                    AppError::business(
+                        "PO_LINE_NOT_FOUND",
+                        format!(
+                            "采购订单行不存在: po_id={}, line_no={}",
+                            command.po_id, receipt_line.line_no
+                        ),
+                    )
                 })?;
 
             let material_id = order_line.material_id.clone();

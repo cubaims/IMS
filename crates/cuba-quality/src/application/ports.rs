@@ -108,6 +108,15 @@ pub trait InspectionResultRepository: Send + Sync {
         lot_id: &InspectionLotId,
     ) -> QualityResult<Vec<InspectionResult>>;
 
+    /// 按结果 ID 查询。
+    async fn find_by_id(
+        &self,
+        result_id: &InspectionResultId,
+    ) -> QualityResult<Option<InspectionResult>>;
+
+    /// 更新检验结果。
+    async fn update(&self, result: &InspectionResult) -> QualityResult<()>;
+
     /// 当前检验批是否已有检验结果。
     async fn has_any_result(&self, lot_id: &InspectionLotId) -> QualityResult<bool>;
 
@@ -266,4 +275,10 @@ pub trait QualityMasterRepository: Send + Sync {
         &self,
         defect_code: &DefectCode,
     ) -> QualityResult<Option<DefectCodeSnapshot>>;
+
+    /// 按物料列出可用检验特性。
+    async fn list_inspection_chars_for_material(
+        &self,
+        material_id: &MaterialId,
+    ) -> QualityResult<Vec<InspectionCharSnapshot>>;
 }

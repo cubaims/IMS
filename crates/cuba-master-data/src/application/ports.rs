@@ -3,11 +3,11 @@ use async_trait::async_trait;
 use super::{
     BinCapacityUtilizationReadModel, BomComponentReadModel, BomDetailReadModel,
     BomExplosionPreviewReadModel, BomHeaderReadModel, BomSummaryReadModel, BomTreeReadModel,
-    BomValidationReadModel, CreateBomHeaderCommand, CreateCustomerCommand, CreateDefectCodeCommand,
-    CreateInspectionCharCommand, CreateMaterialCommand, CreateMaterialSupplierCommand,
-    CreateProductVariantCommand, CreateStorageBinCommand, CreateSupplierCommand,
-    CreateWorkCenterCommand, CustomerReadModel, DefectCodeReadModel, DeleteAck,
-    InspectionCharacteristicReadModel, MasterDataQuery, MaterialReadModel,
+    BomValidationReadModel, CopyBomCommand, CreateBomHeaderCommand, CreateCustomerCommand,
+    CreateDefectCodeCommand, CreateInspectionCharCommand, CreateMaterialCommand,
+    CreateMaterialSupplierCommand, CreateProductVariantCommand, CreateStorageBinCommand,
+    CreateSupplierCommand, CreateWorkCenterCommand, CustomerReadModel, DefectCodeReadModel,
+    DeleteAck, InspectionCharacteristicReadModel, MasterDataQuery, MaterialReadModel,
     MaterialSupplierReadModel, MutationAck, ProductVariantReadModel, StorageBinReadModel,
     SupplierReadModel, UpdateBomComponentCommand, UpdateBomHeaderCommand, UpdateCustomerCommand,
     UpdateDefectCodeCommand, UpdateInspectionCharCommand, UpdateMaterialCommand,
@@ -138,6 +138,7 @@ pub trait BomRepository: Send + Sync {
     async fn list_boms(&self, query: MasterDataQuery) -> AppResult<Page<BomSummaryReadModel>>;
     async fn get_bom(&self, bom_id: &str) -> AppResult<BomDetailReadModel>;
     async fn create_bom(&self, command: CreateBomHeaderCommand) -> AppResult<BomHeaderReadModel>;
+    async fn copy_bom(&self, bom: &Bom, command: CopyBomCommand) -> AppResult<BomDetailReadModel>;
     async fn update_bom(
         &self,
         bom_id: &str,

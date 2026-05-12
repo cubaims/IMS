@@ -1,0 +1,28 @@
+meta {
+  name: 07 Post Sales Shipment
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{base_url}}/api/sales-orders/{{so_id}}/shipment
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "pick_strategy": "FEFO",
+    "remark": "phase 5 Bruno sales shipment",
+    "lines": [
+      {
+        "line_no": 10,
+        "shipment_qty": 20
+      }
+    ]
+  }
+}

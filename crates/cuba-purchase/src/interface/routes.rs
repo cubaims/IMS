@@ -12,7 +12,10 @@ pub fn routes() -> Router<AppState> {
             "/",
             get(handlers::list_purchase_orders).post(handlers::create_purchase_order),
         )
-        .route("/{po_id}", get(handlers::get_purchase_order))
+        .route(
+            "/{po_id}",
+            get(handlers::get_purchase_order).patch(handlers::update_purchase_order),
+        )
         .route("/{po_id}/receipt", post(handlers::post_purchase_receipt))
         .route("/{po_id}/close", post(handlers::close_purchase_order))
 }

@@ -807,7 +807,7 @@
     function statusClass(value) {
       const text = String(value ?? '').toUpperCase();
       if (['合格','正常','一致','完成','ACTIVE','OPEN','RECEIVED','SHIPPED','COMPLETED','POSTED','CLOSED','QUALIFIED','ACCEPT','CONFIRMED'].includes(String(value)) || ['ACTIVE','OPEN','RECEIVED','SHIPPED','COMPLETED','POSTED','CLOSED','QUALIFIED','ACCEPT','CONFIRMED'].includes(text)) return 'green';
-      if (['部分到货','部分发货','已审批','已下达'].includes(String(value)) || ['PARTIAL','PARTIALLY_RECEIVED','PARTIALLY_SHIPPED','RUNNING','COUNTING','RELEASED','IN_PROGRESS','RESULT_ENTERED','APPROVED'].includes(text)) return 'blue';
+      if (['部分到货','部分发货','已审批','已下达'].includes(String(value)) || ['PARTIAL','PARTIALLY_RECEIVED','PARTIALLY_SHIPPED','PARTIALLY_COMPLETED','RUNNING','COUNTING','RELEASED','IN_PROGRESS','RESULT_ENTERED','APPROVED'].includes(text)) return 'blue';
       if (['待检','待到货','草稿','LOW','WARNING','DRAFT','PLANNED','SUBMITTED','CREATED','PENDING','MANUAL'].includes(String(value)) || ['LOW','WARNING','DRAFT','PLANNED','SUBMITTED','CREATED','PENDING','MANUAL'].includes(text)) return 'yellow';
       if (['冻结','报废','取消','FAILED','CANCELLED','异常','不一致','FROZEN','SCRAPPED','FAIL','CRITICAL','HIGH'].includes(String(value)) || ['FAILED','CANCELLED','FROZEN','SCRAPPED','FAIL','CRITICAL','HIGH'].includes(text)) return 'red';
       return 'gray';
@@ -1032,6 +1032,52 @@
       `;
     }
 
+    function productionStatus(record) {
+      return String(record?.status || '').toUpperCase();
+    }
+
+    function productionRemainingQty(record) {
+      const planned = Number(record?.planned_qty || 0);
+      const completed = Number(record?.completed_qty || 0);
+      return Math.max(0, planned - completed);
+    }
+
+    function canReleaseProductionOrder(record) {
+      return productionStatus(record) === 'PLANNED';
+    }
+
+    function canCompleteProductionOrder(record) {
+      return ['RELEASED', 'PARTIALLY_COMPLETED'].includes(productionStatus(record))
+        && productionRemainingQty(record) > 0;
+    }
+
+    function canCloseProductionOrder(record) {
+      return productionStatus(record) === 'COMPLETED';
+    }
+
+    function productionCompleteFields(record = {}) {
+      const remainingQty = productionRemainingQty(record);
+      return [
+        { name: 'completed_qty', label: '完工数量', type: 'number', cast: 'int', defaultValue: remainingQty || 1, readonly: true },
+        { name: 'finished_batch_number', label: '成品批次', required: true },
+        { name: 'finished_to_bin', label: '入库货位', required: true },
+        { name: 'pick_strategy', label: '领料策略', type: 'select', options: ['FEFO'], defaultValue: 'FEFO', readonly: true },
+        { name: 'posting_date', label: '过账时间', type: 'datetime-local', cast: 'datetime' },
+        { name: 'remark', label: '备注', type: 'textarea', full: true }
+      ];
+    }
+
+    function productionCompleteBody(form) {
+      return stripEmpty({
+        completed_qty: form.completed_qty,
+        finished_batch_number: form.finished_batch_number,
+        finished_to_bin: form.finished_to_bin,
+        pick_strategy: 'FEFO',
+        posting_date: normalizeDateTime(form.posting_date),
+        remark: form.remark
+      });
+    }
+
     const pageConfigs = {
       materials: {
         endpoint: '/api/master-data/materials',
@@ -1072,7 +1118,7 @@
         endpoint: '/api/master-data/bins',
         idField: 'bin_code',
         searchParam: 'keyword',
-        columns: [['货位编码','bin_code'], ['区域','zone'], ['类型','bin_type'], ['容量','capacity'], ['已占用','current_occupied'], ['状态','status', badge]],
+        columns: [['货位编码','bin_code'], ['区域','zone'], ['类型','bin_type'], ['容量','capacity'], ['已占用','current_occupied'], ['可用','available_capacity'], ['状态','status', badge]],
         fields: [
           { name: 'bin_code', label: '货位编码', required: true, createOnly: true },
           { name: 'zone', label: '区域', type: 'select', options: ['RM', 'SF', 'FG', 'QC'], defaultValue: 'RM' },
@@ -1213,16 +1259,9 @@
           { name: 'remark', label: '备注', type: 'textarea', full: true }
         ],
         actions: [
-          { label: '下达', method: 'POST', endpoint: id => `/api/production-orders/${encodedId(id)}/release`, success: '生产订单已下达' },
-          { label: '完工', method: 'POST', endpoint: id => `/api/production-orders/${encodedId(id)}/complete`, success: '生产完工完成', fields: [
-            { name: 'completed_qty', label: '完工数量', type: 'number', cast: 'int', defaultValue: 1 },
-            { name: 'finished_batch_number', label: '成品批次', required: true },
-            { name: 'finished_to_bin', label: '入库货位', required: true },
-            { name: 'pick_strategy', label: '领料策略', type: 'select', options: ['FEFO', 'MANUAL'], defaultValue: 'FEFO' },
-            { name: 'posting_date', label: '过账时间', type: 'datetime-local', cast: 'datetime' },
-            { name: 'remark', label: '备注', type: 'textarea', full: true }
-          ], body: form => stripEmpty({ ...form, posting_date: normalizeDateTime(form.posting_date) }) },
-          { label: '关闭', method: 'POST', endpoint: id => `/api/production-orders/${encodedId(id)}/close`, success: '生产订单已关闭' }
+          { label: '下达', method: 'POST', endpoint: id => `/api/production-orders/${encodedId(id)}/release`, success: '生产订单已下达', visible: canReleaseProductionOrder },
+          { label: '完工', method: 'POST', endpoint: id => `/api/production-orders/${encodedId(id)}/complete`, success: '生产完工完成', visible: canCompleteProductionOrder, fields: productionCompleteFields, body: productionCompleteBody },
+          { label: '关闭', method: 'POST', endpoint: id => `/api/production-orders/${encodedId(id)}/close`, success: '生产订单已关闭', visible: canCloseProductionOrder }
         ]
       },
       productionComplete: null,
@@ -1429,7 +1468,6 @@
 
     pageConfigs.purchaseReceipt = { ...pageConfigs.purchaseOrders, noCreate: true };
     pageConfigs.salesShipment = { ...pageConfigs.salesOrders, noCreate: true };
-    pageConfigs.productionComplete = { ...pageConfigs.productionOrders, noCreate: true };
     pageConfigs.inventoryLedger.globalActions = pageConfigs.inventoryCurrent.globalActions;
 
     function normalizeItems(data, fallbackPage = 1, fallbackPageSize = DEFAULT_PAGE_SIZE) {
@@ -1480,9 +1518,12 @@
       const id = recordId(record, config);
       const detail = id ? `<button class="btn small ghost" type="button" onclick="openRecordModal('${page}', 'view', '${encodedId(id)}')">详情</button>` : '';
       const edit = id && config.fields && !config.noCreate && !config.noEdit ? `<button class="btn small primary" type="button" onclick="openRecordModal('${page}', 'edit', '${encodedId(id)}')">编辑</button>` : '';
-      const extra = (config.actions || []).map((action, index) =>
-        `<button class="btn small ghost" type="button" onclick="openRecordAction('${page}', '${encodedId(id)}', ${index})">${html(action.label)}</button>`
-      ).join(' ');
+      const extra = (config.actions || [])
+        .map((action, index) => ({ action, index }))
+        .filter(({ action }) => !action.visible || action.visible(record))
+        .map(({ action, index }) =>
+          `<button class="btn small ghost" type="button" onclick="openRecordAction('${page}', '${encodedId(id)}', ${index})">${html(action.label)}</button>`
+        ).join(' ');
       return `<td>${detail} ${edit} ${extra}</td>`;
     }
 
@@ -1564,6 +1605,12 @@
       if (config?.searchParam) {
         pageState[currentPage] = { ...(pageState[currentPage] || {}), keyword, page: 1 };
         renderPage(currentPage);
+        return;
+      }
+
+      if (currentPage === 'productionComplete') {
+        pageState.productionComplete = { ...(pageState.productionComplete || {}), keyword, page: 1, selectedOrderId: '' };
+        renderPage('productionComplete');
         return;
       }
 
@@ -1697,11 +1744,20 @@
 
     function openRecordAction(page, encoded, index) {
       const action = pageConfigs[page].actions[index];
-      openActionModal({ kind: 'recordAction', page, action, id: decodedId(encoded) });
+      const id = decodedId(encoded);
+      const record = findCachedRecord(page, id);
+      if (action.visible && !action.visible(record)) {
+        showToast('当前状态不能执行该操作');
+        return;
+      }
+      openActionModal({ kind: 'recordAction', page, action, id, record });
     }
 
     function openActionModal(context) {
-      const fields = context.action.fields || [];
+      const fieldSource = context.action.fields || [];
+      const fields = typeof fieldSource === 'function'
+        ? fieldSource(context.record || {})
+        : fieldSource;
       modalContext = { ...context, fields };
       document.getElementById('modalTitle').textContent = context.action.label;
       document.getElementById('modalBody').innerHTML = fields.length
@@ -1869,6 +1925,231 @@
           </div>
         </div>
       `;
+    }
+
+    function openProductionOrderAction(encoded, index) {
+      const id = decodedId(encoded);
+      const record = (pageState.productionComplete?.items || []).find(item => String(item.order_id) === id)
+        || findCachedRecord('productionOrders', id);
+      const action = pageConfigs.productionOrders.actions[index];
+      if (action.visible && !action.visible(record)) {
+        showToast('当前状态不能执行该操作');
+        return;
+      }
+      openActionModal({ kind: 'recordAction', page: 'productionComplete', action, id, record });
+    }
+
+    function productionOrderActionButtons(record) {
+      const id = encodedId(record.order_id);
+      const buttons = [];
+      if (canReleaseProductionOrder(record)) {
+        buttons.push(`<button class="btn small primary" type="button" onclick="openProductionOrderAction('${id}', 0)">下达</button>`);
+      }
+      if (canCompleteProductionOrder(record)) {
+        buttons.push(`<button class="btn small success" type="button" onclick="openProductionOrderAction('${id}', 1)">完工</button>`);
+      }
+      if (canCloseProductionOrder(record)) {
+        buttons.push(`<button class="btn small ghost" type="button" onclick="openProductionOrderAction('${id}', 2)">关闭</button>`);
+      }
+      return buttons.join(' ');
+    }
+
+    function renderProductionOrderPicker(items, selectedOrderId) {
+      if (!items.length) return '<div class="empty">暂无可显示的生产订单。</div>';
+      return `
+        <table>
+          <thead>
+            <tr>
+              <th>订单号</th>
+              <th>变体</th>
+              <th>成品</th>
+              <th>计划</th>
+              <th>已完工</th>
+              <th>剩余</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map(record => {
+              const id = String(record.order_id || '');
+              const selected = id === selectedOrderId;
+              return `
+                <tr>
+                  <td>${html(displayValue(record.order_id))}</td>
+                  <td>${html(displayValue(record.variant_code))}</td>
+                  <td>${html(displayValue(record.finished_material_id))}</td>
+                  <td>${html(displayValue(record.planned_qty))}</td>
+                  <td>${html(displayValue(record.completed_qty))}</td>
+                  <td>${html(displayValue(productionRemainingQty(record)))}</td>
+                  <td>${renderOutput(badge(record.status))}</td>
+                  <td>
+                    <button class="btn small ${selected ? 'primary' : 'ghost'}" type="button" onclick="selectProductionCompleteOrder('${encodedId(id)}')">${selected ? '已选' : '查看'}</button>
+                    ${productionOrderActionButtons(record)}
+                  </td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    async function safeApiData(endpoint, fallback) {
+      try {
+        return { ok: true, data: await apiData(endpoint) };
+      } catch (error) {
+        return { ok: false, data: fallback, error };
+      }
+    }
+
+    async function loadProductionCompletionDetail(orderId) {
+      const encoded = encodedId(orderId);
+      const [components, transactions, genealogy, variance] = await Promise.all([
+        safeApiData(`/api/production-orders/${encoded}/components`, []),
+        safeApiData(`/api/inventory/transactions${queryString({ reference_doc: orderId, page: 1, page_size: 50 })}`, { items: [] }),
+        safeApiData(`/api/production-orders/${encoded}/genealogy`, []),
+        safeApiData(`/api/production-orders/${encoded}/variance`, null)
+      ]);
+      return { components, transactions, genealogy, variance };
+    }
+
+    function renderProductionDetailTable(tableId, title, columns, items, emptyText) {
+      return `
+        <div class="detail-section">
+          <div class="panel-title"><h2>${html(title)}</h2></div>
+          ${items.length ? renderRecordTable(tableId, { columns, noRecordActions: true }, items) : `<div class="empty">${html(emptyText)}</div>`}
+        </div>
+      `;
+    }
+
+    function renderProductionVariance(variance) {
+      if (!variance) return '<div class="empty">暂无生产成本差异。</div>';
+      return `
+        <div class="detail-grid">
+          ${detailField('计划数量', variance.planned_quantity)}
+          ${detailField('实际数量', variance.actual_quantity)}
+          ${detailField('计划单价', variance.planned_unit_cost)}
+          ${detailField('实际单价', variance.actual_unit_cost)}
+          ${detailField('计划物料成本', variance.planned_material_cost)}
+          ${detailField('实际物料成本', variance.actual_material_cost)}
+          ${detailField('物料差异', variance.material_variance)}
+          ${detailField('人工差异', variance.labor_variance)}
+          ${detailField('制造费用差异', variance.overhead_variance)}
+          ${detailField('总差异', variance.total_variance)}
+          ${detailField('差异率', variance.variance_pct)}
+        </div>
+      `;
+    }
+
+    function renderProductionCompleteDetail(order, detail) {
+      if (!order) return '<div class="empty">暂无生产订单。</div>';
+
+      const components = Array.isArray(detail.components.data) ? detail.components.data : [];
+      const genealogy = Array.isArray(detail.genealogy.data) ? detail.genealogy.data : [];
+      const transactions = normalizeItems(detail.transactions.data || { items: [] }).items;
+      const variance = detail.variance.ok ? detail.variance.data : null;
+      const remainingQty = productionRemainingQty(order);
+
+      return `
+        <div class="card">
+          <div class="panel-title">
+            <h2>完工订单</h2>
+            <div>${productionOrderActionButtons(order)}</div>
+          </div>
+          <div class="detail-grid">
+            ${detailField('订单号', order.order_id)}
+            ${detailField('状态', order.status, badge)}
+            ${detailField('产品变体', order.variant_code)}
+            ${detailField('成品物料', order.finished_material_id)}
+            ${detailField('BOM', order.bom_id)}
+            ${detailField('工作中心', order.work_center_id)}
+            ${detailField('计划数量', order.planned_qty)}
+            ${detailField('已完工', order.completed_qty)}
+            ${detailField('剩余数量', remainingQty)}
+          </div>
+          ${renderProductionDetailTable('productionComponents', '组件需求明细', [
+            ['行号','line_no'],
+            ['组件物料','component_material_id'],
+            ['需求数量','required_qty'],
+            ['已领数量','issued_qty'],
+            ['来源货位','source_bin'],
+            ['状态','status', badge]
+          ], components, detail.components.ok ? '暂无组件行。' : `组件加载失败：${errorMessage(detail.components.error)}`)}
+          ${renderProductionDetailTable('productionTransactions', '261/101 库存事务', [
+            ['事务号','transaction_id'],
+            ['移动类型','movement_type', badge],
+            ['物料','material_id'],
+            ['数量','quantity'],
+            ['批次','batch_number'],
+            ['来源','from_bin'],
+            ['目标','to_bin'],
+            ['时间','transaction_date', shortDate]
+          ], transactions, detail.transactions.ok ? '暂无完工过账事务。' : `事务加载失败：${errorMessage(detail.transactions.error)}`)}
+          ${renderProductionDetailTable('productionGenealogy', '批次谱系', [
+            ['成品批次','parent_batch_number'],
+            ['组件批次','component_batch_number'],
+            ['成品物料','parent_material_id'],
+            ['组件物料','component_material_id'],
+            ['消耗数量','consumed_qty'],
+            ['产出数量','output_qty'],
+            ['事务号','transaction_id']
+          ], genealogy, detail.genealogy.ok ? '暂无批次谱系。' : `谱系加载失败：${errorMessage(detail.genealogy.error)}`)}
+          <div class="detail-section">
+            <div class="panel-title"><h2>生产成本差异</h2></div>
+            ${renderProductionVariance(variance)}
+          </div>
+        </div>
+      `;
+    }
+
+    async function renderProductionCompletePage() {
+      const state = pageState.productionComplete || { page: 1, keyword: '', selectedOrderId: '' };
+      pageState.productionComplete = state;
+      const params = { page: state.page || 1, page_size: DEFAULT_PAGE_SIZE };
+      if (state.keyword) params.finished_material_id = state.keyword;
+      const data = normalizeItems(await apiData(`/api/production-orders${queryString(params)}`), params.page, params.page_size);
+      state.items = data.items;
+      if (!data.items.some(item => String(item.order_id) === state.selectedOrderId)) {
+        state.selectedOrderId = data.items[0]?.order_id || '';
+      }
+      const selectedOrder = data.items.find(item => String(item.order_id) === String(state.selectedOrderId));
+      const detail = selectedOrder ? await loadProductionCompletionDetail(selectedOrder.order_id) : null;
+
+      return `
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <input id="productionCompleteSearch" placeholder="按成品物料编码筛选" value="${html(state.keyword || '')}" onkeydown="if(event.key==='Enter') searchProductionCompletePage()" />
+            <button class="btn ghost" type="button" onclick="searchProductionCompletePage()">搜索</button>
+          </div>
+          <div class="toolbar-right"><button class="btn ghost" type="button" onclick="refreshPage()">刷新</button></div>
+        </div>
+        <div class="card">
+          <div class="panel-title"><h2>生产订单</h2></div>
+          ${renderProductionOrderPicker(data.items, String(state.selectedOrderId || ''))}
+        </div>
+        <br />
+        ${detail ? renderProductionCompleteDetail(selectedOrder, detail) : '<div class="empty">暂无生产订单。</div>'}
+        ${renderPagination('productionComplete', data)}
+      `;
+    }
+
+    function searchProductionCompletePage() {
+      pageState.productionComplete = {
+        ...(pageState.productionComplete || {}),
+        keyword: document.getElementById('productionCompleteSearch')?.value || '',
+        page: 1,
+        selectedOrderId: ''
+      };
+      renderPage('productionComplete');
+    }
+
+    function selectProductionCompleteOrder(encoded) {
+      pageState.productionComplete = {
+        ...(pageState.productionComplete || {}),
+        selectedOrderId: decodedId(encoded)
+      };
+      renderPage('productionComplete');
     }
 
     async function renderMrpRunPage() {
@@ -2182,6 +2463,7 @@
       try {
         let nextHtml = '';
         if (page === 'dashboard') nextHtml = await renderDashboard();
+        else if (page === 'productionComplete') nextHtml = await renderProductionCompletePage();
         else if (page === 'mrpRun') nextHtml = await renderMrpRunPage();
         else if (page === 'batchTrace') nextHtml = renderTracePage('batch');
         else if (page === 'serialTrace') nextHtml = renderTracePage('serial');

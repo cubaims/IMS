@@ -14,11 +14,11 @@ use crate::{
     application::MasterDataService,
     infrastructure::PostgresMasterDataRepository,
     interface::dto::{
-        BomExplosionPreviewQuery, BomExplosionPreviewRequest, CreateBomComponentCommand,
-        CreateBomHeaderCommand, CreateCustomerCommand, CreateDefectCodeCommand,
-        CreateInspectionCharCommand, CreateMaterialCommand, CreateMaterialSupplierCommand,
-        CreateProductVariantCommand, CreateStorageBinCommand, CreateSupplierCommand,
-        CreateWorkCenterCommand, MasterDataQuery, UpdateBomComponentCommand,
+        BomExplosionPreviewQuery, BomExplosionPreviewRequest, CopyBomCommand,
+        CreateBomComponentCommand, CreateBomHeaderCommand, CreateCustomerCommand,
+        CreateDefectCodeCommand, CreateInspectionCharCommand, CreateMaterialCommand,
+        CreateMaterialSupplierCommand, CreateProductVariantCommand, CreateStorageBinCommand,
+        CreateSupplierCommand, CreateWorkCenterCommand, MasterDataQuery, UpdateBomComponentCommand,
         UpdateBomHeaderCommand, UpdateCustomerCommand, UpdateDefectCodeCommand,
         UpdateInspectionCharCommand, UpdateMaterialCommand, UpdateMaterialSupplierCommand,
         UpdateProductVariantCommand, UpdateStorageBinCommand, UpdateSupplierCommand,
@@ -691,6 +691,26 @@ pub async fn create_bom(
 ) -> AppResult<impl IntoResponse> {
     let record_id = command.bom_id.clone();
     let data = service(&state).create_bom(command).await?;
+    audit_master_data_change(
+        &state,
+        &user,
+        "MASTER_DATA_CREATE",
+        "mdm.mdm_bom_headers",
+        &record_id,
+        data.clone(),
+    )
+    .await;
+    Ok(Json(ApiResponse::ok(data)))
+}
+
+pub async fn copy_bom(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(source_bom_id): Path<String>,
+    Json(command): Json<CopyBomCommand>,
+) -> AppResult<impl IntoResponse> {
+    let record_id = command.target_bom_id.clone();
+    let data = service(&state).copy_bom(&source_bom_id, command).await?;
     audit_master_data_change(
         &state,
         &user,

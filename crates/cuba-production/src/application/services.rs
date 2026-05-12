@@ -12,7 +12,7 @@ use super::{
     BatchGenealogyRepository, BomExplosionCommand, BomExplosionRepository,
     CompleteProductionOrderCommand, CreateProductionOrderCommand, ProductionOrderQuery,
     ProductionOrderRepository, ProductionPostingRepository, ProductionVarianceQuery,
-    ProductionVarianceRepository, ReleaseProductionOrderCommand,
+    ProductionVarianceRepository, ReleaseProductionOrderCommand, UpdateProductionOrderCommand,
 };
 
 #[derive(Clone)]
@@ -63,6 +63,17 @@ impl ProductionService {
         self.production_orders.release(command).await
     }
 
+    pub async fn update_order(
+        &self,
+        command: UpdateProductionOrderCommand,
+    ) -> AppResult<ProductionOrder> {
+        command
+            .validate()
+            .map_err(|err| AppError::Validation(err.to_string()))?;
+
+        self.production_orders.update(command).await
+    }
+
     pub async fn complete_order(
         &self,
         command: CompleteProductionOrderCommand,
@@ -70,6 +81,14 @@ impl ProductionService {
         command
             .validate()
             .map_err(|err| AppError::Validation(err.to_string()))?;
+
+        if let Some(strategy) = command.pick_strategy.as_deref()
+            && !strategy.eq_ignore_ascii_case("FEFO")
+        {
+            return Err(AppError::Validation(
+                "Phase 6 MVP 仅支持 FEFO 领料策略".to_string(),
+            ));
+        }
 
         self.production_posting.complete_order(command).await
     }

@@ -93,6 +93,10 @@ fn map_quality_db_error(error: sqlx::Error) -> QualityError {
             ..
         } => QualityError::InspectionLotNotFound,
         AppError::Business {
+            code: "INSPECTION_RESULT_NOT_FOUND",
+            ..
+        } => QualityError::InspectionResultNotFound,
+        AppError::Business {
             code: "INSPECTION_CHAR_NOT_FOUND",
             ..
         } => QualityError::InspectionCharNotFound,
@@ -704,7 +708,8 @@ impl QualityMasterRepository for PostgresQualityStore {
                 char_name,
                 lower_limit,
                 upper_limit,
-                unit
+                unit,
+                is_active
             FROM mdm.mdm_inspection_chars
             WHERE char_id = $1
             "#,
@@ -725,7 +730,7 @@ impl QualityMasterRepository for PostgresQualityStore {
             lower_limit: row.get::<Option<Decimal>, _>("lower_limit"),
             upper_limit: row.get::<Option<Decimal>, _>("upper_limit"),
             unit: row.get::<Option<String>, _>("unit"),
-            is_active: true,
+            is_active: row.get::<bool, _>("is_active"),
         }))
     }
 
@@ -762,6 +767,51 @@ impl QualityMasterRepository for PostgresQualityStore {
             description: description.unwrap_or(defect_name),
             is_active: row.get::<bool, _>("is_active"),
         }))
+    }
+
+    /// 按物料列出可用检验特性。
+    async fn list_inspection_chars_for_material(
+        &self,
+        material_id: &MaterialId,
+    ) -> QualityResult<Vec<InspectionCharSnapshot>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                c.char_id,
+                c.char_name,
+                c.lower_limit,
+                c.upper_limit,
+                c.unit,
+                c.is_active
+            FROM mdm.mdm_materials m
+            JOIN mdm.mdm_inspection_chars c
+              ON c.material_type IS NULL
+              OR c.material_type = m.material_type
+            WHERE m.material_id = $1
+              AND c.is_active = TRUE
+            ORDER BY c.is_critical DESC, c.char_id
+            "#,
+        )
+        .bind(material_id.as_str())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
+
+        let mut items = Vec::with_capacity(rows.len());
+
+        for row in rows {
+            items.push(InspectionCharSnapshot {
+                char_id: InspectionCharId::new(row.get::<String, _>("char_id")),
+                char_code: row.get::<String, _>("char_id"),
+                char_name: row.get::<String, _>("char_name"),
+                lower_limit: row.get::<Option<Decimal>, _>("lower_limit"),
+                upper_limit: row.get::<Option<Decimal>, _>("upper_limit"),
+                unit: row.get::<Option<String>, _>("unit"),
+                is_active: row.get::<bool, _>("is_active"),
+            });
+        }
+
+        Ok(items)
     }
 }
 // =============================================================================
@@ -1316,6 +1366,82 @@ impl InspectionResultRepository for PostgresQualityStore {
         }
 
         Ok(items)
+    }
+
+    /// 按结果 ID 查询检验结果。
+    async fn find_by_id(
+        &self,
+        result_id: &InspectionResultId,
+    ) -> QualityResult<Option<InspectionResult>> {
+        let id = result_id
+            .as_str()
+            .parse::<i64>()
+            .map_err(|_| QualityError::InspectionResultNotFound)?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT
+                id,
+                inspection_lot_id,
+                char_id,
+                measured_value,
+                result,
+                remarks,
+                inspected_by,
+                inspected_at
+            FROM wms.wms_inspection_results
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
+
+        match row {
+            Some(row) => Ok(Some(inspection_result_from_row(&row)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 更新检验结果。
+    async fn update(&self, result: &InspectionResult) -> QualityResult<()> {
+        let id = result
+            .id
+            .as_str()
+            .parse::<i64>()
+            .map_err(|_| QualityError::InspectionResultNotFound)?;
+        let remarks = inspection_result_to_remarks_json(result);
+
+        let result = sqlx::query(
+            r#"
+            UPDATE wms.wms_inspection_results
+            SET
+                char_id = $2,
+                measured_value = $3,
+                result = $4,
+                remarks = $5,
+                inspected_by = $6,
+                inspected_at = $7
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(result.char_id.as_str())
+        .bind(result.measured_value)
+        .bind(inspection_result_status_to_db(result.result_status))
+        .bind(remarks)
+        .bind(result.inspector.as_str())
+        .bind(result.inspected_at)
+        .execute(&self.pool)
+        .await
+        .map_err(map_quality_db_error)?;
+
+        if result.rows_affected() == 0 {
+            return Err(QualityError::InspectionResultNotFound);
+        }
+
+        Ok(())
     }
 
     /// 当前检验批是否已有检验结果。

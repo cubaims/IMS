@@ -155,6 +155,7 @@ pub fn write_routes() -> Router<AppState> {
         // boms
         .route("/boms", post(handlers::create_bom))
         .route("/boms/{bom_id}", patch(handlers::update_bom))
+        .route("/boms/{bom_id}/copy", post(handlers::copy_bom))
         .route("/boms/{bom_id}/activate", post(handlers::activate_bom))
         .route("/boms/{bom_id}/deactivate", post(handlers::deactivate_bom))
         .route(

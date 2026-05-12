@@ -1,0 +1,26 @@
+meta {
+  name: 06 Preview FEFO
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{base_url}}/api/sales-orders/{{so_id}}/pick-preview
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "lines": [
+      {
+        "line_no": 10,
+        "shipment_qty": 20
+      }
+    ]
+  }
+}

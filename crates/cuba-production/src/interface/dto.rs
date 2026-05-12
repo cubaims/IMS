@@ -22,6 +22,16 @@ pub struct ReleaseProductionOrderRequest {
     pub remark: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Validate)]
+pub struct UpdateProductionOrderRequest {
+    #[validate(range(min = 1))]
+    pub planned_qty: Option<i32>,
+    pub work_center_id: Option<String>,
+    pub planned_start_date: Option<Date>,
+    pub planned_end_date: Option<Date>,
+    pub remark: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct CancelProductionOrderRequest {
     pub remark: Option<String>,
@@ -78,6 +88,9 @@ pub struct ProductionVarianceListQuery {
 pub struct CreatedProductionOrderResponse {
     pub order_id: String,
     pub status: String,
+    pub variant_code: String,
+    pub finished_material_id: String,
+    pub planned_qty: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]

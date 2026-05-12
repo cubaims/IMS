@@ -155,6 +155,20 @@
       }
     },
     {
+      "name": "Cancel Primary Supplier",
+      "request": {
+        "method": "DELETE",
+        "url": "{{base_url}}/api/master-data/materials/{{material_id}}/suppliers/{{supplier_id}}/primary"
+      }
+    },
+    {
+      "name": "Set Primary Supplier Again",
+      "request": {
+        "method": "POST",
+        "url": "{{base_url}}/api/master-data/materials/{{material_id}}/suppliers/{{supplier_id}}/primary"
+      }
+    },
+    {
       "name": "Create Customer",
       "request": {
         "method": "POST",

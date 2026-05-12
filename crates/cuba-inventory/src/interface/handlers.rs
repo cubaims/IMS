@@ -313,6 +313,28 @@ pub async fn get_inventory_count(
     Ok(Json(ApiResponse::ok(result.into())))
 }
 
+pub async fn list_inventory_count_differences(
+    State(state): State<AppState>,
+    Path(count_doc_id): Path<String>,
+) -> AppResult<Json<ApiResponse<Vec<InventoryCountLineResponse>>>> {
+    let service = count_service(&state);
+    let count = service
+        .get_count(crate::application::GetInventoryCountInput { count_doc_id })
+        .await?;
+    let differences = count
+        .lines
+        .into_iter()
+        .filter(|line| {
+            line.difference_qty
+                .map(|qty| qty != rust_decimal::Decimal::ZERO)
+                .unwrap_or(false)
+        })
+        .map(InventoryCountLineResponse::from)
+        .collect();
+
+    Ok(Json(ApiResponse::ok(differences)))
+}
+
 pub async fn generate_inventory_count_lines(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,

@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::application::{
     CreateSalesOrderCommand, PostSalesShipmentCommand, PreviewSalesFefoPickCommand,
-    SalesOrderQuery, SalesOrderRepository,
+    SalesOrderQuery, SalesOrderRepository, UpdateSalesOrderCommand,
 };
 use crate::domain::{
     SalesDomainError, SalesLineStatus, SalesOrder, SalesOrderLine, SalesOrderStatus,
@@ -153,7 +153,10 @@ impl PostgresSalesOrderRepository {
         .map_err(map_sales_db_error)?;
 
         let Some(row) = row else {
-            return Err(AppError::NotFound(format!("销售订单不存在: {so_id}")));
+            return Err(AppError::business(
+                "SO_NOT_FOUND",
+                format!("销售订单不存在: {so_id}"),
+            ));
         };
 
         let status_text: String = row.get("status");
@@ -163,7 +166,7 @@ impl PostgresSalesOrderRepository {
     fn map_domain_error(error: SalesDomainError) -> AppError {
         match error {
             SalesDomainError::SalesOrderLineNotFound => {
-                AppError::NotFound("销售订单行不存在".to_string())
+                AppError::business("SO_LINE_NOT_FOUND", "销售订单行不存在")
             }
             SalesDomainError::InvalidLineNo | SalesDomainError::InvalidQuantity => {
                 AppError::Validation(error.to_string())
@@ -307,7 +310,10 @@ impl PostgresSalesOrderRepository {
         .map_err(map_sales_db_error)?;
 
         let Some(row) = row else {
-            return Err(AppError::NotFound(format!("销售订单不存在: {so_id}")));
+            return Err(AppError::business(
+                "SO_NOT_FOUND",
+                format!("销售订单不存在: {so_id}"),
+            ));
         };
 
         Ok(row.get::<Value, _>("data"))
@@ -516,6 +522,138 @@ impl SalesOrderRepository for PostgresSalesOrderRepository {
         }))
     }
 
+    async fn update_order(
+        &self,
+        command: UpdateSalesOrderCommand,
+        operator: String,
+    ) -> AppResult<Value> {
+        if command.so_id.is_empty() {
+            return Err(AppError::Validation("销售订单号不能为空".to_string()));
+        }
+
+        if let Some(lines) = &command.lines
+            && lines.is_empty()
+        {
+            return Err(AppError::Validation("销售订单明细不能更新为空".to_string()));
+        }
+
+        let mut tx = self.pool.begin().await.map_err(map_sales_db_error)?;
+
+        sqlx::query("SET LOCAL lock_timeout = '5s'")
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sales_db_error)?;
+
+        let status = Self::so_exists_for_update(&mut tx, &command.so_id).await?;
+        if !matches!(status, SalesOrderStatus::Draft | SalesOrderStatus::Open) {
+            return Err(AppError::business(
+                "SO_STATUS_INVALID",
+                "只有草稿或未发货销售订单可以修改",
+            ));
+        }
+
+        let existing_lines = Self::lock_sales_lines_for_update(&mut tx, &command.so_id).await?;
+        if existing_lines.iter().any(|line| line.shipped_qty > 0) {
+            return Err(AppError::business(
+                "SO_STATUS_INVALID",
+                "已有发货记录的销售订单不能修改",
+            ));
+        }
+
+        if let Some(customer_id) = &command.customer_id {
+            Self::ensure_active_customer(&mut tx, customer_id).await?;
+        }
+
+        sqlx::query(
+            r#"
+            UPDATE wms.wms_sales_orders_h
+            SET customer_id = COALESCE($2, customer_id),
+                delivery_date = COALESCE($3, delivery_date),
+                notes = COALESCE($4, notes),
+                updated_at = NOW()
+            WHERE so_id = $1
+            "#,
+        )
+        .bind(&command.so_id)
+        .bind(&command.customer_id)
+        .bind(command.required_date)
+        .bind(&command.remark)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sales_db_error)?;
+
+        if let Some(lines) = command.lines {
+            for line in &lines {
+                Self::ensure_active_material(&mut tx, &line.material_id).await?;
+                if let Some(from_bin) = &line.from_bin {
+                    Self::ensure_active_bin(&mut tx, from_bin).await?;
+                }
+            }
+
+            sqlx::query(
+                r#"
+                DELETE FROM wms.wms_sales_orders_d
+                WHERE so_id = $1
+                "#,
+            )
+            .bind(&command.so_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sales_db_error)?;
+
+            for line in lines {
+                sqlx::query(
+                    r#"
+                    INSERT INTO wms.wms_sales_orders_d (
+                        so_id,
+                        line_no,
+                        material_id,
+                        ordered_qty,
+                        shipped_qty,
+                        unit_price,
+                        from_bin,
+                        line_status
+                    )
+                    VALUES ($1, $2, $3, $4, 0, $5, $6, '待发货')
+                    "#,
+                )
+                .bind(&command.so_id)
+                .bind(line.line_no)
+                .bind(&line.material_id)
+                .bind(line.ordered_qty)
+                .bind(line.unit_price)
+                .bind(&line.from_bin)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sales_db_error)?;
+            }
+        }
+
+        Self::refresh_so_total(&mut tx, &command.so_id).await?;
+
+        let row = sqlx::query(
+            r#"
+            SELECT so_id, status
+            FROM wms.wms_sales_orders_h
+            WHERE so_id = $1
+            "#,
+        )
+        .bind(&command.so_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sales_db_error)?;
+
+        let _ = operator;
+
+        tx.commit().await.map_err(map_sales_db_error)?;
+
+        Ok(json!({
+            "so_id": row.get::<String, _>("so_id"),
+            "status": row.get::<String, _>("status"),
+            "reports_stale": false
+        }))
+    }
+
     async fn list_orders(&self, query: SalesOrderQuery) -> AppResult<Value> {
         let rows = sqlx::query(
             r#"
@@ -596,10 +734,13 @@ impl SalesOrderRepository for PostgresSalesOrderRepository {
                 .iter()
                 .find(|line| line.line_no == request_line.line_no)
                 .ok_or_else(|| {
-                    AppError::NotFound(format!(
-                        "销售订单行不存在: so_id={}, line_no={}",
-                        command.so_id, request_line.line_no
-                    ))
+                    AppError::business(
+                        "SO_LINE_NOT_FOUND",
+                        format!(
+                            "销售订单行不存在: so_id={}, line_no={}",
+                            command.so_id, request_line.line_no
+                        ),
+                    )
                 })?;
 
             if !line.can_ship(request_line.shipment_qty) {
@@ -673,10 +814,13 @@ impl SalesOrderRepository for PostgresSalesOrderRepository {
                 .iter_mut()
                 .find(|line| line.line_no == request_line.line_no)
                 .ok_or_else(|| {
-                    AppError::NotFound(format!(
-                        "销售订单行不存在: so_id={}, line_no={}",
-                        command.so_id, request_line.line_no
-                    ))
+                    AppError::business(
+                        "SO_LINE_NOT_FOUND",
+                        format!(
+                            "销售订单行不存在: so_id={}, line_no={}",
+                            command.so_id, request_line.line_no
+                        ),
+                    )
                 })?;
 
             let material_id = order_line.material_id.clone();

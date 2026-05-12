@@ -39,6 +39,7 @@ pub struct StorageBinReadModel {
     pub bin_type: String,
     pub capacity: i32,
     pub current_occupied: i32,
+    pub available_capacity: i32,
     pub status: Option<String>,
     pub notes: Option<String>,
     pub created_at: Option<OffsetDateTime>,
@@ -51,7 +52,9 @@ pub struct BinCapacityUtilizationReadModel {
     pub zone: String,
     pub capacity: i32,
     pub current_occupied: i32,
+    pub available_capacity: i32,
     pub utilization_pct: Decimal,
+    pub capacity_status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

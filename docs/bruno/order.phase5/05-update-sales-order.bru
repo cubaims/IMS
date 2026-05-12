@@ -1,0 +1,30 @@
+meta {
+  name: 05 Update Sales Order
+  type: http
+  seq: 5
+}
+
+patch {
+  url: {{base_url}}/api/sales-orders/{{so_id}}
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "remark": "phase 5 Bruno sales order updated",
+    "lines": [
+      {
+        "line_no": 10,
+        "material_id": "{{material_id}}",
+        "ordered_qty": 20,
+        "unit_price": "20.00",
+        "from_bin": "{{bin_code}}"
+      }
+    ]
+  }
+}

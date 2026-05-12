@@ -4,7 +4,7 @@ use cuba_shared::AppResult;
 use crate::application::{
     CreatePurchaseOrderCommand, PostPurchaseReceiptCommand, PurchaseOrderClosed,
     PurchaseOrderCreated, PurchaseOrderDetail, PurchaseOrderQuery, PurchaseOrderSummary,
-    PurchaseReceiptPosted,
+    PurchaseOrderUpdated, PurchaseReceiptPosted, UpdatePurchaseOrderCommand,
 };
 
 #[async_trait]
@@ -14,6 +14,12 @@ pub trait PurchaseOrderRepository: Send + Sync {
         command: CreatePurchaseOrderCommand,
         operator: String,
     ) -> AppResult<PurchaseOrderCreated>;
+
+    async fn update_order(
+        &self,
+        command: UpdatePurchaseOrderCommand,
+        operator: String,
+    ) -> AppResult<PurchaseOrderUpdated>;
 
     async fn list_orders(&self, query: PurchaseOrderQuery) -> AppResult<Vec<PurchaseOrderSummary>>;
 

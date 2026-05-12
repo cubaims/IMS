@@ -8,6 +8,7 @@ use crate::domain::{
     InspectionDecision, InspectionLot, InspectionLotId, InspectionLotType, InspectionResult,
     InspectionResultId, InspectionResultStatus, MaterialId, Operator, QualityError,
     QualityNotification, QualityNotificationId, QualityNotificationSeverity, QualityResult,
+    UpdateInspectionLotDetails, UpdateQualityNotificationDetails,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -179,6 +180,179 @@ where
 }
 
 // =============================================================================
+// 更新 / 提交 / 关闭 / 取消检验批
+// =============================================================================
+
+/// 更新检验批命令。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateInspectionLotCommand {
+    pub inspection_lot_id: InspectionLotId,
+    pub source_transaction_id: Option<String>,
+    pub source_doc: Option<String>,
+    pub quantity: Decimal,
+    pub sample_qty: Decimal,
+    pub remark: Option<String>,
+}
+
+/// 更新检验批用例。
+pub struct UpdateInspectionLotUseCase<L>
+where
+    L: InspectionLotRepository,
+{
+    pub lot_repo: L,
+}
+
+impl<L> UpdateInspectionLotUseCase<L>
+where
+    L: InspectionLotRepository,
+{
+    pub fn new(lot_repo: L) -> Self {
+        Self { lot_repo }
+    }
+
+    pub async fn execute(
+        &self,
+        command: UpdateInspectionLotCommand,
+    ) -> QualityResult<InspectionLotId> {
+        let mut lot = self.lot_repo.lock_by_id(&command.inspection_lot_id).await?;
+
+        lot.update_details(UpdateInspectionLotDetails {
+            source_transaction_id: command.source_transaction_id,
+            source_doc: command.source_doc,
+            quantity: command.quantity,
+            sample_qty: command.sample_qty,
+            remark: command.remark,
+        })?;
+
+        self.lot_repo.update(&lot).await?;
+
+        Ok(command.inspection_lot_id)
+    }
+}
+
+/// 提交检验结果命令。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitInspectionResultsCommand {
+    pub inspection_lot_id: InspectionLotId,
+    pub operator: Operator,
+}
+
+/// 提交检验结果用例。
+pub struct SubmitInspectionResultsUseCase<L, R>
+where
+    L: InspectionLotRepository,
+    R: InspectionResultRepository,
+{
+    pub lot_repo: L,
+    pub result_repo: R,
+}
+
+impl<L, R> SubmitInspectionResultsUseCase<L, R>
+where
+    L: InspectionLotRepository,
+    R: InspectionResultRepository,
+{
+    pub fn new(lot_repo: L, result_repo: R) -> Self {
+        Self {
+            lot_repo,
+            result_repo,
+        }
+    }
+
+    pub async fn execute(
+        &self,
+        command: SubmitInspectionResultsCommand,
+    ) -> QualityResult<InspectionLotId> {
+        let now = OffsetDateTime::now_utc();
+        let mut lot = self.lot_repo.lock_by_id(&command.inspection_lot_id).await?;
+
+        let has_any_result = self
+            .result_repo
+            .has_any_result(&command.inspection_lot_id)
+            .await?;
+
+        if !has_any_result {
+            return Err(QualityError::InspectionResultRequired);
+        }
+
+        lot.submit_results(command.operator, now)?;
+        self.lot_repo.update(&lot).await?;
+
+        Ok(command.inspection_lot_id)
+    }
+}
+
+/// 检验批关闭命令。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloseInspectionLotCommand {
+    pub inspection_lot_id: InspectionLotId,
+}
+
+/// 检验批关闭用例。
+pub struct CloseInspectionLotUseCase<L>
+where
+    L: InspectionLotRepository,
+{
+    pub lot_repo: L,
+}
+
+impl<L> CloseInspectionLotUseCase<L>
+where
+    L: InspectionLotRepository,
+{
+    pub fn new(lot_repo: L) -> Self {
+        Self { lot_repo }
+    }
+
+    pub async fn execute(
+        &self,
+        command: CloseInspectionLotCommand,
+    ) -> QualityResult<InspectionLotId> {
+        let now = OffsetDateTime::now_utc();
+        let mut lot = self.lot_repo.lock_by_id(&command.inspection_lot_id).await?;
+        lot.close(now)?;
+        self.lot_repo.update(&lot).await?;
+
+        Ok(command.inspection_lot_id)
+    }
+}
+
+/// 检验批取消命令。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CancelInspectionLotCommand {
+    pub inspection_lot_id: InspectionLotId,
+}
+
+/// 检验批取消用例。
+pub struct CancelInspectionLotUseCase<L>
+where
+    L: InspectionLotRepository,
+{
+    pub lot_repo: L,
+}
+
+impl<L> CancelInspectionLotUseCase<L>
+where
+    L: InspectionLotRepository,
+{
+    pub fn new(lot_repo: L) -> Self {
+        Self { lot_repo }
+    }
+
+    pub async fn execute(
+        &self,
+        command: CancelInspectionLotCommand,
+    ) -> QualityResult<InspectionLotId> {
+        let now = OffsetDateTime::now_utc();
+        let mut lot = self.lot_repo.lock_by_id(&command.inspection_lot_id).await?;
+        lot.cancel(now)?;
+        self.lot_repo.update(&lot).await?;
+
+        Ok(command.inspection_lot_id)
+    }
+}
+
+// =============================================================================
 // 录入检验结果
 // =============================================================================
 
@@ -200,6 +374,20 @@ pub struct AddInspectionResultCommand {
 pub struct AddInspectionResultOutput {
     pub result_id: InspectionResultId,
     pub result_status: InspectionResultStatus,
+}
+
+/// 更新检验结果命令。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateInspectionResultCommand {
+    pub inspection_lot_id: InspectionLotId,
+    pub result_id: InspectionResultId,
+    pub char_id: InspectionCharId,
+    pub measured_value: Option<Decimal>,
+    pub qualitative_result: Option<InspectionResultStatus>,
+    pub defect_code: Option<DefectCode>,
+    pub defect_qty: Decimal,
+    pub inspector: Operator,
+    pub remark: Option<String>,
 }
 
 /// 批量录入检验结果命令。
@@ -322,6 +510,106 @@ where
 
         Ok(AddInspectionResultOutput {
             result_id,
+            result_status,
+        })
+    }
+}
+
+/// 更新检验结果用例。
+pub struct UpdateInspectionResultUseCase<L, R, M>
+where
+    L: InspectionLotRepository,
+    R: InspectionResultRepository,
+    M: QualityMasterRepository,
+{
+    pub lot_repo: L,
+    pub result_repo: R,
+    pub master_repo: M,
+}
+
+impl<L, R, M> UpdateInspectionResultUseCase<L, R, M>
+where
+    L: InspectionLotRepository,
+    R: InspectionResultRepository,
+    M: QualityMasterRepository,
+{
+    pub fn new(lot_repo: L, result_repo: R, master_repo: M) -> Self {
+        Self {
+            lot_repo,
+            result_repo,
+            master_repo,
+        }
+    }
+
+    pub async fn execute(
+        &self,
+        command: UpdateInspectionResultCommand,
+    ) -> QualityResult<AddInspectionResultOutput> {
+        let now = OffsetDateTime::now_utc();
+        let mut lot = self.lot_repo.lock_by_id(&command.inspection_lot_id).await?;
+
+        if !lot.status.can_enter_result() {
+            return Err(QualityError::InspectionLotStatusInvalid);
+        }
+
+        let existing = self
+            .result_repo
+            .find_by_id(&command.result_id)
+            .await?
+            .ok_or(QualityError::InspectionResultNotFound)?;
+
+        if existing.inspection_lot_id != command.inspection_lot_id {
+            return Err(QualityError::InspectionResultNotFound);
+        }
+
+        let inspection_char = self
+            .master_repo
+            .find_inspection_char(&command.char_id)
+            .await?
+            .ok_or(QualityError::InspectionCharNotFound)?;
+
+        if !inspection_char.is_active {
+            return Err(QualityError::InspectionCharInactive);
+        }
+
+        if let Some(defect_code) = &command.defect_code {
+            let defect = self
+                .master_repo
+                .find_defect_code(defect_code)
+                .await?
+                .ok_or(QualityError::DefectCodeNotFound)?;
+
+            if !defect.is_active {
+                return Err(QualityError::DefectCodeInactive);
+            }
+        }
+
+        let result = InspectionResult::create(CreateInspectionResult {
+            id: command.result_id.clone(),
+            inspection_lot_id: command.inspection_lot_id.clone(),
+            char_id: command.char_id,
+            measured_value: command.measured_value,
+            qualitative_result: command.qualitative_result,
+            lower_limit: inspection_char.lower_limit,
+            upper_limit: inspection_char.upper_limit,
+            unit: inspection_char.unit,
+            defect_code: command.defect_code,
+            defect_qty: command.defect_qty,
+            inspector: command.inspector.clone(),
+            now,
+            remark: command.remark,
+        })?;
+
+        let result_status = result.result_status;
+        self.result_repo.update(&result).await?;
+
+        if lot.status.can_enter_result() {
+            lot.mark_in_progress(command.inspector, now)?;
+            self.lot_repo.update(&lot).await?;
+        }
+
+        Ok(AddInspectionResultOutput {
+            result_id: command.result_id,
             result_status,
         })
     }

@@ -61,6 +61,39 @@ impl Bom {
         self.components.len()
     }
 
+    /// 复制为一个新的草稿 BOM。
+    ///
+    /// 若目标父物料不同,源 BOM 顶层边的 `parent_material_id` 会改写为目标父物料;
+    /// 子层级边保持原 parent,用于保留原结构。`component_id` 不在聚合内建模,
+    /// 由持久层插入目标组件时重新生成。
+    pub fn copy_to(&self, target_header: BomHeader) -> Result<Self, MasterDataDomainError> {
+        let source_parent = self.header.parent_material_id.clone();
+        let target_bom_id = target_header.bom_id.clone();
+        let target_parent = target_header.parent_material_id.clone();
+        let mut copied = Self::new(target_header);
+
+        for source_component in &self.components {
+            let parent_material_id = if source_component.parent_material_id == source_parent {
+                target_parent.clone()
+            } else {
+                source_component.parent_material_id.clone()
+            };
+            let mut component = BomComponent::new(
+                target_bom_id.clone(),
+                parent_material_id,
+                source_component.component_material_id.clone(),
+                source_component.quantity,
+                source_component.unit.clone(),
+            )?;
+            component.change_level(source_component.bom_level)?;
+            component.change_scrap_rate(source_component.scrap_rate)?;
+            component.is_critical = source_component.is_critical;
+            copied.add_component(component)?;
+        }
+
+        Ok(copied)
+    }
+
     /// 添加一个组件。
     ///
     /// 不变式:
@@ -222,6 +255,73 @@ mod tests {
             Err(MasterDataDomainError::BomComponentDuplicated)
         ));
         assert_eq!(bom.component_count(), 2);
+    }
+
+    #[test]
+    fn copy_to_rewrites_top_level_parent_and_keeps_component_attributes() {
+        let mut source = fresh_bom();
+        source
+            .add_component(comp("M_PARENT", "SUB", "1"))
+            .expect("test fixture should be valid");
+        let mut nested = comp("SUB", "C1", "2.5");
+        nested
+            .change_level(2)
+            .expect("test fixture should be valid");
+        nested
+            .change_scrap_rate(d("0.15"))
+            .expect("test fixture should be valid");
+        nested.is_critical = true;
+        source
+            .add_component(nested)
+            .expect("test fixture should be valid");
+
+        let target_header = BomHeader::new(
+            BomId::new("BOM02").expect("test fixture should be valid"),
+            "Copied BOM",
+            mid("M_NEW_PARENT"),
+            "v2",
+        )
+        .expect("test fixture should be valid");
+        let copied = source
+            .copy_to(target_header)
+            .expect("test fixture should be valid");
+
+        assert_eq!(copied.id().value(), "BOM02");
+        assert!(matches!(copied.header().status, BomStatus::Draft));
+        assert_eq!(copied.component_count(), 2);
+        assert_eq!(
+            copied.components()[0].parent_material_id,
+            mid("M_NEW_PARENT")
+        );
+        assert_eq!(copied.components()[0].component_material_id, mid("SUB"));
+        assert_eq!(copied.components()[1].parent_material_id, mid("SUB"));
+        assert_eq!(copied.components()[1].component_material_id, mid("C1"));
+        assert_eq!(copied.components()[1].quantity, d("2.5"));
+        assert_eq!(copied.components()[1].bom_level, 2);
+        assert_eq!(copied.components()[1].scrap_rate, d("0.15"));
+        assert!(copied.components()[1].is_critical);
+    }
+
+    #[test]
+    fn copy_to_rejects_target_self_reference_after_parent_rewrite() {
+        let mut source = fresh_bom();
+        source
+            .add_component(comp("M_PARENT", "C1", "1"))
+            .expect("test fixture should be valid");
+        let target_header = BomHeader::new(
+            BomId::new("BOM02").expect("test fixture should be valid"),
+            "Invalid Copy",
+            mid("C1"),
+            "v2",
+        )
+        .expect("test fixture should be valid");
+
+        let r = source.copy_to(target_header);
+
+        assert!(matches!(
+            r,
+            Err(MasterDataDomainError::BomComponentCannotReferenceItself)
+        ));
     }
 
     #[test]

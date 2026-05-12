@@ -134,6 +134,38 @@ impl InspectionLot {
         Ok(())
     }
 
+    /// 更新检验批基础信息。
+    pub fn update_details(&mut self, input: UpdateInspectionLotDetails) -> QualityResult<()> {
+        if !matches!(
+            self.status,
+            InspectionLotStatus::Created | InspectionLotStatus::InProgress
+        ) {
+            return Err(QualityError::InspectionLotStatusInvalid);
+        }
+
+        if input.quantity <= Decimal::ZERO {
+            return Err(QualityError::QuantityMustBePositive);
+        }
+
+        if input.sample_qty < Decimal::ZERO {
+            return Err(QualityError::BusinessRuleViolation(
+                "样本数量不能小于 0".to_string(),
+            ));
+        }
+
+        if input.sample_qty > input.quantity {
+            return Err(QualityError::SampleQtyExceeded);
+        }
+
+        self.source_transaction_id = input.source_transaction_id;
+        self.source_doc = input.source_doc;
+        self.quantity = input.quantity;
+        self.sample_qty = input.sample_qty;
+        self.remark = input.remark;
+
+        Ok(())
+    }
+
     /// 做质量判定。
     ///
     /// 兼容旧调用点。新代码建议使用 make_decision_with_reason。
@@ -226,5 +258,15 @@ pub struct CreateInspectionLot {
     pub sample_qty: Decimal,
     pub created_by: Operator,
     pub now: OffsetDateTime,
+    pub remark: Option<String>,
+}
+
+/// 更新检验批基础信息输入。
+#[derive(Debug, Clone)]
+pub struct UpdateInspectionLotDetails {
+    pub source_transaction_id: Option<String>,
+    pub source_doc: Option<String>,
+    pub quantity: Decimal,
+    pub sample_qty: Decimal,
     pub remark: Option<String>,
 }

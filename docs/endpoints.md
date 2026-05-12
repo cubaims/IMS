@@ -28,17 +28,28 @@
   - Bruno collection: `docs/bruno/master-data.phase3/`
   - Acceptance script: `TOKEN=<write-or-admin-jwt> READ_TOKEN=<read-only-jwt> ./scripts/phase3_acceptance.sh`
 - `/api/inventory`: Inventory
-  - Inventory count OpenAPI: `docs/openapi/inventory-count.phase7.openapi.json`
+  - Inventory count OpenAPI: `/api/openapi/inventory-count.json`
+    (`docs/openapi/inventory-count.phase7.openapi.json`)
   - Postman collection: `docs/postman/inventory-count.phase7.postman_collection.json`
   - Bruno collection: `docs/bruno/inventory-count.phase7/`
   - Acceptance/regression script: `./scripts/verify_phase7_inventory_count.sh`
   - Required count permissions:
     `inventory-count:read`, `inventory-count:write`, `inventory-count:submit`,
     `inventory-count:approve`, `inventory-count:post`, `inventory-count:close`.
+  - Phase 7 role matrix:
+    `WAREHOUSE_OPERATOR` can read/write/submit counts, `WAREHOUSE_MANAGER` can
+    read/approve/post/close counts, `AUDITOR` is read-only, and `ADMIN` can use
+    every route through `SYS_ALL`/admin-role matching.
   - Phase 7 count flow:
     `POST /api/inventory/counts` -> `POST /api/inventory/counts/{id}/generate-lines`
     -> `PATCH /api/inventory/counts/{id}/lines/{line_no}` -> `POST /submit`
     -> `POST /approve` -> `POST /post` -> `POST /close`.
+  - Batch counted quantity entry:
+    `PATCH /api/inventory/counts/{id}/lines` is the canonical endpoint.
+    `PATCH /api/inventory/counts/{id}/lines/batch` remains as a compatibility
+    alias for existing Phase 7 clients.
+  - Difference line query:
+    `GET /api/inventory/counts/{id}/differences`.
   - Phase 7 regression:
     1. Apply the inventory count contract to existing developer databases when
        they were created before Phase 7:

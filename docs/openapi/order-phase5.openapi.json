@@ -1,0 +1,387 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "IMS Phase 5 Purchase and Sales Orders API",
+    "version": "0.1.0"
+  },
+  "tags": [
+    {
+      "name": "Purchase Orders"
+    },
+    {
+      "name": "Sales Orders"
+    }
+  ],
+  "paths": {
+    "/api/purchase-orders": {
+      "get": {
+        "tags": ["Purchase Orders"],
+        "summary": "List purchase orders",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "purchase:read",
+        "parameters": [
+          {"name": "supplier_id", "in": "query", "schema": {"type": "string"}},
+          {"name": "material_id", "in": "query", "schema": {"type": "string"}},
+          {"name": "status", "in": "query", "schema": {"type": "string"}},
+          {"name": "date_from", "in": "query", "schema": {"type": "string", "format": "date"}},
+          {"name": "date_to", "in": "query", "schema": {"type": "string", "format": "date"}},
+          {"name": "page", "in": "query", "schema": {"type": "integer", "minimum": 1}},
+          {"name": "page_size", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 200}}
+        ],
+        "responses": {
+          "200": {"description": "Purchase order list"}
+        }
+      },
+      "post": {
+        "tags": ["Purchase Orders"],
+        "summary": "Create purchase order",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "purchase:write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/CreatePurchaseOrderRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Purchase order created"},
+          "400": {"description": "Validation error"},
+          "403": {"description": "Permission denied"},
+          "409": {"description": "Business rule violation"}
+        }
+      }
+    },
+    "/api/purchase-orders/{po_id}": {
+      "get": {
+        "tags": ["Purchase Orders"],
+        "summary": "Get purchase order detail",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "purchase:read",
+        "parameters": [{"name": "po_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Purchase order detail"},
+          "404": {"description": "Purchase order not found"}
+        }
+      },
+      "patch": {
+        "tags": ["Purchase Orders"],
+        "summary": "Update purchase order before receipt",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "purchase:write",
+        "parameters": [{"name": "po_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/UpdatePurchaseOrderRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Purchase order updated"},
+          "400": {"description": "Validation error"},
+          "403": {"description": "Permission denied"},
+          "404": {"description": "Purchase order not found"},
+          "409": {"description": "Order status does not allow update"}
+        }
+      }
+    },
+    "/api/purchase-orders/{po_id}/close": {
+      "post": {
+        "tags": ["Purchase Orders"],
+        "summary": "Close purchase order",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "purchase:write",
+        "parameters": [{"name": "po_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Purchase order closed"},
+          "409": {"description": "Order status does not allow close"}
+        }
+      }
+    },
+    "/api/purchase-orders/{po_id}/receipt": {
+      "post": {
+        "tags": ["Purchase Orders"],
+        "summary": "Post purchase receipt",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "purchase:receipt",
+        "parameters": [{"name": "po_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/PostPurchaseReceiptRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Receipt posted with 101 transactions"},
+          "400": {"description": "Validation error"},
+          "403": {"description": "Permission denied"},
+          "404": {"description": "Purchase order or line not found"},
+          "409": {"description": "Order status or inventory rule violation"}
+        }
+      }
+    },
+    "/api/sales-orders": {
+      "get": {
+        "tags": ["Sales Orders"],
+        "summary": "List sales orders",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "sales:read",
+        "parameters": [
+          {"name": "customer_id", "in": "query", "schema": {"type": "string"}},
+          {"name": "material_id", "in": "query", "schema": {"type": "string"}},
+          {"name": "status", "in": "query", "schema": {"type": "string"}},
+          {"name": "date_from", "in": "query", "schema": {"type": "string", "format": "date"}},
+          {"name": "date_to", "in": "query", "schema": {"type": "string", "format": "date"}},
+          {"name": "page", "in": "query", "schema": {"type": "integer", "minimum": 1}},
+          {"name": "page_size", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 200}}
+        ],
+        "responses": {
+          "200": {"description": "Sales order list"}
+        }
+      },
+      "post": {
+        "tags": ["Sales Orders"],
+        "summary": "Create sales order",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "sales:write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/CreateSalesOrderRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Sales order created"},
+          "400": {"description": "Validation error"},
+          "403": {"description": "Permission denied"},
+          "409": {"description": "Business rule violation"}
+        }
+      }
+    },
+    "/api/sales-orders/{so_id}": {
+      "get": {
+        "tags": ["Sales Orders"],
+        "summary": "Get sales order detail",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "sales:read",
+        "parameters": [{"name": "so_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Sales order detail"},
+          "404": {"description": "Sales order not found"}
+        }
+      },
+      "patch": {
+        "tags": ["Sales Orders"],
+        "summary": "Update sales order before shipment",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "sales:write",
+        "parameters": [{"name": "so_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/UpdateSalesOrderRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Sales order updated"},
+          "400": {"description": "Validation error"},
+          "403": {"description": "Permission denied"},
+          "404": {"description": "Sales order not found"},
+          "409": {"description": "Order status does not allow update"}
+        }
+      }
+    },
+    "/api/sales-orders/{so_id}/close": {
+      "post": {
+        "tags": ["Sales Orders"],
+        "summary": "Close sales order",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "sales:write",
+        "parameters": [{"name": "so_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {
+          "200": {"description": "Sales order closed"},
+          "409": {"description": "Order status does not allow close"}
+        }
+      }
+    },
+    "/api/sales-orders/{so_id}/pick-preview": {
+      "post": {
+        "tags": ["Sales Orders"],
+        "summary": "Preview FEFO picking",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "sales:read",
+        "parameters": [{"name": "so_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/PreviewSalesFefoPickRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "FEFO pick preview"},
+          "409": {"description": "No available batch or insufficient stock"}
+        }
+      }
+    },
+    "/api/sales-orders/{so_id}/shipment": {
+      "post": {
+        "tags": ["Sales Orders"],
+        "summary": "Post sales shipment",
+        "security": [{"bearerAuth": []}],
+        "x-permission": "sales:shipment",
+        "parameters": [{"name": "so_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {"$ref": "#/components/schemas/PostSalesShipmentRequest"}
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Shipment posted with 261 transactions"},
+          "400": {"description": "Validation error"},
+          "403": {"description": "Permission denied"},
+          "404": {"description": "Sales order or line not found"},
+          "409": {"description": "Order status or inventory rule violation"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "CreatePurchaseOrderRequest": {
+        "type": "object",
+        "required": ["supplier_id", "lines"],
+        "properties": {
+          "supplier_id": {"type": "string"},
+          "expected_date": {"type": "string", "format": "date", "nullable": true},
+          "remark": {"type": "string", "nullable": true},
+          "lines": {"type": "array", "items": {"$ref": "#/components/schemas/PurchaseOrderLineInput"}, "minItems": 1}
+        }
+      },
+      "UpdatePurchaseOrderRequest": {
+        "type": "object",
+        "properties": {
+          "supplier_id": {"type": "string"},
+          "expected_date": {"type": "string", "format": "date"},
+          "remark": {"type": "string"},
+          "lines": {"type": "array", "items": {"$ref": "#/components/schemas/PurchaseOrderLineInput"}, "minItems": 1}
+        }
+      },
+      "PurchaseOrderLineInput": {
+        "type": "object",
+        "required": ["line_no", "material_id", "ordered_qty", "unit_price"],
+        "properties": {
+          "line_no": {"type": "integer", "minimum": 1},
+          "material_id": {"type": "string"},
+          "ordered_qty": {"type": "integer", "minimum": 1},
+          "unit_price": {"type": "number", "minimum": 0},
+          "expected_bin": {"type": "string", "nullable": true}
+        }
+      },
+      "PostPurchaseReceiptRequest": {
+        "type": "object",
+        "required": ["lines"],
+        "properties": {
+          "posting_date": {"type": "string", "format": "date-time", "nullable": true},
+          "remark": {"type": "string", "nullable": true},
+          "lines": {"type": "array", "items": {"$ref": "#/components/schemas/PurchaseReceiptLineInput"}, "minItems": 1}
+        }
+      },
+      "PurchaseReceiptLineInput": {
+        "type": "object",
+        "required": ["line_no", "receipt_qty", "batch_number"],
+        "properties": {
+          "line_no": {"type": "integer", "minimum": 1},
+          "receipt_qty": {"type": "integer", "minimum": 1},
+          "batch_number": {"type": "string"},
+          "to_bin": {"type": "string", "nullable": true}
+        }
+      },
+      "CreateSalesOrderRequest": {
+        "type": "object",
+        "required": ["customer_id", "lines"],
+        "properties": {
+          "customer_id": {"type": "string"},
+          "required_date": {"type": "string", "format": "date", "nullable": true},
+          "remark": {"type": "string", "nullable": true},
+          "lines": {"type": "array", "items": {"$ref": "#/components/schemas/SalesOrderLineInput"}, "minItems": 1}
+        }
+      },
+      "UpdateSalesOrderRequest": {
+        "type": "object",
+        "properties": {
+          "customer_id": {"type": "string"},
+          "required_date": {"type": "string", "format": "date"},
+          "remark": {"type": "string"},
+          "lines": {"type": "array", "items": {"$ref": "#/components/schemas/SalesOrderLineInput"}, "minItems": 1}
+        }
+      },
+      "SalesOrderLineInput": {
+        "type": "object",
+        "required": ["line_no", "material_id", "ordered_qty", "unit_price"],
+        "properties": {
+          "line_no": {"type": "integer", "minimum": 1},
+          "material_id": {"type": "string"},
+          "ordered_qty": {"type": "integer", "minimum": 1},
+          "unit_price": {"type": "number", "minimum": 0},
+          "from_bin": {"type": "string", "nullable": true}
+        }
+      },
+      "PreviewSalesFefoPickRequest": {
+        "type": "object",
+        "required": ["lines"],
+        "properties": {
+          "lines": {"type": "array", "items": {"$ref": "#/components/schemas/SalesPickLineInput"}, "minItems": 1}
+        }
+      },
+      "PostSalesShipmentRequest": {
+        "type": "object",
+        "required": ["lines"],
+        "properties": {
+          "posting_date": {"type": "string", "format": "date-time", "nullable": true},
+          "pick_strategy": {"type": "string", "enum": ["FEFO", "MANUAL"], "default": "FEFO"},
+          "remark": {"type": "string", "nullable": true},
+          "lines": {"type": "array", "items": {"$ref": "#/components/schemas/SalesShipmentLineInput"}, "minItems": 1}
+        }
+      },
+      "SalesPickLineInput": {
+        "type": "object",
+        "required": ["line_no", "shipment_qty"],
+        "properties": {
+          "line_no": {"type": "integer", "minimum": 1},
+          "shipment_qty": {"type": "integer", "minimum": 1}
+        }
+      },
+      "SalesShipmentLineInput": {
+        "type": "object",
+        "required": ["line_no", "shipment_qty"],
+        "properties": {
+          "line_no": {"type": "integer", "minimum": 1},
+          "shipment_qty": {"type": "integer", "minimum": 1},
+          "batch_number": {"type": "string", "nullable": true},
+          "from_bin": {"type": "string", "nullable": true}
+        }
+      }
+    }
+  }
+}

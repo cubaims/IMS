@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use cuba_shared::{Page, PageQuery};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime};
 
 // =============================================================================
 // ID 生成器
@@ -88,6 +88,24 @@ pub trait MrpSuggestionRepository: Send + Sync {
 
     /// 更新 MRP 建议。
     async fn update(&self, suggestion: &MrpSuggestion) -> MrpResult<()>;
+
+    /// 在一个一致性边界内锁定并确认 MRP 建议。
+    async fn confirm(
+        &self,
+        suggestion_id: &MrpSuggestionId,
+        confirmed_by: Operator,
+        remark: Option<String>,
+        now: OffsetDateTime,
+    ) -> MrpResult<MrpSuggestion>;
+
+    /// 在一个一致性边界内锁定并取消 MRP 建议。
+    async fn cancel(
+        &self,
+        suggestion_id: &MrpSuggestionId,
+        cancelled_by: Operator,
+        reason: String,
+        now: OffsetDateTime,
+    ) -> MrpResult<MrpSuggestion>;
 
     /// 分页查询 MRP 建议。
     async fn list(&self, query: MrpSuggestionQuery) -> MrpResult<Page<MrpSuggestion>>;
@@ -284,6 +302,10 @@ where
             return Err(MrpError::DemandQtyMustBePositive);
         }
 
+        if command.demand_date.date() < now.date() {
+            return Err(MrpError::DemandDateBeforeToday);
+        }
+
         if let Some(material_id) = &command.material_id {
             let exists = self
                 .master_repo
@@ -390,15 +412,15 @@ where
     ) -> MrpResult<ConfirmMrpSuggestionOutput> {
         let now = OffsetDateTime::now_utc();
 
-        let mut suggestion = self
+        let suggestion = self
             .suggestion_repo
-            .lock_by_id(&command.suggestion_id)
+            .confirm(
+                &command.suggestion_id,
+                command.confirmed_by,
+                command.remark,
+                now,
+            )
             .await?;
-
-        suggestion.confirm(command.confirmed_by, now)?;
-        suggestion.remark = command.remark;
-
-        self.suggestion_repo.update(&suggestion).await?;
 
         Ok(ConfirmMrpSuggestionOutput {
             suggestion_id: command.suggestion_id,
@@ -449,14 +471,15 @@ where
     ) -> MrpResult<CancelMrpSuggestionOutput> {
         let now = OffsetDateTime::now_utc();
 
-        let mut suggestion = self
+        let suggestion = self
             .suggestion_repo
-            .lock_by_id(&command.suggestion_id)
+            .cancel(
+                &command.suggestion_id,
+                command.cancelled_by,
+                command.reason,
+                now,
+            )
             .await?;
-
-        suggestion.cancel(command.cancelled_by, now, command.reason)?;
-
-        self.suggestion_repo.update(&suggestion).await?;
 
         Ok(CancelMrpSuggestionOutput {
             suggestion_id: command.suggestion_id,
@@ -645,6 +668,33 @@ mod tests {
             Ok(())
         }
 
+        async fn confirm(
+            &self,
+            suggestion_id: &MrpSuggestionId,
+            confirmed_by: Operator,
+            remark: Option<String>,
+            now: OffsetDateTime,
+        ) -> MrpResult<MrpSuggestion> {
+            let mut suggestion = self.lock_by_id(suggestion_id).await?;
+            suggestion.confirm(confirmed_by, now)?;
+            suggestion.remark = remark;
+            self.update(&suggestion).await?;
+            Ok(suggestion)
+        }
+
+        async fn cancel(
+            &self,
+            suggestion_id: &MrpSuggestionId,
+            cancelled_by: Operator,
+            reason: String,
+            now: OffsetDateTime,
+        ) -> MrpResult<MrpSuggestion> {
+            let mut suggestion = self.lock_by_id(suggestion_id).await?;
+            suggestion.cancel(cancelled_by, now, reason)?;
+            self.update(&suggestion).await?;
+            Ok(suggestion)
+        }
+
         async fn list(&self, query: MrpSuggestionQuery) -> MrpResult<Page<MrpSuggestion>> {
             let suggestions = self.suggestions.lock().expect("suggestions lock");
             let mut items = Vec::new();
@@ -668,7 +718,7 @@ mod tests {
     }
 
     fn now() -> OffsetDateTime {
-        OffsetDateTime::UNIX_EPOCH
+        OffsetDateTime::now_utc() + Duration::days(1)
     }
 
     fn run(id: &str, status: MrpRunStatus) -> MrpRun {

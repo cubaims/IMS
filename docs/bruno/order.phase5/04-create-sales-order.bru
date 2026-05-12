@@ -1,0 +1,32 @@
+meta {
+  name: 04 Create Sales Order
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{base_url}}/api/sales-orders
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "customer_id": "{{customer_id}}",
+    "required_date": "2026-05-20",
+    "remark": "phase 5 Bruno sales order",
+    "lines": [
+      {
+        "line_no": 10,
+        "material_id": "{{material_id}}",
+        "ordered_qty": 20,
+        "unit_price": "20.00",
+        "from_bin": "{{bin_code}}"
+      }
+    ]
+  }
+}

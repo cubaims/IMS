@@ -1,0 +1,14 @@
+meta {
+  name: 09 Current Stock
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{base_url}}/api/reports/current-stock?material_id={{material_id}}&bin_code={{bin_code}}&page_size=200
+  body: none
+}
+
+headers {
+  Authorization: Bearer {{token}}
+}

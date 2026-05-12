@@ -1,0 +1,32 @@
+meta {
+  name: 01 Create Purchase Order
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{base_url}}/api/purchase-orders
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "supplier_id": "{{supplier_id}}",
+    "expected_date": "2026-05-15",
+    "remark": "phase 5 Bruno purchase order",
+    "lines": [
+      {
+        "line_no": 10,
+        "material_id": "{{material_id}}",
+        "ordered_qty": 100,
+        "unit_price": "12.50",
+        "expected_bin": "{{bin_code}}"
+      }
+    ]
+  }
+}

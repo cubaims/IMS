@@ -1,0 +1,29 @@
+meta {
+  name: 03 Post Purchase Receipt
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{base_url}}/api/purchase-orders/{{po_id}}/receipt
+  body: json
+}
+
+headers {
+  Content-Type: application/json
+  Authorization: Bearer {{token}}
+}
+
+body:json {
+  {
+    "remark": "phase 5 Bruno purchase receipt",
+    "lines": [
+      {
+        "line_no": 10,
+        "receipt_qty": 100,
+        "batch_number": "{{batch_number}}",
+        "to_bin": "{{bin_code}}"
+      }
+    ]
+  }
+}

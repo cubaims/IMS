@@ -18,6 +18,9 @@ pub enum QualityError {
     #[error("检验结果不能为空")]
     InspectionResultRequired,
 
+    #[error("检验结果不存在")]
+    InspectionResultNotFound,
+
     #[error("检验结果无效")]
     InspectionResultInvalid,
 

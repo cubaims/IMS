@@ -1,6 +1,6 @@
 use axum::{
     Router,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use cuba_shared::AppState;
 
@@ -25,6 +25,7 @@ pub fn production_order_routes() -> Router<AppState> {
         .route("/", get(handlers::list_production_orders))
         .route("/", post(handlers::create_production_order))
         .route("/{order_id}", get(handlers::get_production_order))
+        .route("/{order_id}", patch(handlers::update_production_order))
         .route(
             "/{order_id}/components",
             get(handlers::get_production_order_components),
